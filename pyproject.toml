@@ -76,10 +76,8 @@ restore = "piloop.plugins.archive.local.cli:restore"
 launch = "piloop.cli.agents:launch"
 prompt = "piloop.cli.agents:prompt"
 attach = "piloop.cli.agent_io:attach"
-journal = "piloop.plugins.memory.local.cli:journal"
 message = "piloop.cli.inbox:message"
 escalate = "piloop.cli.inbox:escalate"
-wake = "piloop.cli.wake:wake"
 serve = "piloop.cli.daemon:serve"
 stop = "piloop.cli.daemon:stop"
 restart = "piloop.cli.daemon:restart"
@@ -107,7 +105,6 @@ secrets = "piloop.plugins.secrets.contract:SECRETS"
 section = "piloop.plugins.section.contract:SECTIONS"
 fact_source = "piloop.plugins.fact_source.contract:FACT_SOURCES"
 campaign_type = "piloop.plugins.campaign_type.contract:CAMPAIGN_TYPES"
-memory = "piloop.plugins.memory.contract:MEMORY"
 archive = "piloop.plugins.archive.contract:ARCHIVES"
 harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
@@ -196,7 +193,6 @@ events = "piloop.plugins.section.events:Events"
 tools = "piloop.plugins.section.tools:Tools"
 pack = "piloop.plugins.campaign_type.optimization.section.pack:Pack"
 history = "piloop.plugins.campaign_type.optimization.section.history:History"
-lessons = "piloop.plugins.section.lessons:Lessons"
 database = "piloop.plugins.section.database:Database"
 concepts = "piloop.plugins.campaign_type.optimization.section.concepts:Concepts"
 scoring = "piloop.plugins.campaign_type.kit.pool.section.scoring:Scoring"
@@ -234,9 +230,6 @@ optimization = "piloop.plugins.campaign_type.optimization:Optimization"
 [project.entry-points."piloop.lineages"]
 optimization = "piloop.plugins.campaign_type.optimization.lineage.optimization:OptimizationLineage"
 
-[project.entry-points."piloop.memory"]
-local = "piloop.plugins.memory.local:LocalMemory"
-
 [project.entry-points."piloop.archives"]
 local = "piloop.plugins.archive.local:LocalArchive"
 
@@ -258,6 +251,8 @@ home_end_grace = "piloop.plugins.role.bridges:home_end_grace"
 pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
 relay_waits = "piloop.deprecated:relay_waits"
 wake_after_tries = "piloop.deprecated:wake_after_tries"
+research_memory = "piloop.deprecated:research_memory"
+wake_budget = "piloop.deprecated:wake_budget"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).
@@ -284,7 +279,6 @@ instance = "piloop.plugins.executor.kit.tables:WorkerInstance"
 # The tables of each plugin that has its own, by schema name (piloop.db.schema.SCHEMAS); the others are core's.
 [project.entry-points."piloop.schemas"]
 optimization = "piloop.plugins.campaign_type.optimization.tables:SCHEMA"
-"memory/local" = "piloop.plugins.memory.local.tables:SCHEMA"
 "archive/local" = "piloop.plugins.archive.local.tables:SCHEMA"
 "secrets/local" = "piloop.plugins.secrets.local.tables:SCHEMA"
 "executor/workers" = "piloop.plugins.executor.kit.tables:SCHEMA"

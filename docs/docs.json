@@ -28,7 +28,7 @@
           "concepts/roles",
           "concepts/orchestrator",
           "concepts/cost",
-          "concepts/memory"
+          "concepts/archive"
         ]
       },
       {
@@ -94,12 +94,12 @@
       "destination": "/plugins/overview"
     },
     {
-      "source": "/concepts/research-memory",
-      "destination": "/concepts/memory"
+      "source": "/concepts/memory",
+      "destination": "/concepts/archive"
     },
     {
       "source": "/concepts/artifact-store",
-      "destination": "/concepts/memory#the-archive"
+      "destination": "/concepts/archive"
     },
     {
       "source": "/architecture/run-lifecycle",
@@ -132,10 +132,6 @@
     {
       "source": "/concepts/tracks",
       "destination": "/concepts/pool#tracks"
-    },
-    {
-      "source": "/concepts/archive",
-      "destination": "/concepts/memory#the-archive"
     },
     {
       "source": "/concepts/how-piloop-is-built",

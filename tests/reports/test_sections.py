@@ -111,11 +111,11 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'agents', 'evaluations']
     overview += ['funnel', 'candidates', 'same_as_parent', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
-    assert defaults(Surface.ORCHESTRATOR) == ['context', 'lessons', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'history'], (
+    assert defaults(Surface.ORCHESTRATOR) == ['context', *overview, 'tools', 'pack']
+    assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'history'], (
         'no board: a worker claims or proposes its idea with `piloop idea`'
     )
-    assert ImplementerRole().shown() == ['context', 'measure', 'idea_comments', 'lessons', 'history'], 'no guides'
+    assert ImplementerRole().shown() == ['context', 'measure', 'idea_comments', 'history'], 'no guides'
 
 
 def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaign: Campaign) -> None:

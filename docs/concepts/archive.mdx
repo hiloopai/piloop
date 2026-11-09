@@ -1,52 +1,8 @@
 ---
-title: Memory and the archive
-sidebarTitle: Memory and archive
-description: What past campaigns learned, the orchestrator's journal, and the archive of the shared workspace.
+title: The archive and the CAS
+sidebarTitle: Archive and CAS
+description: The archive of the shared workspace, and the content-addressed store that holds it.
 ---
-
-**Memory** is what a campaign leaves for the next agent: the orchestrator's journal, lessons and documents.
-
-## The journal
-
-An orchestrator writes to the **journal** as it goes, so that the next session, after a lost context, reads it first:
-
-```bash
-piloop journal "lesson on lzma recorded; idea#2 is next, p1" --campaign enwik8
-piloop wake enwik8
-```
-
-`piloop wake` prints the journal, the open inbox, the active campaigns and the current lessons. The `piloop-operate`
-skill runs it first. A journal line has at most 280 bytes, and nobody can change it later.
-
-## Lessons
-
-A **lesson** is the conclusion about one family of ideas, such as "stronger generic compressor". The orchestrator or a
-person writes one with SQL. Nothing writes one by itself:
-
-```sql
-INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)
-VALUES (1, 'stronger generic compressor', 'promising', -976922, 'bytes',
-        'LZMA1 at preset 9 extreme (idea#1, candidate#2) beat zlib by 976922 bytes; the time guardrail held.', 'orchestrator');
-```
-
-`status` is `dead`, `promising` or `untested`. `effect` is the best effect measured, in the units of `metric`, or NULL.
-A newer lesson for the same family replaces the older one. The briefs show the current lessons of every campaign on
-the same repo, in the `lessons` [section](/concepts/roles#sections).
-
-## Documents
-
-Name the reports and notes that agents may search:
-
-```toml
-[plugins.memory]
-documents = ["docs/evidence/**/*.md"]
-```
-
-`piloop init` and the stop of a campaign copy them into the `documents` table.
-
-<Warning>
-  Every agent of every campaign can read the documents. Never name one that comes from validation or test data.
-</Warning>
 
 ## The archive
 

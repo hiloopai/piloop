@@ -124,8 +124,8 @@ piloop campaign fork [OPTIONS] REF
 
 Make a new campaign that starts from a version of another one, by default its best, in a clone of its checkout.
 
-The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and shares the
-memory of its repo: its lessons, ideas and documents. It starts with no ideas of its own and an empty workspace.
+The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and its repo,
+so it sees the ideas of every campaign on the repo. It starts with no ideas of its own and an empty workspace.
 The daemon measures its starting version as its baseline.
 
 **Arguments**:
@@ -734,24 +734,6 @@ Claude Code reads them from ~/.claude/skills (or $CLAUDE_CONFIG_DIR/skills). PIL
 second install such as a build of main next to a release. It replaces piloop's own skills there and nothing else. A running harness loads them
 at its next session. The installer and `piloop upgrade` run this command.
 
-### piloop journal
-
-```text
-piloop journal [OPTIONS] LINE
-```
-
-Add one line to the journal of the campaign: a decision, a plan or a result, with its ids.
-
-The journal is how a new orchestrator session picks up the work: `piloop wake` prints the latest lines first.
-
-**Arguments**:
-
-* `LINE`: At most 280 bytes. **[required]**
-
-**Parameters**:
-
-* `--campaign STR`: The campaign name, or a path inside its repo. Else the campaign of the current directory, else the only active campaign.
-
 ### piloop launch
 
 ```text
@@ -1287,26 +1269,6 @@ the daemon launched.
 **Parameters**:
 
 * `--timeout FLOAT`: Seconds to wait for a running daemon to restart. *[default: 30]*
-
-### piloop wake
-
-```text
-piloop wake [OPTIONS] [ARGS]
-```
-
-Print what the orchestrator of a campaign needs first, in a fixed budget.
-
-The latest lines of the campaign's journal, its open inbox, its best and the current lessons on its repo. Each
-section says how to read what did not fit. Without a campaign, it uses the campaign that the current directory is
-in, else the only active campaign, else the whole home. Run it at the start of every orchestrator session.
-
-**Arguments**:
-
-* `REF`: The campaign name, its id, or a path inside its repo.
-
-**Parameters**:
-
-* `--budget INT`: Tokens to print, about 4 characters each. 0 prints nothing. Default: `[agents] wake_budget`.
 
 ### piloop watch
 

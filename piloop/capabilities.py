@@ -75,7 +75,6 @@ from piloop.plugins.section.events import Events
 from piloop.plugins.section.tools import Tools
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.campaign_type.optimization.section.history import History
-from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.section.database import Database
 from piloop.plugins.campaign_type.optimization.section.concepts import Concepts
 from piloop.plugins.campaign_type.kit.pool.section.scoring import Scoring
@@ -142,9 +141,6 @@ from piloop.plugins.lineage.contract import LINEAGE, LineageProvider, Graph, Lin
 from piloop.plugins.lineage.contract import ScoreTrack, Judged, RowLink, SessionLink, NodeLink, SeriesPoint, Tone
 from piloop.plugins.lineage.contract import NodeId, KindName, StatusName, TrackKey
 from piloop.plugins.campaign_type.optimization.lineage.optimization import OptimizationLineage
-
-from piloop.plugins.memory.contract import MEMORY, MemoryProvider, Synced
-from piloop.plugins.memory.local import LocalMemory
 
 from piloop.plugins.archive.contract import ARCHIVES, ArchiveConfig, ArchiveHost, Archiver
 from piloop.plugins.archive.contract import Restored, Summary, CampaignArchived

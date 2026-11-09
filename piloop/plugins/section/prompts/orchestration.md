@@ -21,13 +21,6 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
   settles an idea without a run so that the ideas after it can be claimed. The reason becomes a `note` on the idea.
 - Move it to another track: `piloop idea track <id> <track>`. The track must be in `piloop.toml`.
 
-### Add a document
-
-- `INSERT INTO documents (campaign_id, path, title, body, hash, created_by) SELECT <p>, '<path>', '<title>', body,
-  blake3(body), '<you>' FROM (SELECT '<text>' AS body)`.
-- Never add a document derived from validation or test data: nothing that agents can search may show the scored
-  data.
-
 ### Steer
 
 - A `message` on a running run, or on the idea of one, reaches its implementer within seconds. A `note` stays on the
@@ -87,7 +80,7 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
   - drops the requests and queued runs pending at that moment (their ideas go back to `open`);
   - tells each running implementer to save its work and stop, and ends it 10 minutes later (`--kill`: at once); its
     versions are scored;
-  - closes the campaign once those versions are scored: nothing reviews it, and nothing writes its lessons;
+  - closes the campaign once those versions are scored: nothing reviews it;
   - starts and files nothing more.
 - An orchestrator or an agent asks for a stop with an escalation: its `piloop campaign stop` is refused. Never
   UPDATE `campaigns.status`: the daemon does not close a campaign that an UPDATE stopped.

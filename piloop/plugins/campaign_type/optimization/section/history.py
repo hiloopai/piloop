@@ -13,7 +13,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.campaign_type.optimization.history import history, latest_notes
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.wake import cost
+from piloop.text import cost
 
 
 class History(Section):

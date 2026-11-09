@@ -194,7 +194,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
 
 
 SWEEP = [SECTIONS.validated({'provider': name}) for name in [*defaults(Surface.STATUS), 'tools']]
-"""A sweep's sections without the lessons and the pack."""
+"""A sweep's sections without the pack."""
 
 
 def overview(s: Session, campaign: Campaign, now: datetime = NOW) -> str:

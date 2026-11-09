@@ -90,7 +90,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.stop import settled
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
-from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, closers
+from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
@@ -339,7 +339,7 @@ class Campaigns:
                     self._go_or_stop(s, campaign, cfg, answer, turn.now)
                 s.flush()
                 if campaign.status is CampaignStatus.STOPPED and unclosed(s, campaign) and settled(s, campaign):
-                    self._close_campaign(s, campaign, cfg)
+                    self._close_campaign(s, campaign)
                 if campaign.status is CampaignStatus.RETIRED:
                     # A feed read before the pass's first write (``read_transaction``) reloads what the pass read, so
                     # a retire that committed since shows here.
@@ -403,16 +403,13 @@ class Campaigns:
         s.flush()
         answer_done(s)  # a stop with ``now`` waits for ``_wind_down`` to end the running implementers
 
-    def _close_campaign(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
-        """Close a stopped campaign: each provider that ``Closes`` does its share.
+    def _close_campaign(self, s: Session, campaign: Campaign) -> None:
+        """Close a stopped campaign.
 
-        The pass closes a campaign that the daemon stopped once it ``settled``, so a closer sees its final best. Nothing
-        reviews the campaign, and nothing writes its lessons. The stop and the close are events (``unclosed``), so a
-        daemon that restarts in between still closes it, once.
+        The pass closes a campaign that the daemon stopped once it ``settled``, so the close comes after its final best.
+        Nothing reviews the campaign. The stop and the close are events (``unclosed``), so a daemon that restarts in
+        between still closes it, once.
         """
-        for provider, closer in closers(cfg.plugins).items():
-            result = closer.closing(s, campaign)
-            self._tracer.event('campaign.closing', campaign=campaign.name, provider=provider, result=result)
         s.flush()  # the status change's event first: the close comes after the stop
         emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
 

@@ -7,7 +7,7 @@ other command refuses a database at another revision (``schema_mismatch``) and c
 
 Core and each plugin with tables (``piloop.db.schema``) have their own chain of revisions and their own version
 table, Alembic's recipe for several environments in one database: core's is ``alembic_version``, a plugin's
-``alembic_version_<name>`` (``memory/local``: ``alembic_version_memory__local``). ``migrate`` runs core's chain first,
+``alembic_version_<name>`` (``archive/local``: ``alembic_version_archive__local``). ``migrate`` runs core's chain first,
 then each installed plugin's, in one transaction. A plugin that is not installed keeps its tables and its version
 table, and nothing reads them.
 
@@ -52,7 +52,6 @@ from piloop.db.sql import (
     CONNECTION_PRAGMAS,
     MIGRATION_TABLE,
     install_actor,
-    install_functions,
     lock_holder,
     optimize,
     sign,
@@ -268,7 +267,6 @@ def make_engine(url: str, actor: Actor, writes: WriteSpans | None = None, pool_r
     def on_connect(conn: sqlite3.Connection, _record: ConnectionPoolEntry) -> None:
         _pragmas(conn)
         install_actor(conn, actor)
-        install_functions(conn)
 
     def on_close(conn: sqlite3.Connection, _record: ConnectionPoolEntry) -> None:
         optimize(conn)
@@ -524,7 +522,7 @@ def stamps(database: Path) -> Stamps:
 
 
 def described(found: Mapping[str, str]) -> str:
-    """``found`` for a person: each revision after its schema's name, ``core 0060, memory/local 0001``.
+    """``found`` for a person: each revision after its schema's name, ``core 0060, archive/local 0001``.
 
     ``none`` alone for a database that was never migrated.
     """

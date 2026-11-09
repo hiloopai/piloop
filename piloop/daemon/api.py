@@ -139,7 +139,6 @@ from piloop.plugins.cas.contract import Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.limits import live_keys
-from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.secrets import contract as secrets
 from piloop.plugins.section.contract import Rendering, rendered
 from piloop.plugins.vcs.contract import VCS, VcsError
@@ -422,17 +421,15 @@ def register_campaign(api: Api, s: Writing, me: Acting, body: Registration) -> R
     Each registration of a URL clones it again, into a directory named after the new campaign's id. A fork clones the
     checkout of its source, a campaign in any state, and starts from a version of it: by default its head.
 
-    It adds the campaign with its head version as the baseline candidate, and syncs its documents into its memory. The
-    daemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a
+    It adds the campaign with its head version as the baseline candidate. The daemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a
     baseline that fails pauses the campaign. A clone that does not register is deleted.
     """
     campaign, baseline = _registered(api, s, me, body)
-    documents = MEMORY.selected(campaign.config.plugins).sync(s, campaign, me)
     s.flush()
     cursor = db_feed.newest(s)  # read in the write: no event of the baseline's measurement can come before it
     view = feed.status_view(s, [campaign], me)[0]
     s.commit()
-    return Registered(cursor=cursor, campaign=view, baseline=baseline.id, documents=documents)
+    return Registered(cursor=cursor, campaign=view, baseline=baseline.id)
 
 
 def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tuple[Campaign, Candidate]:
@@ -478,7 +475,7 @@ STOP_RULE_CHANGED = 'its stop rule changed in piloop.toml'
 def sync_campaign(
     api: Api, s: Writing, me: Acting, campaign: Addressed, body: Annotated[SyncBody | None, Body()] = None
 ) -> CampaignSynced:
-    """Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.
+    """Read the campaign's ``piloop.toml`` again.
 
     A campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its
     checkout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.
@@ -504,7 +501,6 @@ def sync_campaign(
             )
     was = campaign.status
     changed = sync(s, campaign)
-    documents = MEMORY.selected(campaign.config.plugins).sync(s, campaign, me)
     s.commit()
     stays: str | None = None
     if was is CampaignStatus.STOPPED and changed:
@@ -520,7 +516,6 @@ def sync_campaign(
             campaign=feed.status_view(s, [campaign], me)[0],
             was=was,
             stays_stopped=stays,
-            documents=documents,
         )
 
 

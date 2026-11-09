@@ -125,11 +125,11 @@ def test_agents_cannot_write_the_indexes_or_their_shadow_tables(db: Database, tm
 
 
 def test_fts_objects_are_the_indexes_their_shadows_and_their_sync_triggers() -> None:
-    names = (*fts.FTS_TABLES, *fts.FTS_TRIGGER_NAMES, 'ideas_fts_data', 'documents_fts_idx')
+    names = (*fts.FTS_TABLES, *fts.FTS_TRIGGER_NAMES, 'ideas_fts_data', 'comments_fts_idx')
     assert {t.name for t in PERSISTENT if t.requires is not None} == fts.FTS_TRIGGER_NAMES
     assert all(fts.is_fts_object(name) for name in names)
     assert not fts.is_fts_object('ideas')
-    assert not fts.is_fts_object('documents')
+    assert not fts.is_fts_object('comments')
 
 
 def test_recreate_restores_the_sync_triggers_once_the_index_exists(db: Database) -> None:

@@ -25,7 +25,6 @@ expansion accepts it."""
 CampaignId = NewType('CampaignId', int)
 AgentSessionId = NewType('AgentSessionId', int)
 CommentId = NewType('CommentId', int)
-JournalId = NewType('JournalId', int)
 Revision = NewType('Revision', str)
 """The vcs provider's name for a version of a campaign's files: a commit SHA under ``git``."""
 

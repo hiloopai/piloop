@@ -21,7 +21,6 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.escalation.contract import EscalationView
-from piloop.plugins.memory.contract import Synced
 from piloop.text import CELL_CHARS, NONE, age, block, cell, metric
 
 PROTOCOL = 1
@@ -576,7 +575,6 @@ class Registered(CampaignAnswer):
     """A campaign that registering added, read at ``cursor``, with its baseline candidate, which the daemon measures."""
 
     baseline: CandidateId
-    documents: Synced
 
 
 class CampaignSynced(CampaignAnswer):
@@ -587,7 +585,6 @@ class CampaignSynced(CampaignAnswer):
     stays_stopped: str | None = None
     """Why a stopped campaign whose stop rule changed was not reopened (``piloop campaign reopen`` refused it), or
     null."""
-    documents: Synced
 
 
 class TokenView(View):

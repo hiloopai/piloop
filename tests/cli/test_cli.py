@@ -678,62 +678,12 @@ def test_sql_dash_reads_the_statement_from_stdin_and_never_waits_on_a_terminal(
 
 
 @pytest.mark.usefixtures('api')
-def test_init_syncs_the_memory_documents_and_names_the_repo(campaign_path: Path, out) -> None:
+def test_init_names_the_repo(campaign_path: Path, out) -> None:
     Repo(campaign_path).create_remote('origin', 'https://github.com/hiloopai/demo.git')
     run_cli(['init', str(campaign_path)])
-    assert 'documents' not in out(), 'no documents: nothing to say'
-    (campaign_path / 'docs').mkdir()
-    (campaign_path / 'docs' / 'report.md').write_text('# Campaign report\n\nClock recovery kept twice.\n')
-    with (campaign_path / 'piloop.toml').open('a') as toml:
-        toml.write('\n[plugins.memory]\ndocuments = ["docs/*.md"]\n')
-    run_cli(['init', str(campaign_path)])
-    assert 'documents: 1 added, 0 unchanged' in out()
-    run_cli(['init', str(campaign_path)])
-    assert 'documents: 0 added, 1 unchanged' in out()
-    run_cli(
-        [
-            'sql',
-            "SELECT p.repo || ' ' || d.path || ' ' || d.title || ' ' || d.created_by FROM documents d JOIN campaigns p ON p.id = d.campaign_id",
-        ]
-    )
-    assert 'github.com/hiloopai/demo docs/report.md Campaign report human' in out()
-
-    run_cli(['sql', "SELECT 'hits: ' || count(*) FROM documents_fts WHERE documents_fts MATCH 'clock'"])
-    assert 'hits: 1' in out()
-
-
-@pytest.mark.usefixtures('api')
-def test_journal_lines_come_back_in_wake(campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(SystemExit, match='^the home has no campaign: `piloop init <repo>` registers one$'):
-        run_cli(['journal', 'parked idea#4'])
-    run_cli(['init', str(campaign_path)])
     out()
-    monkeypatch.setattr(common, 'settings', Settings(home=common.settings.home, actor='orchestrator'))
-    run_cli(['journal', '  demo: parked idea#4,\n  dup of #2  '])
-    assert out().strip() == 'journal#1', 'the only campaign'
-    with pytest.raises(SystemExit, match='a journal line is 1 to 280 bytes, not 281: say less'):
-        run_cli(['journal', 'x' * 281])
-    other = shutil.copytree(campaign_path, campaign_path.parent / 'other')
-    toml = other / 'piloop.toml'
-    toml.write_text(re.sub(r'(?m)^name = .*$', 'name = "other"', toml.read_text(), count=1))
-    run_cli(['init', str(other)])
-    out()
-    with pytest.raises(SystemExit, match='^name the campaign with --campaign, one of: demo, other$'):
-        run_cli(['journal', 'which campaign?'])
-    run_cli(['journal', 'other: started', '--campaign', 'other'])
-    assert out().strip() == 'journal#2'
-    run_cli(['wake', 'demo'])
-    text = out()
-    assert text.startswith('# piloop wake: demo, ')
-    assert 'orchestrator: demo: parked idea#4, dup of #2' in text, 'one line, signed with the actor'
-    assert 'other: started' not in text, "only the campaign's journal"
-    assert '- demo · best score 1 (candidate#1) · 0 new bests / 1 candidates' in text
-    run_cli(['wake'])
-    text = out()
-    assert text.startswith('# piloop wake: the home, '), 'two active campaigns, and the directory is in neither'
-    assert 'demo: parked idea#4' in text and 'other: started' in text
-    run_cli(['wake', '--budget', '0'])
-    assert out() == ''
+    run_cli(['sql', "SELECT 'repo: ' || repo FROM campaigns"])
+    assert 'repo: github.com/hiloopai/demo' in out()
 
 
 @pytest.mark.usefixtures('api')
@@ -1959,7 +1909,6 @@ def test_migrate_reports_the_schema_change_and_a_newer_database_is_refused(out) 
         ['sql', 'SELECT 1'],
         ['campaign', 'tree'],
         ['campaign', 'parent', 'demo', '--clear'],
-        ['wake'],
         ['migrate'],
         ['store', 'status'],
         ['service-unit'],
@@ -2450,7 +2399,6 @@ READERS = (
     ['history'],
     ['sql', 'SELECT 1'],
     ['campaign', 'tree'],
-    ['wake'],
 )
 """Commands that open the database and must never migrate it: only serve, migrate and upgrade do."""
 

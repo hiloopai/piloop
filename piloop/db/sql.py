@@ -6,7 +6,7 @@ except the read-only ones that describe the schema. ``secrets.value`` reads as N
 mode, because a forgotten BEGIN would lock the database. Everything else is allowed, DELETE included. The schema
 enforces the rules on the data.
 
-Anyone can read the full-text indexes (``ideas_fts``, ``comments_fts``, ``documents_fts``) with ``MATCH``,
+Anyone can read the full-text indexes (``ideas_fts``, ``comments_fts``) with ``MATCH``,
 ``bm25()`` and ``snippet()``, but only their sync triggers write them. The authorizer sees the name of the trigger behind each
 statement of a trigger body and lets those statements through. So an agent's own ``INSERT INTO ideas_fts`` (or a
 ``'rebuild'``) is denied, while an insert into ``ideas`` still indexes the row. The authorizer cannot tell the shadow
@@ -21,12 +21,9 @@ is denied. From then on, every UPDATE sets ``updated_by``, and the tracked chang
 ``events``. The authorizer lets only those trigger bodies insert into ``events``, so every event has the shape of its
 model (``piloop.db.models.EventModel``).
 
-Rows of the orchestrator's ``journal`` and of ``lessons`` never change: an agent's UPDATE of them is denied, and so is
-a DELETE of the journal. ``events`` is append-only: an UPDATE or a DELETE of it is denied, and TEMP triggers refuse an
-insert that does not take the next id. A trigger refuses an ``INSERT OR REPLACE`` of a row
-(``piloop.db.triggers.immutable``). An UPDATE of a column that only the daemon writes (``DAEMON_COLUMNS``) is denied too.
-Every connection also has the
-SQL function ``blake3(text)`` (``install_functions``).
+``events`` is append-only: an UPDATE or a DELETE of it is denied, and TEMP triggers refuse an insert that does not take
+the next id (``piloop.db.triggers.immutable``). An UPDATE of a column that only the daemon writes (``DAEMON_COLUMNS``)
+is denied too.
 """
 
 import os
@@ -35,7 +32,6 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
-from covalence import Cid
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.schema import CreateIndex, CreateTable
 
@@ -43,7 +39,7 @@ from piloop.actor import Actor
 from piloop.db.schema import schemas, tables
 from piloop.db.triggers import temp_sql
 from piloop.db.triggers.fts import FTS_COLUMNS, FTS_TABLES, FTS_TRIGGER_NAMES, fts_table
-from piloop.db.triggers.immutable import APPEND_ONLY, IMMUTABLE, UNDELETABLE
+from piloop.db.triggers.immutable import APPEND_ONLY
 from piloop.proc import command_line
 
 DENIED = {
@@ -141,33 +137,9 @@ def _authorize(action: int, arg1: str | None, arg2: str | None, _db: str | None,
         return sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_UPDATE and (arg1, arg2) in DAEMON_COLUMNS:
         return sqlite3.SQLITE_DENY
-    if (action == sqlite3.SQLITE_UPDATE and (arg1 in IMMUTABLE or arg1 in APPEND_ONLY)) or (
-        action == sqlite3.SQLITE_DELETE and (arg1 in UNDELETABLE or arg1 in APPEND_ONLY)
-    ):
+    if action in (sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE) and arg1 in APPEND_ONLY:
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
-
-
-def digest(text: str) -> str:
-    """BLAKE3 of the UTF-8 bytes of ``text``, in lowercase hex: ``documents.hash``."""
-    return Cid.of(text.encode()).digest.hex()
-
-
-def _blake3(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError(f'blake3() takes text, not {type(value).__name__}')
-    return digest(value)
-
-
-def install_functions(con: sqlite3.Connection) -> None:
-    """Add the SQL functions that every piloop connection has: ``blake3(text)``, which is ``digest``.
-
-    An agent's raw ``INSERT INTO documents`` says ``hash = blake3(body)``. A connection without the functions (the
-    ``sqlite3`` shell) reads the database just the same.
-    """
-    con.create_function('blake3', 1, _blake3, deterministic=True)
 
 
 @dataclass(frozen=True)
@@ -308,7 +280,6 @@ def connect(path: Path, *, actor: Actor) -> sqlite3.Connection:
         for pragma in CONNECTION_PRAGMAS:
             con.execute(f'PRAGMA {pragma}')
         install_actor(con, actor)
-        install_functions(con)
         con.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)  # only FTS5 itself may write the shadow tables
         con.set_authorizer(_authorize)
     except BaseException:  # a locked database fails the setup: close, or the connection leaks

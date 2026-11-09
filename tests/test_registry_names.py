@@ -87,7 +87,6 @@ HOST_CONTRACTS = {
     'harness provider': 'renders MCP servers by running its CLI, and reads its session files',
     'MCP server provider': 'looks the program of a stdio server up on PATH',
     'campaign type': 'owns tables of the database, which the daemon migrates',
-    'memory provider': 'owns tables of the database, which the daemon migrates',
     'archive provider': 'owns tables of the database, which the daemon migrates',
     'lineage provider': 'graph(s, campaign) reads the database through a Session',
     'notifier': "reads the home's secrets, and posts to a service",

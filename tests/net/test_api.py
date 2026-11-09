@@ -197,7 +197,6 @@ def test_the_server_serves_the_openapi_document_of_its_routes(cfg: Settings, db:
     assert isinstance(paths, dict) and sorted(paths) == sorted(
         {r.path for routes in routers for r in routes.routes if isinstance(r, APIRoute)}
     )
-    assert '/v1/campaigns/{campaign}/journal' in paths, 'the route of local, the default memory provider'
 
 
 def test_a_route_that_crashes_is_an_answer_that_says_so(db: Database, cfg: Settings) -> None:

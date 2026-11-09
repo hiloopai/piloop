@@ -34,7 +34,7 @@ from piloop.plugins.host import PluginError, Slot
 CORE = 'core'
 """The name of piloop's own schema. No plugin declares a schema by this name."""
 NAME = re.compile(r'[a-z][a-z0-9]*(_[a-z0-9]+)*(/[a-z][a-z0-9]*(_[a-z0-9]+)*)?')
-"""A plugin's schema name: the provider that has the tables, such as ``memory/local``, or a name of its own."""
+"""A plugin's schema name: the provider that has the tables, such as ``archive/local``, or a name of its own."""
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,7 @@ def _misnamed(name: str, _schema: Schema) -> str | None:
     if name == CORE:
         return f"{name!r} is piloop's own schema"
     if not NAME.fullmatch(name):
-        return f'{name!r} is no schema name: lowercase words joined by _, and at most one /, such as memory/local'
+        return f'{name!r} is no schema name: lowercase words joined by _, and at most one /, such as archive/local'
     return None
 
 

@@ -23,7 +23,6 @@ from piloop.db.schema import tables
 from piloop.db.session import Database
 from piloop.ids import CommentKind
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
-from piloop.plugins.memory.local.tables import JOURNAL_LINE_BYTES
 from tests.conftest import WRITER, bare_config
 
 
@@ -51,7 +50,7 @@ def test_anything_but_schema_changes(con: sqlite3.Connection) -> None:
         'BEGIN',
         'SAVEPOINT s',
         'DELETE FROM alembic_version',
-        "UPDATE alembic_version_memory__local SET version_num = '0002'",
+        "UPDATE alembic_version_archive__local SET version_num = '0002'",
         'DELETE FROM migrations',
         'CREATE TEMP TABLE t (x)',
         'CREATE TEMP TRIGGER t AFTER UPDATE ON campaigns BEGIN SELECT 1; END',
@@ -85,17 +84,14 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
             'candidates',
             'comment_kinds',
             'comments',
-            'documents',
             'evaluations',
             'evaluators',
             'events',
             'first_transfers',
             'idea_links',
             'ideas',
-            'journal',
             'lease_workers',
             'leases',
-            'lessons',
             'limits',
             'measurements',
             'migrations',
@@ -112,7 +108,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
         con.executescript(ddl)
         indexes = [i for (i,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")]
     assert sorted(indexes) == sorted(str(i.name) for t in tables() for i in t.indexes)
-    assert ddl.count('CREATE VIRTUAL TABLE') == 3, (
+    assert ddl.count('CREATE VIRTUAL TABLE') == 2, (
         'the indexes are schema the agents query, listed without triggers too'
     )
 
@@ -165,11 +161,7 @@ def test_every_update_is_stamped_with_the_connection_actor(db: Database, tmp_pat
 def test_actor_triggers_cover_every_table_with_updated_by() -> None:
     tracked = {t.name for t in tables() if 'updated_by' in t.columns}
     triggered = set(re.findall(r'CREATE TEMP TRIGGER (\w+)_updated_by AFTER UPDATE ON \1', sql.declared().actor_sql))
-    assert (
-        triggered
-        == tracked
-        == snapshot({'candidates', 'comments', 'documents', 'ideas', 'campaigns', 'runs', 'agent_sessions'})
-    )
+    assert triggered == tracked == snapshot({'candidates', 'comments', 'ideas', 'campaigns', 'runs', 'agent_sessions'})
 
 
 def test_every_client_connection_has_the_same_pragmas_and_optimizes_on_close(db: Database, tmp_path: Path) -> None:
@@ -517,68 +509,6 @@ def test_only_the_daemon_writes_an_agents_usage_and_session_file(con: sqlite3.Co
     assert [tuple(r) for r in con.execute('SELECT reason, usage FROM agent_sessions')] == [('by hand', None)]
 
 
-def test_a_lesson_has_a_status_and_an_effect_only_with_its_metric(con: sqlite3.Connection) -> None:
-    """Agents write lessons with raw SQL: a malformed one fails at insert, and the error names the rule."""
-    sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
-    insert = 'INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by) VALUES (1, {})'
-    for values in (
-        "'voting', 'dead', 0.002, 'accuracy', 'the trees agree on every row: idea#3', 'auditor#2'",
-        "'voting', 'promising', -40, 'seconds', 'faster: candidate#9', 'auditor#2'",
-        "'pruning', 'untested', NULL, NULL, 'never ran: idea#4', 'orchestrator'",
-    ):
-        sql.run(con, insert.format(values))
-    refused = {
-        "'voting', 'maybe', NULL, NULL, 'b', 'w'": 'CHECK constraint failed: lessonstatus',
-        "'voting', 'dead', 0.1, NULL, 'b', 'w'": 'lessons.effect and lessons.metric go together',
-        "'voting', 'dead', NULL, 'accuracy', 'b', 'w'": 'lessons.effect and lessons.metric go together',
-        "'voting', 'dead', 'big', 'accuracy', 'b', 'w'": 'lessons.effect must be a number',
-        "'voting', 'dead', NULL, NULL, x'00', 'w'": 'lessons.body must be a text value',
-    }
-    for values, error in refused.items():
-        with pytest.raises(sqlite3.IntegrityError, match=re.escape(error)):
-            sql.run(con, insert.format(values))
-    with pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY'):
-        sql.run(con, insert.format("'voting', 'dead', NULL, NULL, 'b', 'w'").replace('(1, ', '(9, '))
-
-
-@pytest.mark.parametrize(
-    ('table', 'insert'),
-    [
-        ('journal', "INSERT INTO journal (author, line) VALUES ('orchestrator', 'parked idea#4: dup of #2')"),
-        (
-            'lessons',
-            'INSERT INTO lessons (campaign_id, family, status, body, created_by)'
-            " VALUES (1, 'voting', 'dead', 'idea#3', 'auditor#2')",
-        ),
-    ],
-)
-def test_agents_never_rewrite_a_journal_line_or_a_lesson(con: sqlite3.Connection, table: str, insert: str) -> None:
-    """An UPDATE is denied, and an INSERT OR REPLACE of a row is refused: the authorizer does not see it."""
-    sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
-    sql.run(con, insert)
-    before = sql.run(con, f'SELECT * FROM {table}').rows
-    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
-        sql.run(con, f'UPDATE {table} SET id = 2')
-    for replace in ('INSERT OR REPLACE INTO', 'REPLACE INTO'):
-        with pytest.raises(sqlite3.IntegrityError, match=f'{table} rows are never replaced: insert a new row'):
-            sql.run(con, f'{replace} {table} SELECT * FROM {table}')
-    assert sql.run(con, f'SELECT * FROM {table}').rows == before
-    sql.run(con, insert)
-    assert len(sql.run(con, f'SELECT id FROM {table}').rows) == 2, 'a new row is an append'
-
-
-def test_a_journal_line_is_never_deleted_but_a_lesson_goes_with_its_campaign(con: sqlite3.Connection) -> None:
-    sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
-    sql.run(con, "INSERT INTO journal (author, line) VALUES ('orchestrator', 'parked idea#4')")
-    sql.run(
-        con, "INSERT INTO lessons (campaign_id, family, status, body, created_by) VALUES (1, 'v', 'dead', 'b', 'w')"
-    )
-    with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
-        sql.run(con, 'DELETE FROM journal')
-    sql.run(con, 'DELETE FROM campaigns')
-    assert sql.run(con, 'SELECT count(*) FROM lessons').rows == [(0,)]
-
-
 EVENT = """INSERT INTO events (actor, target_kind, target_id, payload{cols}) VALUES ('a', 'campaign', 1, '{{"kind": "x.y"}}'{vals})"""
 
 
@@ -656,15 +586,6 @@ def test_an_event_that_piloop_could_not_read_is_refused(daemon_con: sqlite3.Conn
     ):
         with pytest.raises(sqlite3.Error, match=message):
             sql.run(con, insert + values)
-
-
-def test_the_journal_takes_short_lines(con: sqlite3.Connection) -> None:
-    sql.run(con, "INSERT INTO journal (author, line) VALUES ('orchestrator', 'parked idea#4: dup of #2')")
-    with pytest.raises(sqlite3.IntegrityError, match=f'journal.line is text of 1 to {JOURNAL_LINE_BYTES} bytes'):
-        sql.run(con, f"INSERT INTO journal (author, line) VALUES ('orchestrator', '{'é' * 141}')")
-    with pytest.raises(sqlite3.IntegrityError, match='journal.line is text of 1'):
-        sql.run(con, "INSERT INTO journal (author, line) VALUES ('orchestrator', '')")
-    assert sql.run(con, 'SELECT author, line FROM journal').rows == [('orchestrator', 'parked idea#4: dup of #2')]
 
 
 def test_acknowledging_an_inbox_item_is_logged_with_the_connection_actor(con: sqlite3.Connection) -> None:

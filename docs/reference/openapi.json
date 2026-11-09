@@ -934,7 +934,7 @@
     "/v1/campaigns": {
       "post": {
         "summary": "Register Campaign",
-        "description": "Register a campaign: a checkout where it is, a repository that the daemon clones under its home first, or a fork.\n\nEach registration of a URL clones it again, into a directory named after the new campaign's id. A fork clones the\ncheckout of its source, a campaign in any state, and starts from a version of it: by default its head.\n\nIt adds the campaign with its head version as the baseline candidate, and syncs its documents into its memory. The\ndaemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a\nbaseline that fails pauses the campaign. A clone that does not register is deleted.",
+        "description": "Register a campaign: a checkout where it is, a repository that the daemon clones under its home first, or a fork.\n\nEach registration of a URL clones it again, into a directory named after the new campaign's id. A fork clones the\ncheckout of its source, a campaign in any state, and starts from a version of it: by default its head.\n\nIt adds the campaign with its head version as the baseline candidate. The daemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a\nbaseline that fails pauses the campaign. A clone that does not register is deleted.",
         "operationId": "register_campaign",
         "requestBody": {
           "content": {
@@ -1014,7 +1014,7 @@
     "/v1/campaigns/{campaign}/sync": {
       "post": {
         "summary": "Sync Campaign",
-        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is reopened (``ops.reopen``), with the same guards, once the sync is committed: its limits count from\nthen. One that it refuses stays stopped, and ``stays_stopped`` says why. A campaign whose checkout is not on the\ndisk refuses.",
+        "description": "Read the campaign's ``piloop.toml`` again.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is reopened (``ops.reopen``), with the same guards, once the sync is committed: its limits count from\nthen. One that it refuses stays stopped, and ``stays_stopped`` says why. A campaign whose checkout is not on the\ndisk refuses.",
         "operationId": "sync_campaign",
         "parameters": [
           {
@@ -4653,88 +4653,6 @@
           }
         }
       }
-    },
-    "/v1/campaigns/{campaign}/journal": {
-      "post": {
-        "summary": "Journal",
-        "description": "Append a line to the journal of the campaign, signed by the caller's actor. ``piloop wake`` prints it.",
-        "operationId": "journal",
-        "parameters": [
-          {
-            "name": "campaign",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "The campaign's name, or its id.",
-              "title": "Campaign"
-            },
-            "description": "The campaign's name, or its id."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JournalBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Journaled"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Service Unavailable"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -5287,17 +5205,13 @@
             ],
             "title": "Stays Stopped",
             "description": "Why a stopped campaign whose stop rule changed was not reopened (``piloop campaign reopen`` refused it), or\nnull."
-          },
-          "documents": {
-            "$ref": "#/components/schemas/Synced"
           }
         },
         "type": "object",
         "required": [
           "cursor",
           "campaign",
-          "was",
-          "documents"
+          "was"
         ],
         "title": "CampaignSynced",
         "description": "A campaign whose ``piloop.toml`` was read again, read at ``cursor``."
@@ -6933,39 +6847,6 @@
         "title": "Item",
         "description": "An inbox item: a comment with a priority."
       },
-      "JournalBody": {
-        "properties": {
-          "line": {
-            "type": "string",
-            "title": "Line"
-          }
-        },
-        "type": "object",
-        "required": [
-          "line"
-        ],
-        "title": "JournalBody",
-        "description": "A line of the orchestrator's journal: a decision, a plan or a result, with its ids."
-      },
-      "Journaled": {
-        "properties": {
-          "cursor": {
-            "type": "integer",
-            "title": "Cursor"
-          },
-          "journal": {
-            "type": "integer",
-            "title": "Journal"
-          }
-        },
-        "type": "object",
-        "required": [
-          "cursor",
-          "journal"
-        ],
-        "title": "Journaled",
-        "description": "A line appended to the orchestrator's journal, read at ``cursor``."
-      },
       "JsonValue": {},
       "Judged": {
         "properties": {
@@ -8160,17 +8041,13 @@
           "baseline": {
             "type": "integer",
             "title": "Baseline"
-          },
-          "documents": {
-            "$ref": "#/components/schemas/Synced"
           }
         },
         "type": "object",
         "required": [
           "cursor",
           "campaign",
-          "baseline",
-          "documents"
+          "baseline"
         ],
         "title": "Registered",
         "description": "A campaign that registering added, read at ``cursor``, with its baseline candidate, which the daemon measures."
@@ -9212,40 +9089,6 @@
         "type": "object",
         "title": "SyncBody",
         "description": "How to read a campaign's ``piloop.toml`` again."
-      },
-      "Synced": {
-        "properties": {
-          "added": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Added"
-          },
-          "unchanged": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Unchanged"
-          },
-          "skipped": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Skipped",
-            "description": "Repo-relative path \u2192 why the sync did not read it (not UTF-8 text, unreadable, outside the repo)."
-          }
-        },
-        "type": "object",
-        "required": [
-          "added",
-          "unchanged",
-          "skipped"
-        ],
-        "title": "Synced",
-        "description": "What one sync of the campaign's documents did: the files that it added, those already in, those it skipped."
       },
       "Table": {
         "properties": {

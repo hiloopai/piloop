@@ -91,7 +91,7 @@ def init(
         found = next((c for c in client.status(Selection()).campaigns if c.path == str(path)), None)
         if found is None:
             added = client.register_campaign(Checkout(path=str(path), name=named))
-            campaign, documents = added.campaign, added.documents
+            campaign = added.campaign
             # the measurement waits for a free evaluation slot, which can be on a worker that has not connected yet
             common.console.print(
                 f'campaign [bold]{campaign.name}[/] #{campaign.id} registered; measuring baseline'
@@ -108,15 +108,13 @@ def init(
             raise SystemExit(f'{path} is campaign {found.name} #{found.id} already: a campaign keeps its name')
         else:
             synced = client.sync_campaign(found.name)
-            campaign, documents = synced.campaign, synced.documents
+            campaign = synced.campaign
             common.console.print(
                 f'campaign {campaign.name} #{campaign.id} already registered; config re-read from piloop.toml'
                 + _reopened(synced),
                 markup=False,
                 soft_wrap=True,
             )
-    if documents.added or documents.unchanged or documents.skipped:
-        common.console.print(documents.line(), markup=False, highlight=False, soft_wrap=True)
 
 
 FOLLOWED = (*MeasurementRecorded.kinds(), *CampaignPausedChanged.kinds(), *CampaignStatusChanged.kinds())
@@ -158,8 +156,8 @@ def fork(
 ) -> None:
     """Make a new campaign that starts from a version of another one, by default its best, in a clone of its checkout.
 
-    The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and shares the
-    memory of its repo: its lessons, ideas and documents. It starts with no ideas of its own and an empty workspace.
+    The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and its repo,
+    so it sees the ideas of every campaign on the repo. It starts with no ideas of its own and an empty workspace.
     The daemon measures its starting version as its baseline.
     """
     try:

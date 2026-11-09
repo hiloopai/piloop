@@ -32,8 +32,7 @@ from piloop.plugins.campaign_type.optimization.history import (
 from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.section.contract import Briefing, Rendering, markdown
-from piloop.reports.wake import cost
-from piloop.text import CELL_CHARS, cell
+from piloop.text import CELL_CHARS, cell, cost
 from tests.conftest import cas_of, has_lines, spent
 
 SHOWN = Pack()

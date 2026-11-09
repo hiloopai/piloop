@@ -80,8 +80,6 @@ from piloop.plugins.fact_source.facts import (
 )
 from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.host import data_errors
-from piloop.plugins.memory.local import LocalMemory
-from piloop.plugins.memory.local.tables import Document
 from piloop.plugins.metric import Direction
 from piloop.plugins.stop_rule import limits as limits_module
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Escalate, Go, Hold, Shape, Stop, StopCase, StopRule
@@ -810,70 +808,6 @@ def test_a_stopped_campaign_gets_no_trigger_requests(
     sched.stop(timeout=5)
     with db.session() as s:
         assert s.get_one(AgentSession, 2).state is AgentSessionState.EXITED
-
-
-def test_a_stop_syncs_the_memory_documents_when_it_closes_the_campaign(
-    db: Database,
-    campaign: Campaign,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    tracer: Tracer,
-    spans: InMemorySpanExporter,
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_NOOP)
-    with db.session() as s:
-        cfg = load_campaign_config(
-            Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'memory': {'documents': ['docs/*.md']}}
-        )
-        s.get_one(Campaign, campaign.id).config = cfg
-        s.commit()
-    add_run(db, campaign)
-    Path(campaign.path, 'docs').mkdir()
-    Path(campaign.path, 'docs', 'report.md').write_text('# Closing report\n')
-    sched = make_scheduler(db, runtime, tmp_path, tracer)
-    assert run_all(sched) == []
-    sched.stop(timeout=5)
-    with db.session() as s:
-        [document] = s.scalars(select(Document)).all()
-        assert (document.path, document.title, document.created_by) == ('docs/report.md', 'Closing report', 'daemon')
-    assert dict(span_named(spans, 'campaign.closing').attributes or {}) == {
-        'campaign': 'demo',
-        'provider': 'memory local',
-        'result': 'documents: 1 added, 0 unchanged',
-    }
-
-
-def test_a_stop_whose_document_sync_fails_still_stops_and_closes_the_campaign(
-    db: Database,
-    campaign: Campaign,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    tracer: Tracer,
-    spans: InMemorySpanExporter,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Greptile on hiloopai/piloop#7: a sync that raised rolled the stop back and ended the daemon."""
-    write_toml(Path(campaign.path), HARNESS_NOOP)
-    with db.session() as s:
-        cfg = load_campaign_config(
-            Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'memory': {'documents': ['docs/*.md']}}
-        )
-        s.get_one(Campaign, campaign.id).config = cfg
-        s.commit()
-    add_run(db, campaign)
-
-    def broken(*_args: object) -> None:
-        raise PermissionError(13, 'Permission denied', 'docs')
-
-    monkeypatch.setattr(LocalMemory, 'sync', broken)
-    sched = make_scheduler(db, runtime, tmp_path, tracer)
-    assert run_all(sched) == []
-    sched.stop(timeout=5)
-    assert closes(db, campaign) == 1
-    with db.session() as s:
-        assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
-    result = dict(span_named(spans, 'campaign.closing').attributes or {})['result']
-    assert isinstance(result, str) and result.startswith('documents: not synced: PermissionError: [Errno 13]')
 
 
 def test_the_contract_of_a_stop_rule_is_data_in_data_out() -> None:

@@ -158,8 +158,6 @@ class AgentSettings(BaseModel):
     """How many characters of a comment or an error one line of a brief shows: an inbox item, an incident."""
     attach_lines: int = Field(default=40, gt=0)
     """How many lines of an agent's output ``piloop attach`` prints."""
-    wake_budget: int = Field(default=2000, ge=0)
-    """The tokens that ``piloop wake`` prints when ``--budget`` is not given."""
 
 
 class WatchSettings(BaseModel):

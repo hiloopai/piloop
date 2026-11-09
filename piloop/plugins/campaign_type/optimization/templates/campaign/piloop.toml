@@ -65,7 +65,7 @@ runs = true                               # its agents do runs
 # prompt = "briefs/my-implementer.md"          # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["commits"]                    # what the brief says the role may write; default: what piloop expects of it
-# sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
+# sections = ["context", "history", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 # first_message = "Your brief is in {brief}. …"  # the first message of each agent; {brief} is its path
 # continuity = "fresh"                    # "resume": each run's agent continues the last run's session
 # resume_message = "You continue … {agent}. …"  # what starts the brief of an agent that resumes the session
@@ -94,9 +94,10 @@ noise_runs = 3                            # evaluations that confirm a candidate
 # [plugins.section]                       # what `piloop status`, the API and a UI show
 # use = ["headline", "goal", …]           # if not set: the installed sections of status; see the sections
 
-# [plugins.section.research_lessons]      # a section with parameters, which a list of sections names
-# provider = "lessons"
+# [plugins.section.short_history]        # a section with parameters, which a list of sections names
+# provider = "history"
 # budget = 800
+# findings = 5                           # the latest notes that it lists
 
 # [plugins.<name>]                        # the provider of a capability that a plugin package adds, by its name
 # provider = "<name>"                     # the other keys of the table are its parameters; `piloop plugins` lists them
@@ -127,9 +128,6 @@ noise_runs = 3                            # evaluations that confirm a candidate
 
 # [plugins.vcs]                           # how the campaign saves versions; default: git
 # email = "piloop@localhost"              # of every commit that piloop makes or launches, whatever git's config says
-
-# [plugins.memory]                        # what past campaigns leave for the next ones; see the research memory page
-# documents = ["docs/evidence/**/*.md"]   # repo files that `piloop init` and the stop copy into `documents`; default none
 
 # [plugins.escalation]                    # what an escalation holds and who sees it when; without the table: structured
 # ask_words = 25                          # the most words of its ask, one sentence

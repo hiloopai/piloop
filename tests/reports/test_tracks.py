@@ -17,7 +17,6 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.pack import pack
-from piloop.plugins.campaign_type.optimization.summary import summary
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.panels import Api, CandidatesPanel, Frame, campaigns, read_frame
 from tests.conftest import has_lines, reconfigured, serving_api
@@ -154,10 +153,5 @@ def test_watch_shows_the_best_per_track(db: Database, campaign: Campaign) -> Non
     assert isinstance(frame, Frame)
     [row] = campaigns(states, {}, NOW)
     assert row.cells[2:4] == snapshot(('3 score, 8 size', '+2, +4'))
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        assert summary(s, p, p.config) == snapshot(
-            'demo · best score 3 (candidate#2, +2 vs baseline), size 8 (candidate#4, +4 vs baseline) · 2 new bests / 4 candidates · 4k tok'
-        ), 'piloop wake shows it'
     panel = CandidatesPanel(WatchSettings())
     assert panel.title(frame, panel.items(frame)) == snapshot('Candidates score ▁█ 1 → 3 · size █▁ 12 → 10')

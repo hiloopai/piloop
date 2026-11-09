@@ -87,12 +87,6 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'comments_fts_data',
             'comments_fts_docsize',
             'comments_fts_idx',
-            'documents',
-            'documents_fts',
-            'documents_fts_config',
-            'documents_fts_data',
-            'documents_fts_docsize',
-            'documents_fts_idx',
             'evaluations',
             'evaluators',
             'events',
@@ -104,10 +98,8 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'ideas_fts_data',
             'ideas_fts_docsize',
             'ideas_fts_idx',
-            'journal',
             'lease_workers',
             'leases',
-            'lessons',
             'limits',
             'measurements',
             'migrations',
@@ -171,7 +163,8 @@ def test_a_database_of_the_last_release_upgrades_to_every_persistent_trigger_as_
     )
     path = tmp_path / 'piloop.db'
     for chain, head in released.heads.items():
-        command.upgrade(alembic_config(f'sqlite:///{path}', chain, disk(tmp_path)), head)
+        if chain in heads():  # a chain that this piloop dropped, such as memory/local, has nothing to run
+            command.upgrade(alembic_config(f'sqlite:///{path}', chain, disk(tmp_path)), head)
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         for (name,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
             con.execute(f'DROP TRIGGER {name}')
@@ -404,11 +397,7 @@ def test_the_fingerprint_of_each_revision_after_a_baseline_is_what_the_squashed_
     counts the names of the revisions that it squashed, so a database migrated before the squash is not refused."""
     assert fingerprints(ScriptDirectory(str(MIGRATIONS))).items() >= {('0067', 1855909650), ('0073', 235322692)}
     marks = {name: fingerprints(script) for name, script in scripts().items()}
-    assert (marks['archive/local']['0002'], marks['memory/local']['0002'], marks['optimization']['0004']) == (
-        746290332,
-        1939818781,
-        468026487,
-    )
+    assert (marks['archive/local']['0002'], marks['optimization']['0004']) == (746290332, 468026487)
 
 
 def at_floor(path: Path, head: str = '0073') -> None:
@@ -1594,3 +1583,59 @@ def test_0084_gives_each_acknowledged_item_an_ack_of_each_party_that_reads_the_i
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert con.execute('SELECT id, acked_at, acked_by FROM comments').fetchall() == [(2, '2026-10-02', 'o')]
         assert con.execute("SELECT name FROM sqlite_master WHERE name = 'acks'").fetchall() == []
+
+
+def test_0085_drops_the_tables_of_research_memory_its_chain_and_its_keys_and_downgrades(tmp_path: Path) -> None:
+    """The rows go with the tables: nothing archives them. A stored config loses ``[plugins.memory]`` and the lessons."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0084')
+    plugins = {
+        'memory': {'provider': 'local', 'documents': ['docs/*.md']},
+        'section': {
+            'use': ['headline', 'lessons', 'short'],
+            'headline': {},
+            'lessons': {},
+            'short': {'provider': 'lessons', 'budget': 900},
+        },
+        'role': {'implementer': {'sections': ['context', 'lessons', 'history']}, 'quick': {'runs': True}},
+    }
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in (('p', {'plugins': plugins}), ('q', {'name': 'q'})):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+        con.execute(
+            "INSERT INTO lessons (campaign_id, family, status, body, created_by) VALUES (1, 'v', 'dead', 'b', 'w')"
+        )
+        con.execute("INSERT INTO journal (author, line, campaign_id) VALUES ('orchestrator', 'parked idea#4', 1)")
+        con.execute(
+            "INSERT INTO documents (campaign_id, path, hash, title, body, created_by) VALUES (1, 'r.md', ?, 'r', 'b', 'w')",
+            ('0' * 64,),
+        )
+        con.execute('CREATE TABLE alembic_version_memory__local (version_num VARCHAR(32) NOT NULL PRIMARY KEY)')
+        con.execute("INSERT INTO alembic_version_memory__local VALUES ('0002')")
+        con.execute("INSERT INTO migrations (name, package, fingerprint) VALUES ('memory/local', 'piloop', 1)")
+    command.upgrade(cfg, '0085')
+    names = (
+        "SELECT name FROM sqlite_master WHERE name GLOB '*lesson*' OR name GLOB '*journal*' OR name GLOB '*document*'"
+    )
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute(names).fetchall() == []
+        assert (
+            con.execute("SELECT name FROM sqlite_master WHERE name = 'alembic_version_memory__local'").fetchall() == []
+        )
+        assert con.execute("SELECT name FROM migrations WHERE name = 'memory/local'").fetchall() == []
+        assert [loads(c) for (c,) in con.execute('SELECT config FROM campaigns ORDER BY id')] == [
+            {
+                'plugins': {
+                    'section': {'use': ['headline'], 'headline': {}},
+                    'role': {'implementer': {'sections': ['context', 'history']}, 'quick': {'runs': True}},
+                }
+            },
+            {'name': 'q'},
+        ]
+    command.downgrade(cfg, '0084')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for table in ('lessons', 'documents', 'documents_fts', 'journal'):
+            assert con.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,), 'back, and empty'

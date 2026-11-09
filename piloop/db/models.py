@@ -609,7 +609,7 @@ class Migration(Base):
     __tablename__ = 'migrations'
 
     name: Mapped[str] = mapped_column(primary_key=True)
-    """``core``, or a plugin's schema name, such as ``memory/local``."""
+    """``core``, or a plugin's schema name, such as ``archive/local``."""
     package: Mapped[str]
     """The distribution that declared the schema: what to install again when it is missing."""
     fingerprint: Mapped[int]

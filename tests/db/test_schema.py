@@ -88,7 +88,6 @@ def test_every_table_of_a_migrated_database_is_in_one_schema(db: Database) -> No
         CORE,
         'archive/local',
         'executor/workers',
-        'memory/local',
         'optimization',
         'secrets/local',
     ]

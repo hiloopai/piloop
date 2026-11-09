@@ -396,3 +396,54 @@ def wake_after_tries(toml: Path, raw: dict[str, object], removed_in: Version) ->
             'no agent wakes on the retries of an evaluation now, so [evaluation] wake_after_tries is removed; delete it'
         )
         warn(toml, 'evaluation.wake_after_tries', message, removed_in=removed_in)
+
+
+MEMORY_SECTION = 'lessons'
+"""The section of research memory: the lessons of past campaigns on the repo."""
+
+
+@bridge('0.8.0', 'research memory is removed in 0.7: delete research_memory and MEMORY_SECTION')
+def research_memory(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``[plugins.memory]`` and the ``lessons`` section are removed with research memory. piloop drops them.
+
+    The lessons, documents and journal are gone: an orchestrator keeps its notes as ``note`` comments on the campaign.
+    A section table of ``provider = "lessons"`` goes too, and so does its name in ``[plugins.section] use`` and in a
+    role's ``sections``.
+    """
+
+    def dropped(key: str, what: str, at: int = 0) -> None:
+        warn(toml, key, f'research memory is removed, so {what} is removed; delete it', removed_in=removed_in, nth=at)
+
+    plugins = table_at(raw, 'plugins') or {}
+    if 'memory' in plugins:
+        del plugins['memory']
+        dropped('plugins.memory', '[plugins.memory]')
+    sections = table_at(raw, 'plugins', 'section') or {}
+    gone = {MEMORY_SECTION} | {
+        name for name, table in sections.items() if isinstance(table, dict) and table.get('provider') == MEMORY_SECTION
+    }
+    for name in sorted(gone & set(sections)):
+        del sections[name]
+        dropped(f'plugins.section.{name}', f'[plugins.section.{name}]')
+    if isinstance(use := sections.get('use'), list) and (named := [n for n in use if isinstance(n, str) and n in gone]):
+        sections['use'] = [n for n in use if n not in named]
+        at = nth(toml, 'plugins.section', 'use')
+        dropped('plugins.section.use', f'{", ".join(named)} in [plugins.section] use', at)
+    for role in table_at(raw, 'plugins', 'role') or {}:
+        table = table_at(raw, 'plugins', 'role', role) or {}
+        if isinstance(listed := table.get('sections'), list) and (
+            named := [n for n in listed if isinstance(n, str) and n in gone]
+        ):
+            table['sections'] = [n for n in listed if n not in named]
+            at = nth(toml, f'plugins.role.{role}', 'sections')
+            dropped(f'plugins.role.{role}.sections', f'{", ".join(named)} in [plugins.role.{role}] sections', at)
+
+
+@bridge('0.8.0', '[agents] wake_budget is removed with piloop wake: delete wake_budget', Scope.HOME)
+def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``wake_budget`` of ``[agents]`` is removed with ``piloop wake``. piloop drops it."""
+    agents = table_at(raw, 'agents') or {}
+    if 'wake_budget' in agents:
+        del agents['wake_budget']
+        message = '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
+        warn(toml, 'agents.wake_budget', message, removed_in=removed_in)

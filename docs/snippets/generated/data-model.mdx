@@ -119,18 +119,6 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
-    documents {
-        integer id PK
-        integer campaign_id FK
-        varchar path
-        varchar hash
-        varchar title
-        varchar body
-        varchar created_by
-        datetime created_at
-        datetime updated_at
-        varchar updated_by
-    }
     evaluators {
         integer id PK
         integer campaign_id FK
@@ -167,24 +155,6 @@ erDiagram
         datetime created_at
         datetime updated_at
         varchar updated_by
-    }
-    journal {
-        integer id PK
-        integer campaign_id FK
-        varchar author
-        varchar line
-        datetime created_at
-    }
-    lessons {
-        integer id PK
-        integer campaign_id FK
-        varchar family
-        LessonStatus status
-        double effect
-        varchar metric
-        varchar body
-        varchar created_by
-        datetime created_at
     }
     secrets {
         integer id PK
@@ -303,13 +273,10 @@ erDiagram
     target_kinds ||--o{ comments : "target_kind"
     comments |o--o{ comments : "in_reply_to"
     comment_kinds ||--o{ comments : "kind"
-    campaigns ||--o{ documents : "campaign_id"
     campaigns ||--o{ evaluators : "campaign_id"
     target_kinds ||--o{ events : "target_kind"
     campaigns ||--o{ first_transfers : "campaign_id"
     campaigns ||--o{ ideas : "campaign_id"
-    campaigns |o--o{ journal : "campaign_id"
-    campaigns ||--o{ lessons : "campaign_id"
     campaigns |o--o{ secrets : "campaign_id"
     campaigns ||--o{ techniques : "campaign_id"
     comments ||--o{ acks : "comment_id"
@@ -329,4 +296,4 @@ erDiagram
     evaluators ||--o{ measurements : "evaluator_id"
 ```
 
-The full-text indexes are not in the diagram: `ideas_fts` (`title`, `hypothesis`, `plan`), `comments_fts` (`body`), `documents_fts` (`title`, `body`).
+The full-text indexes are not in the diagram: `ideas_fts` (`title`, `hypothesis`, `plan`), `comments_fts` (`body`).

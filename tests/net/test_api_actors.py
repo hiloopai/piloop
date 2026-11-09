@@ -30,12 +30,10 @@ from piloop.db.models import (
 from piloop.db.session import Database
 from piloop.ids import CommentId
 from piloop.net import tokens
-from piloop.plugins.memory.local.api import JournalBody, Journaled
-from piloop.plugins.memory.local.tables import Journal
 from piloop.plugins.network.https import ACTOR_HEADER, TIMEOUT
 from piloop.plugins.network.proxy import Proxy, Rule
 from piloop.settings import Settings
-from tests.conftest import AUDITOR, EveryClient, serving_api
+from tests.conftest import AUDITOR, serving_api
 from tests.net.test_api import comment, token
 
 pytestmark = pytest.mark.usefixtures('auditor')
@@ -74,28 +72,28 @@ def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_
     uds = httpx.HTTPTransport(uds=str(cfg.socket_file))
     with serving_api(cfg), httpx.Client(transport=uds, base_url='http://piloop') as http:
 
-        def journal(text: str, named: str | None, *, bearer: str | None = None) -> httpx.Response:
+        def message(text: str, named: str | None, *, bearer: str | None = None) -> httpx.Response:
             headers = {
                 **({SOCKET_ACTOR_HEADER: named} if named else {}),
                 **({'Authorization': f'Bearer {bearer}'} if bearer else {}),
             }
-            return http.post(f'/v1/campaigns/{campaign.name}/journal', json={'line': text}, headers=headers)
+            return http.post(f'/v1/campaigns/{campaign.name}/messages', json={'body': text}, headers=headers)
 
         for named in (None, 'human', 'orchestrator', 'human:ana'):
-            assert journal(f'owner as {named}', named).status_code == 200, 'the owner needs no setup'
+            assert message(f'owner as {named}', named).status_code == 200, 'the owner needs no setup'
         for named in (None, 'human', str(bound)):
-            assert journal(f'agent as {named}', named, bearer=secret).status_code == 200
+            assert message(f'agent as {named}', named, bearer=secret).status_code == 200
         for named in ('orchestrator', 'human:ana', str(older)):
-            refused = journal('posing', named, bearer=secret)
+            refused = message('posing', named, bearer=secret)
             assert refused.json() == {'error': 'forbidden', 'detail': f'{bound} acts only as itself, not as {named}'}
-        assert journal('posing', str(bound)).json() == {
+        assert message('posing', str(bound)).json() == {
             'error': 'forbidden',
             'detail': f'owner may not act as {bound}: only the token of {bound} acts as it',
         }, 'without its token, nobody acts as an agent'
-        assert journal('an agent with no token', str(older)).status_code == 403, 'the owner acts as no agent'
-        assert journal('no such agent', 'auditor#99').status_code == 403
+        assert message('an agent with no token', str(older)).status_code == 403, 'the owner acts as no agent'
+        assert message('no such agent', 'auditor#99').status_code == 403
     with db.session() as s:
-        signed = {(j.line, j.author) for j in s.scalars(select(Journal))}
+        signed = {(c.body, c.author) for c in s.scalars(select(Comment))}
     assert signed >= {
         ('owner as orchestrator', 'orchestrator'),
         ('owner as None', 'human'),
@@ -181,26 +179,26 @@ def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_tok
         httpx.Client(base_url=tcp.url, headers=stamped) as network,
     ):
         signed = socket.post(
-            f'/v1/campaigns/{campaign.name}/journal',
-            json={'line': 'relayed'},
+            f'/v1/campaigns/{campaign.name}/messages',
+            json={'body': 'relayed'},
             headers={'Authorization': f'Bearer {secret}'},
         )
         assert signed.status_code == 200, signed.text
         late = socket.post(
-            f'/v1/campaigns/{campaign.name}/journal',
-            json={'line': 'late'},
+            f'/v1/campaigns/{campaign.name}/messages',
+            json={'body': 'late'},
             headers={'Authorization': f'Bearer {stale}'},
         )
         assert (late.status_code, late.json()) == (401, {'detail': 'the token is unknown or revoked'})
         for bearer in (person, secret):
             refused = network.post(
-                f'/v1/campaigns/{campaign.name}/journal',
-                json={'line': 'around'},
+                f'/v1/campaigns/{campaign.name}/messages',
+                json={'body': 'around'},
                 headers={'Authorization': f'Bearer {bearer}'},
             )
             assert refused.status_code == 401 and 'takes no piloop token' in refused.json()['detail']
     with db.session() as s:
-        assert {(j.line, j.author) for j in s.scalars(select(Journal))} == {('relayed', str(agent))}
+        assert {(c.body, c.author) for c in s.scalars(select(Comment))} == {('relayed', str(agent))}
 
 
 def test_a_proxy_caller_that_its_rule_calls_a_service_never_signs_as_a_person(
@@ -270,24 +268,3 @@ def test_a_message_signs_as_the_caller_wakes_the_orchestrator_and_its_reply_reac
         },
     ), 'the network names the caller: an agent cannot sign as another actor'
     assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
-
-
-def test_a_journal_line_is_the_campaign_s_signed_by_the_caller_s_actor_and_the_server_refuses_one_too_long(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    path = f'/v1/campaigns/{campaign.name}/journal'
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        written = client.post(path, JournalBody(line=' parked idea#4:\n dup of #2 '), Journaled)
-        with pytest.raises(Refused, match='^line: a journal line is 1 to 280 bytes, not 281: say less$') as long:
-            client.post(path, JournalBody.model_construct(line='x' * 281), Journaled)
-        with pytest.raises(Refused) as unknown:
-            client.post('/v1/campaigns/nope/journal', JournalBody(line='parked idea#4'), Journaled)
-    assert long.value.error is None
-    assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
-    with db.session() as s:
-        entry = s.get_one(Journal, written.journal)
-        assert (entry.campaign_id, entry.author, entry.line) == (
-            campaign.id,
-            'orchestrator',
-            'parked idea#4: dup of #2',
-        )

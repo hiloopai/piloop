@@ -6,26 +6,26 @@ description: What a plugin adds to piloop besides its providers, and where it de
 
 import ContractContribution from '/snippets/generated/contract-contribution.mdx';
 
-A plugin can add tables, commands, skill parts, routes and consumers, as piloop's own plugins do. The built-in memory provider,
-`local`, adds three tables, the `piloop journal` command and the route `POST /v1/campaigns/{campaign}/journal`:
+A plugin can add tables, commands, skill parts, routes and consumers, as piloop's own plugins do. The built-in archive
+provider, `local`, adds its tables, the `piloop restore` command and a consumer of the daemon's loop:
 
 ```toml
-[project.entry-points."piloop.memory"]
-local = "piloop.plugins.memory.local:LocalMemory"
+[project.entry-points."piloop.archives"]
+local = "piloop.plugins.archive.local:LocalArchive"
 
 [project.entry-points."piloop.schemas"]
-"memory/local" = "piloop.plugins.memory.local.tables:SCHEMA"
+"archive/local" = "piloop.plugins.archive.local.tables:SCHEMA"
 
 [project.entry-points."piloop.commands"]
-journal = "piloop.plugins.memory.local.cli:journal"
+restore = "piloop.plugins.archive.local.cli:restore"
 ```
 
-Its route comes from its `contribution()`:
+Its consumer comes from the `contribution()` of the archiver that it opens:
 
 ```python
-class LocalMemory(MemoryProvider):
+class LocalArchiver:
     def contribution(self) -> Contribution:
-        return Contribution(router=router)  # a FastAPI APIRouter with POST /v1/campaigns/{campaign}/journal
+        return Contribution(consumers=(Consumer(CONSUMER, WAKES, self._turn, Phase.UPKEEP),), lifecycle=self)
 ```
 
 Two entries of one name in a group stop the daemon.
@@ -33,7 +33,7 @@ Two entries of one name in a group stop the daemon.
 ## Tables and migrations
 
 A plugin keeps its tables in the home's database. It declares them in a `Schema`, with an entry point in
-`piloop.schemas`. The entry point's name is the schema's: the provider that has the tables, such as `memory/local`, or
+`piloop.schemas`. The entry point's name is the schema's: the provider that has the tables, such as `archive/local`, or
 a name of the plugin's own. Every table that no plugin declares is core's.
 
 ```toml
@@ -123,7 +123,7 @@ A provider that implements `contribution()` adds, while the daemon runs:
   who may call them.
 
 The daemon asks each provider that it opens, such as the executor, once. Each installed provider of a capability that a
-campaign selects, such as memory, contributes once, built with its defaults. A consumer name or a route that is taken already
+campaign selects, such as its VCS, contributes once, built with its defaults. A consumer name or a route that is taken already
 stops the daemon.
 
 <ContractContribution />

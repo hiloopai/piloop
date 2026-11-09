@@ -96,7 +96,6 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import _Control
 from piloop.plugins.harness.contract import cleared_env
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
-from piloop.plugins.memory.local.tables import Lesson, LessonStatus
 from piloop.plugins.runtime.contract import AgentExit, Deadline, Handle
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
@@ -1008,36 +1007,23 @@ def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_never_
     assert git_words(brief) == []
 
 
-@pytest.mark.parametrize('sections', [['context', 'lessons', 'history'], ['context', 'history']])
+@pytest.mark.parametrize('sections', [['context', 'measure', 'history'], ['context', 'history']])
 def test_an_implementer_brief_ends_with_its_roles_sections(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, sections: list[str]
 ) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        p.repo = 'github.com/o/r'
         p.config = load_campaign_config(Path(campaign.path), plugins={'role': {'implementer': {'sections': sections}}})
-        s.add(
-            Lesson(
-                campaign_id=campaign.id,
-                family='voting',
-                status=LessonStatus.DEAD,
-                effect=0,
-                metric='score',
-                body='idea#1 on evaluator#1',
-                created_by='auditor#9',
-            )
-        )
         s.commit()
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     brief = brief_of(db, run_id)
-    line = '- [demo] voting | dead | +0 score (lesson#1)'
-    if 'lessons' in sections:
-        assert brief.index('# Context') < brief.index(line) < brief.index('## History'), (
+    if 'measure' in sections:
+        assert brief.index('# Context') < brief.index('## Measure a change') < brief.index('## History'), (
             'after the context, in the order of the list'
         )
     else:
-        assert line not in brief and 'What past campaigns' not in brief, 'a list without the lessons'
+        assert 'Measure a change' not in brief, 'a list without it'
         assert '## History' in brief
 
 

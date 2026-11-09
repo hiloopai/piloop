@@ -1,7 +1,7 @@
 """The facts of one campaign that its views share, computed from the database.
 
-The sections (``piloop.plugins.section``), the API's status and ``piloop wake`` read them here, so they always say the
-same thing: the summary line, the best's scores, the queue, the live agents and their output, the inbox threads, and the
+The sections (``piloop.plugins.section``) and the API's status read them here, so they always say the same thing: the
+summary line, the best's scores, the queue, the live agents and their output, the inbox threads, and the
 progress against the stop rule.
 """
 
@@ -133,7 +133,3 @@ def minutes(seconds: float) -> str:
 def num(value: float | None) -> str:
     """Format a score, ``—`` when unknown."""
     return NONE if value is None else metric(value)
-
-
-def _four(value: float | None) -> str:
-    return 'unmeasured' if value is None else metric(value)

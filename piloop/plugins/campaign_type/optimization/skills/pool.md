@@ -14,22 +14,13 @@
 
 Every campaign that ever ran is in the database. `campaigns.repo` names the code that each campaign worked on, the same
 for every clone. Before you add an idea, and when an agent asks whether something was tried, query it. `piloop
-schema past_campaigns` has every query: implementations to copy from any campaign, documents, the
-session that worked a past idea.
+schema past_campaigns` has every query: implementations to copy from any campaign, the session that worked a past
+idea.
 
 - Prior attempts on this repo, in every campaign. A low score under one evaluator is not dead under another:
   `SELECT p.name, i.id, i.status, i.title FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid JOIN
   campaigns p ON p.id = i.campaign_id WHERE ideas_fts MATCH '<mechanism>' AND p.repo = (SELECT repo FROM campaigns WHERE
   id = <p>) ORDER BY bm25(ideas_fts) LIMIT 20`.
-- Lessons: the standing conclusion about each mechanism family. Nothing writes one when a campaign stops.
-  The newest for each campaign and family is the current one, and `piloop wake` lists them. You may write one too: a
-  row of `lessons` with the family, the status (`dead`, `promising` or `untested`), the best effect and its metric
-  (both NULL when none was measured), and a body that says why, citing ids.
-- Documents: the reports and logs that `[plugins.memory] documents` in `piloop.toml` names, copied in on `piloop init` and
-  when the campaign stops. Search them with `documents_fts MATCH '<words>'`. Point the globs at reports, never at
-  anything derived from validation or test data.
-- Implementers' briefs show the current lessons of the repo: the `lessons` section of
-  `[plugins.role.<kind>] sections`, in its `budget` of tokens. Leave the entry out to turn it off for a role.
 
 ## Read the pool
 

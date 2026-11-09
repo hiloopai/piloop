@@ -82,7 +82,6 @@ def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_p
         assert [(b.candidate, b.value) for b in added.campaign.best] == [(added.baseline, None)], (
             'the baseline is the best, and nothing measured it yet'
         )
-        assert added.documents.line() == 'documents: 0 added, 0 unchanged'
         with measuring(cfg):  # the daemon's next pass, which also follows a restart
             recorded = first(client, added.cursor, *MeasurementRecorded.kinds())
         assert recorded == MeasurementRecorded(

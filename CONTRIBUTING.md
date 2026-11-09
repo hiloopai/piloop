@@ -392,7 +392,7 @@ The package has one subpackage for each concern. Imports only point down this li
 3. `runtime/`: the runtime of an agent session. The runtimes themselves are plugins (`plugins/runtime/`).
 4. `agents/`: the roles and their prompts, the agent lifecycle, session capture.
 5. `campaign/`: campaigns, the inbox, stop conditions, the spend limit.
-6. `reports/`: status, the overview, and the wake of an orchestrator.
+6. `reports/`: status, the overview and the event feed.
 7. `daemon/`: the process and the scheduler.
 8. `watch/` and `cli/`.
 

@@ -218,9 +218,10 @@ piloop campaign retire enwik8 --reason "tried every idea"
   count from the reopen. When the rule would stop it at once, change the rule and run `piloop init`: it reopens a
   stopped campaign whose stop rule changed, the same way.
 - **Fork** makes a new campaign from the best of another one, or from the version that `--at` names. It takes the
-  source's `piloop.toml` and shares its repo's [memory](/concepts/memory). It starts with no ideas.
+  source's `piloop.toml` and its repo, so it sees the ideas of every campaign on the repo. It starts with no ideas of
+  its own.
 - **Retire** ends a stopped campaign for good and frees its name. Its rows stay: `piloop status 3`. Its files move
-  to the [archive](/concepts/memory#the-archive), and `piloop restore 3` writes them back. To go on, fork it.
+  to the [archive](/concepts/archive), and `piloop restore 3` writes them back. To go on, fork it.
 
 A server that cloned a campaign's repo takes its new commits with `piloop campaign sync enwik8`. It reads
 `piloop.toml` again, and the candidates and their scores stay. To try the new code, import it as a candidate

@@ -1,7 +1,7 @@
 ---
 title: Executors, stores and services
 sidebarTitle: Infrastructure
-description: Plugins that decide where jobs run, how machines reach the server, and where code, blobs, secrets and memory live.
+description: Plugins that decide where jobs run, how machines reach the server, and where code, blobs and secrets live.
 ---
 
 import ExampleInlineExecutor from '/snippets/generated/example-inline-executor.mdx';
@@ -15,10 +15,9 @@ import ContractVcs from '/snippets/generated/contract-vcs.mdx';
 import ContractSecrets from '/snippets/generated/contract-secrets.mdx';
 import ContractNotifier from '/snippets/generated/contract-notifier.mdx';
 import ContractArchive from '/snippets/generated/contract-archive.mdx';
-import ContractMemory from '/snippets/generated/contract-memory.mdx';
 
 These capabilities are host capabilities: their providers get live objects of piloop. Most are the home's choice, in
-`$PILOOP_HOME/config.toml`, and take effect at `piloop restart`. The VCS and memory are a campaign's, in `piloop.toml`.
+`$PILOOP_HOME/config.toml`, and take effect at `piloop restart`. The VCS is a campaign's, in `piloop.toml`.
 
 ## Executors
 
@@ -364,37 +363,11 @@ ntfy = "my_package:Ntfy"
 The **archive** moves the finished parts of campaign workspaces into the CAS, and writes them back on
 `piloop restore`. `[plugins.archive]` in `config.toml` selects it. `local`, built in and the default, records each
 archiving in its `archives` table. Its archiver is a [consumer](/plugins/contributions#routes-and-consumers) of the
-daemon's loop. [The archive](/concepts/memory#the-archive) describes what it does. `local`, in
+daemon's loop. [The archive](/concepts/archive) describes what it does. `local`, in
 [`piloop/plugins/archive/local/`](https://github.com/hiloopai/piloop/tree/main/piloop/plugins/archive/local), is
 the model for another provider.
 
 <ContractArchive />
-
-## Memory
-
-The **memory** provider keeps what past campaigns leave for the next ones. `[plugins.memory]` in `piloop.toml` selects
-it. `local`, built in and the default, has the `lessons`, `documents` and `journal` tables, the `piloop journal`
-command and its route ([Tables, commands and routes](/plugins/contributions)). [Memory](/concepts/memory) describes
-it.
-
-This provider is `local` with other default documents:
-
-```python
-from piloop.capabilities import LocalMemory
-
-
-class Evidence(LocalMemory):
-    """``evidence``: ``local``, and the documents are the reports under ``docs/evidence/`` unless the table says else."""
-
-    documents: list[str] = ['docs/evidence/**/*.md']
-```
-
-```toml
-[project.entry-points."piloop.memory"]
-evidence = "my_package:Evidence"
-```
-
-<ContractMemory />
 
 ## Campaign types
 

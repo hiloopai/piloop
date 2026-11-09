@@ -135,7 +135,7 @@ A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and those of a
 ## Sessions
 
 piloop keeps each agent's **session**, the harness's file of its prompts, tool calls and reasoning, in the
-[CAS](/concepts/memory#the-cas). To read the session that made candidate 2:
+[CAS](/concepts/archive#the-cas). To read the session that made candidate 2:
 
 ```bash
 piloop sql "SELECT s.id, s.session_file FROM agent_sessions s JOIN candidates c ON s.subject_kind = 'run' AND c.run_id = s.subject_id WHERE c.id = 2"

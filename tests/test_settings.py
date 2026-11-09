@@ -168,6 +168,16 @@ def test_wake_after_tries_of_config_toml_is_dropped_with_a_warning(tmp_path: Pat
     assert home.evaluation == EvaluationSettings(stop_after_tries=4)
 
 
+def test_wake_budget_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
+    (tmp_path / 'config.toml').write_text('[agents]\nwake_budget = 800\nattach_lines = 10\n')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
+    ]
+    assert home.agents == AgentSettings(attach_lines=10)
+
+
 def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(tmp_path: Path) -> None:
     (tmp_path / 'config.toml').write_text('[plugins.role.implementer]\nfinding_grace = 5\n')
     with pytest.warns(PiloopDeprecationWarning) as warned:

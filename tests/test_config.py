@@ -22,6 +22,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.pool import best_rule, criterion
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.escalation.contract import ESCALATIONS
 from piloop.plugins.escalation.structured import Structured
@@ -34,7 +35,6 @@ from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Continuity, ImplementerRole
 from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.section.goal import Goal
-from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
 from piloop.settings import Settings
@@ -685,18 +685,18 @@ def test_an_instance_with_a_table_of_its_own_that_no_name_puts_in_use_is_refused
     campaign_path: Path,
 ) -> None:
     """A table that nothing uses is a mistake, such as a source left out of ``use``: piloop says where to add it."""
-    lessons = {'provider': 'lessons', 'budget': 800}
+    short = {'provider': 'history', 'budget': 800}
     with pytest.raises(ConfigError, match=re.escape('[plugins.section.short] is configured, and nothing uses it: add')):
-        load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
+        load_campaign_config(campaign_path, plugins={'section': {'short': short}})
     with pytest.raises(ConfigError, match=re.escape('add it to [plugins.section] use')):
-        load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
+        load_campaign_config(campaign_path, plugins={'section': {'short': short}})
     used = load_campaign_config(
         campaign_path,
-        plugins={'section': {'short': lessons}, 'role': {'auditor': {'sections': ['context', 'short', 'goal']}}},
+        plugins={'section': {'short': short}, 'role': {'auditor': {'sections': ['context', 'short', 'goal']}}},
     )
-    assert [type(s).__name__ for s in used.sections_of(AUDITOR)] == ['Context', 'Lessons', 'Goal'], 'a role names it'
-    own = [s for s in used.sections_of(IMPLEMENTER) if isinstance(s, Lessons)]
-    assert own == [Lessons()], "the implementer's lessons are the built-in one"
+    assert [type(s).__name__ for s in used.sections_of(AUDITOR)] == ['Context', 'History', 'Goal'], 'a role names it'
+    own = [s for s in used.sections_of(IMPLEMENTER) if isinstance(s, History)]
+    assert own == [History()], "the implementer's history is the built-in one"
     with pytest.raises(
         ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it: add it')
     ):
@@ -929,6 +929,33 @@ def test_a_removed_section_loads_without_it_and_warns(campaign_path: Path, gone:
     with pytest.warns(PiloopDeprecationWarning, match=f'the {gone} section is removed') as warned:
         cfg = load_campaign_config(campaign_path)
     assert len(warned) == 3, 'the use list, the table and the role list'
+    assert SECTIONS.used(cfg.plugins) == ('headline', 'runs')
+    assert cfg.roles.doing_runs()[IMPLEMENTER].sections == ['context', 'history']
+
+
+def test_the_keys_of_research_memory_load_without_it_and_warn_at_their_lines(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    implementer = '[plugins.role.implementer]\nsections = ["context", "lessons", "history"]\n'
+    memory = (
+        '\n[plugins.memory]\ndocuments = ["docs/*.md"]\n\n[plugins.section]\nuse = ["headline", "lessons", "short", "runs"]\n'
+        '\n[plugins.section.short]\nprovider = "lessons"\nbudget = 900\n'
+    )
+    toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', implementer) + memory)
+    with pytest.warns(PiloopDeprecationWarning, match='research memory is removed') as warned:
+        cfg = load_campaign_config(campaign_path)
+    lines = toml.read_text().splitlines()
+    assert [(lines[w.lineno - 1], str(w.message).split('; removed')[0]) for w in warned] == [
+        ('[plugins.memory]', 'research memory is removed, so [plugins.memory] is removed; delete it'),
+        ('[plugins.section.short]', 'research memory is removed, so [plugins.section.short] is removed; delete it'),
+        (
+            'use = ["headline", "lessons", "short", "runs"]',
+            'research memory is removed, so lessons, short in [plugins.section] use is removed; delete it',
+        ),
+        (
+            'sections = ["context", "lessons", "history"]',
+            'research memory is removed, so lessons in [plugins.role.implementer] sections is removed; delete it',
+        ),
+    ]
     assert SECTIONS.used(cfg.plugins) == ('headline', 'runs')
     assert cfg.roles.doing_runs()[IMPLEMENTER].sections == ['context', 'history']
 

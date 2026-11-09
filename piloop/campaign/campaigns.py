@@ -307,8 +307,8 @@ def register(
     which measures it next (``ledger.due``: the head first). ``actor`` signs the ``campaign.added`` event. The caller
     commits.
 
-    A ``fork`` takes its source's stored config, not the file, its repo, so the memory of the repo is shared, and its
-    source as its parent. Its baseline is the version that the fork starts from.
+    A ``fork`` takes its source's stored config, not the file, its repo, and its source as its parent. Its baseline
+    is the version that the fork starts from.
 
     Raises:
         ConfigError: The checkout's ``piloop.toml`` is missing or does not load.

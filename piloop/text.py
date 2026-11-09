@@ -1,9 +1,11 @@
-"""Short text: one line of free text that fits in a table cell, a tab title or an inbox line, markdown headings, ages."""
+"""Short text: one line of free text that fits in a table cell, a tab title or an inbox line, markdown headings, ages, and the tokens that lines take."""
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 CELL_CHARS = 100
+CHARS_PER_TOKEN = 4
 NONE = '—'
 HEADING = re.compile(r'(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$')
 """A markdown ATX heading line: its ``#`` marks (the level) and its text, without closing ``#`` marks."""
@@ -13,6 +15,14 @@ def cell(text: str, chars: int = CELL_CHARS) -> str:
     """The first line of ``text``, at most ``chars`` characters long, safe inside a markdown table row."""
     first = next(iter(text.strip().splitlines()), NONE).replace('|', '/')
     return first if len(first) <= chars else first[: chars - 1] + '…'
+
+
+def cost(lines: Sequence[str]) -> int:
+    """The tokens that ``lines`` take: ``len // CHARS_PER_TOKEN + 1`` for each line as printed, which counts the newline.
+
+    A value that an agent wrote can hold newlines, so one entry can print as several lines: each one counts.
+    """
+    return sum(len(part) // CHARS_PER_TOKEN + 1 for line in lines for part in line.split('\n'))
 
 
 def metric(value: float, *, signed: bool = False) -> str:

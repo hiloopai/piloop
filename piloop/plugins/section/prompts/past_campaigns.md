@@ -21,28 +21,3 @@ ORDER BY bm25(ideas_fts) LIMIT 20;
   AND r.id = w.subject_id WHERE r.idea_id = <idea>`. `piloop cas get <session_file>` prints the harness's own file of the session.
   `<log_dir>/transcript.txt` is its screen. An archived workspace can be
   restored with `piloop restore`, once your piloop has it.
-
-Lessons: a row of `lessons` is the standing conclusion about one mechanism family. Nothing writes one when a campaign stops: the orchestrator or a person writes it.
-The newest for each (campaign, family) is the current one. What is dead or promising on this repo:
-
-```sql
-SELECT p.name AS campaign, l.id, l.family, l.status, l.effect, l.metric
-FROM lessons l JOIN campaigns p ON p.id = l.campaign_id
-WHERE p.repo = (SELECT repo FROM campaigns WHERE id = <campaign id>)
-  AND l.id = (SELECT MAX(n.id) FROM lessons n WHERE n.campaign_id = l.campaign_id AND lower(n.family) = lower(l.family))
-ORDER BY l.status, l.family;
-```
-
-- `SELECT body FROM lessons WHERE id = <n>` reads why, with the ids it cites.
-
-Documents: campaign reports, logs and design notes (`[plugins.memory] documents` in `piloop.toml`), searched in
-`documents_fts` (over title and body) as in "Search":
-
-```sql
-SELECT p.name AS campaign, d.id, d.path, snippet(documents_fts, 1, '[', ']', '…', 12) AS hit
-FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid JOIN campaigns p ON p.id = d.campaign_id
-WHERE documents_fts MATCH '"clock recovery" OR acquisition' AND p.repo = (SELECT repo FROM campaigns WHERE id = <campaign id>)
-ORDER BY bm25(documents_fts) LIMIT 10;
-```
-
-- `SELECT body FROM documents WHERE id = <n>` reads one. It can be long.
