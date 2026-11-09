@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from rich.table import Table
 from rich.text import Text
 
-from piloop import deprecated
 from piloop.cli import common
 from piloop.cli.client import daemon_http
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -123,7 +122,6 @@ def submit(
     blob: Annotated[
         str | None, cyclopts.Parameter(help='The versions that the repo of record lacks, in the CAS.', show=False)
     ] = None,
-    wait: Annotated[float | None, cyclopts.Parameter(help='Ignored.', show=False)] = None,
 ) -> None:
     """Score a commit of your run. It returns at once: where it stands comes to you as a `[piloop]` message.
 
@@ -132,8 +130,6 @@ def submit(
     commit whose first score beats the best is evaluated again until it is confirmed, then it can be the best. A
     campaign can cap the submissions of a run (`[evaluator] submissions`).
     """
-    if wait is not None:
-        deprecated.until('0.7.0', 'the relay of a worker before 0.6 passes submit --wait: delete the parameter')
     if revision is None:
         from piloop.plugins.vcs.contract import VCS  # here: only this command reads a checkout; the others load no vcs
 

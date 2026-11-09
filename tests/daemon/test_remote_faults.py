@@ -46,7 +46,18 @@ from piloop.plugins.vcs.git import PILOOP
 from piloop.proc import alive
 from piloop.settings import STORE_DIR, Settings
 from tests.agents.test_launcher import MINTED_HARNESS, use_harness
-from tests.conftest import Dial, ScriptRuntime, baseline, factory, home_cas, wait_until, workers_of, write_toml
+from tests.conftest import (
+    END_RUN,
+    Dial,
+    ScriptRuntime,
+    baseline,
+    factory,
+    home_cas,
+    scoring,
+    wait_until,
+    workers_of,
+    write_toml,
+)
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import candidates, execute, make_run, reload_campaign, run_row, set_config
 from tests.daemon.test_submissions import waiting_of
@@ -379,10 +390,10 @@ HARNESS_ELSEWHERE = (
     'echo out > workspace/idea1/out.txt\n'
     f'"$PILOOP_BIN" sql "{RELAYED_NOTE}" > workspace/idea1/relayed.txt 2>&1\n'
     'echo "${PILOOP_HTTPS_TOKEN:-none}" > workspace/idea1/worker-token.txt\n'
-    '"$PILOOP_BIN" run end submitted\n'
+    f'{END_RUN}'
 )
 """An implementer that commits, writes in its workspace, leaves its note through ``piloop sql``, looks for its
-worker's token, and ends its run through the relay."""
+worker's token, and submits its commit and ends its run through the relay."""
 
 
 def notes(db: Database) -> list[tuple[str, str]]:
@@ -396,8 +407,7 @@ def notes(db: Database) -> list[tuple[str, str]]:
     return [(body, actor) for body, actor in rows]
 
 
-@pytest.mark.run_end
-@pytest.mark.usefixtures('daemon_api')  # the server runs its relayed `piloop run end` against the home's API
+@pytest.mark.usefixtures('daemon_api')  # the server runs its relayed `piloop submit` and `run end` against the API
 def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_its_piloop_calls_reach_the_server(
     db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path, dial: Dial, no_git_identity: None
 ) -> None:
@@ -406,7 +416,8 @@ def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_
     reload_campaign(db, campaign)
     net.start_worker()
     run_id = make_run(db, campaign)
-    execute(core, db, run_id)
+    with scoring(core, db):
+        execute(core, db, run_id)
     [scored] = candidates(db, run_id)
     assert (scored.summary, scored.metrics['score'], run_row(db, run_id).status) == (
         'add a line',
@@ -444,7 +455,7 @@ def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_work
 ) -> None:
     """Its worker sends the commit through the CAS, and the submission answers before its score."""
     write_toml(Path(campaign.path), HARNESS_SUBMITS_ELSEWHERE)
-    set_config(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    set_config(db, campaign, evaluator={'noise_runs': 1})
     net.start_worker()
     run_id = make_run(db, campaign)
 
@@ -453,10 +464,10 @@ def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_work
         [submission] = waiting_of(db, campaign)
         core.score_submission(submission.id)
 
-    scoring = threading.Thread(target=score)
-    scoring.start()
+    scorer = threading.Thread(target=score)
+    scorer.start()
     execute(core, db, run_id)
-    scoring.join(60)
+    scorer.join(60)
     [scored] = candidates(db, run_id)
     assert (scored.summary, scored.metrics['score']) == ('add a line', 2.0)
     with db.session() as s:

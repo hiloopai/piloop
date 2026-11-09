@@ -145,7 +145,7 @@ def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_mea
 def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_where_it_stands(
     db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
 ) -> None:
-    set_config(db, campaign, evaluator={'scoring': 'submit'})
+    set_config(db, campaign, evaluator={})
     run_id = running(db, campaign)
     revision = commit(worktree(campaign, tmp_path), 'base\na\n')
     with db.session() as s:

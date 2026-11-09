@@ -37,10 +37,6 @@ class Version:
     """The provider's name for its files: two versions with equal files have equal trees, whatever their history."""
     summary: str
     """The first line of what the version says about itself."""
-    skip: bool = False
-    """Its author asked not to measure it."""
-    notes: tuple[str, ...] = ()
-    """What its author noted on it, to apply when it is judged."""
     recovered: bool = False
     """It holds what an agent left unsaved, which ``Repository.capture`` saved for it."""
 
@@ -114,10 +110,8 @@ class Part(StrEnum):
     """The implementer's line on how to save its work, what of it is scored, and how to read an earlier version."""
     VERSIONS = 'versions'
     """How saved versions become candidates."""
-    MARK = 'mark'
-    """How a version that piloop scores after the run asks to be noted as a lead, or not to be measured."""
     SKIP = 'skip'
-    """How a version asks not to be measured, and what happens to unsaved work."""
+    """Which versions are not measured: those a run did not submit, and the saved unsaved work."""
     SHOW = 'show'
     """How to read a candidate of another campaign, at ``<path>``."""
     CODE = 'code'

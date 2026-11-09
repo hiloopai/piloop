@@ -5,8 +5,8 @@ marker and fails once ``pyproject.toml`` reaches its release, so the code goes b
 
 A deprecated key still loads, with a warning, until that release. To deprecate a key, write a bridge: a function that
 takes the file path, the parsed TOML and the release that removes the key, changes the old key to the new form in place
-and calls ``warn`` with that release. A key that only moved is a ``Move``: ``move_keys`` applies one to the file, and
-the revision that rewrites the stored copies applies the same moves. Declare it with ``bridge``, which marks it as
+and calls ``warn`` with that release. A revision rewrites the stored copies the same way (``Move`` and ``Prune`` are
+the steps that revision 0072 takes). Declare it with ``bridge``, which marks it as
 ``until`` does, next to its capability in a ``bridges`` module that imports no provider, and name it in the
 ``piloop.bridges`` entry points (``BRIDGES``). A bridge that reads what another wrote says so with ``after`` or
 ``before``.
@@ -206,19 +206,6 @@ type Step = Move | Prune
 """One rewrite of a bridge's data: a key that moved, or keys that hold nothing."""
 
 
-def move_keys(toml: Path, raw: dict[str, object], move: Move, removed_in: Version) -> None:
-    """Apply ``move`` to the parsed file, and warn at the first old key it moved."""
-    if found := move.apply(raw):
-        parts = found[0].split('.')
-        # an inline table sets none of its keys on a line of its own: warn at the key that holds it
-        key = next((k for n in range(len(parts), 0, -1) if _lines(toml, k := '.'.join(parts[:n]))), found[0])
-        warn(toml, key, f'{_written(move.old)} is deprecated; write {_written(move.new)}', removed_in=removed_in)
-
-
-def _written(path: str) -> str:
-    return f'`{path.replace("*", "<name>")}`'
-
-
 def _filled(pattern: str, names: tuple[str, ...]) -> list[str]:
     """``pattern``'s parts, with ``names`` in place of its wildcards, in order."""
     found = iter(names)
@@ -310,16 +297,6 @@ def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 
     warnings.warn_explicit(text, PiloopDeprecationWarning, str(toml), lineno, registry=_shown)
 
 
-def dropped(message: str, *, removed_in: str) -> None:
-    """Warn, once in the process, that a validator of the config took out a key that is gone: a file's or a stored one.
-
-    A validator of the config calls it, so a file and a campaign's stored config go one path. Mark the validator with
-    ``until``.
-    """
-    text = f'{message}; removed in piloop {Version.parse(removed_in)}'
-    warnings.warn_explicit(text, PiloopDeprecationWarning, 'piloop config', 0, registry=_shown)
-
-
 def nth(toml: Path, table: str, key: str) -> int:
     """How many lines of ``toml`` set ``key`` before the header of ``table``: ``warn``'s ``nth`` for ``table.key``."""
     lines = toml.read_text().splitlines()
@@ -347,55 +324,6 @@ def apply(toml: Path, raw: dict[str, object], found: Sequence[Bridge]) -> None:
     """
     for b in found:
         b(toml, raw)
-
-
-@bridge('0.7.0', '[tracks] share is removed: delete track_shares')
-def track_shares(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``share`` of a ``[tracks.<name>]`` is removed: workers claim any open idea, so no track has a share of the slots.
-
-    piloop drops it, and drops a table that it leaves empty.
-    """
-    tracks = table_at(raw, 'tracks') or {}
-    for name, table in [(n, t) for n, t in tracks.items() if isinstance(t, dict) and 'share' in t]:
-        del table['share']
-        if not table:
-            del tracks[name]
-        warn(
-            toml,
-            f'tracks.{name}.share',
-            'workers claim any open idea now, so [tracks] share is removed; delete it',
-            removed_in=removed_in,
-            nth=nth(toml, f'tracks.{name}', 'share'),
-        )
-
-
-@bridge('0.7.0', '[agents] relay_wait and relay_deadline are removed: delete relay_waits', Scope.HOME)
-def relay_waits(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``relay_wait`` and ``relay_deadline`` of ``[agents]`` are removed. piloop drops them.
-
-    ``piloop submit`` returns at once, so the relay of a worker elsewhere calls it once.
-    """
-    agents = table_at(raw, 'agents') or {}
-    for key in ('relay_wait', 'relay_deadline'):
-        if key in agents:
-            del agents[key]
-            message = f'`piloop submit` returns at once, so [agents] {key} is removed; delete it'
-            warn(toml, f'agents.{key}', message, removed_in=removed_in)
-
-
-@bridge('0.7.0', '[evaluation] wake_after_tries is removed: delete wake_after_tries', Scope.HOME)
-def wake_after_tries(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``wake_after_tries`` of ``[evaluation]`` is removed: no agent wakes on an evaluation's retries. piloop drops it.
-
-    An evaluation that fails ``stop_after_tries`` times in a row for the machine still escalates.
-    """
-    evaluation = table_at(raw, 'evaluation') or {}
-    if 'wake_after_tries' in evaluation:
-        del evaluation['wake_after_tries']
-        message = (
-            'no agent wakes on the retries of an evaluation now, so [evaluation] wake_after_tries is removed; delete it'
-        )
-        warn(toml, 'evaluation.wake_after_tries', message, removed_in=removed_in)
 
 
 MEMORY_SECTION = 'lessons'
@@ -447,3 +375,16 @@ def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None
         del agents['wake_budget']
         message = '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
         warn(toml, 'agents.wake_budget', message, removed_in=removed_in)
+
+
+@bridge('0.8.0', '[evaluator] scoring is removed: delete evaluator_scoring')
+def evaluator_scoring(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``scoring`` of ``[evaluator]`` is removed: piloop scores what an implementer submits. piloop drops the key.
+
+    0.5's ``run_end`` scoring is gone: every version of a run that its implementer does not submit is ``skipped``.
+    """
+    evaluator = table_at(raw, 'evaluator') or {}
+    if 'scoring' in evaluator:
+        was = evaluator.pop('scoring')
+        why = 'piloop scores what an implementer submits' + (', and run_end is gone' if was == 'run_end' else '')
+        warn(toml, 'evaluator.scoring', f'{why}, so [evaluator] scoring is removed; delete it', removed_in=removed_in)

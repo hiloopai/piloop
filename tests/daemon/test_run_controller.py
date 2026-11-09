@@ -39,13 +39,12 @@ from piloop.agents.roles import PILOOP_HINT, read_brief
 from piloop.campaign import ops, stop
 from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
-from piloop.config import CampaignConfig, ConfigError, load_campaign_config
+from piloop.config import ConfigError, load_campaign_config
 from piloop.db.events import has, in_order, latest
 from piloop.db.machine import Refused, transition
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import OriginChanged
-from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentKind, Ending, Revision, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignStatus, Ending, Revision, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
@@ -55,10 +54,9 @@ from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs, queue
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
+from piloop.plugins.campaign_type.kit.evaluation.ids import Measured
 from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
-    Split,
     current_evaluator,
     request_remeasure,
     requested,
@@ -90,7 +88,6 @@ from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
-from piloop.plugins.executor.kit import jobs
 from piloop.plugins.executor.kit.jobs import INPUTS_REBUILT
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import _Control
@@ -110,8 +107,6 @@ from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,
     HARNESS_SLEEPS,
-    HARNESS_TRY_AND_REVERT,
-    HARNESS_TWO_COMMITS,
     HARNESS_WORSE,
     Gate,
     ScriptRuntime,
@@ -123,6 +118,7 @@ from tests.conftest import (
     home_cas,
     pinned,
     reports,
+    scoring,
     serving,
     span_named,
     wait_until,
@@ -204,6 +200,9 @@ def controller(
         RunController(db, tracer or Tracer(None), tmp_path, factory(runtime), executor=Workers(), agents=agents)
     )
 
+
+SUBMIT = '"$PILOOP_BIN" submit > /dev/null\n'
+"""A worker's line that submits its last commit, through the API that ``daemon_api`` serves, and leaves its run open."""
 
 WORKED = AgentSettings(startup_seconds=0)
 """An implementer that ends at once has worked: it is scored by what it left."""
@@ -350,7 +349,7 @@ def candidates(db: Database, run_id: RunId) -> list[Scored]:
 
 
 def candidates_measured(db: Database, run_id: RunId) -> list[Scored]:
-    """``candidates``, without the ones nothing measured (a skip commit, recovered work)."""
+    """``candidates``, without the ones nothing measured: the versions that the run did not submit."""
     with db.session() as s:
         rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
         return [Scored(s, c) for c in rows if c.measurements]
@@ -379,7 +378,6 @@ def claimed_id(run: Run) -> IdeaId:
     return run.idea_id
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_successful_run_scores_the_commit(
     db: Database,
@@ -390,8 +388,14 @@ def test_successful_run_scores_the_commit(
     spans: InMemorySpanExporter,
 ) -> None:
     run_id = make_run(db, campaign, plan='append one line', provenance='finding comment#3: short files lose')
-    execute(controller(db, runtime, tmp_path, tracer), db, run_id)
-    agent, measure, candidate, run_span = [s for s in spans.get_finished_spans() if s.name != 'piloop.job']
+    ex = controller(db, runtime, tmp_path, tracer)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
+    named = {s.name: s for s in spans.get_finished_spans() if s.name != 'piloop.job'}
+    assert sorted(named) == ['piloop.agent', 'piloop.measure', 'piloop.run', 'piloop.submission']
+    agent, measure, submission, run_span = (
+        named[n] for n in ('piloop.agent', 'piloop.measure', 'piloop.submission', 'piloop.run')
+    )
     assert dict(agent.attributes or {}) == snapshot(
         {
             'agent_session': 1,
@@ -412,8 +416,7 @@ def test_successful_run_scores_the_commit(
             'end': 'finished',
         }
     )
-    assert candidate.parent is not None and candidate.parent.span_id == run_span.context.span_id
-    assert measure.parent is not None and measure.parent.span_id == candidate.context.span_id
+    assert measure.parent is not None and measure.parent.span_id == submission.context.span_id
     assert dict(measure.attributes or {}) == snapshot(
         {
             'run': 1,
@@ -426,9 +429,7 @@ def test_successful_run_scores_the_commit(
             'metric.size': IsPositive(),
         }
     )
-    assert dict(candidate.attributes or {}) == snapshot(
-        {'run': 1, 'revision': IsStr(), 'candidate': 2, 'status': 'measured'}
-    )
+    assert dict(submission.attributes or {}) == snapshot({'candidate': 2, 'status': 'measured'})
 
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
@@ -443,8 +444,20 @@ def test_successful_run_scores_the_commit(
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DONE
         [agent_session] = s.scalars(select(AgentSession)).all()
         assert (agent_session.state, run_of(agent_session)) == (AgentSessionState.EXITED, run_id)
-        kinds = [ev.kind for ev in s.scalars(select(Event)).all()]
-    assert kinds == snapshot(
+        feed = [(ev.kind, ev.target_kind) for ev in s.scalars(select(Event).order_by(Event.id)).all()]
+    kinds = [kind for kind, _ in feed]
+    scoring_it = [kind for kind, target in feed if target in (CANDIDATE, 'measurement')]
+    assert scoring_it == snapshot(
+        [
+            'lease.queued',
+            'lease.acquired',
+            'lease.started',
+            'lease.reported',
+            'measurement.recorded',
+            'candidate.scored',
+        ]
+    ), 'what scoring its submission records, on a thread of its own'
+    assert [kind for kind, target in feed if target not in (CANDIDATE, 'measurement')] == snapshot(
         [
             'idea.created',
             'agent_session.requested',
@@ -455,25 +468,26 @@ def test_successful_run_scores_the_commit(
             'lease.acquired',
             'lease.started',
             'agent_session.running',
+            'run.submitted',
             'run.end_requested',
             'lease.reported',
             'agent_session.finished',
             'agent_session.job_ended',
             'run.received',
             'run.finished',
-            'lease.queued',
-            'lease.acquired',
-            'lease.started',
-            'lease.reported',
-            'measurement.recorded',
-            'candidate.scored',
             'idea.status',
             'subject.settled',
         ]
-    ), 'the run closes when its implementer ends; the idea settles once the commit is scored'
+    ), 'the run closes when its implementer ends'
+    first_of_its_score = next(i for i, (_, target) in enumerate(feed) if target == CANDIDATE)
+    assert kinds.index('run.submitted') < first_of_its_score, 'scored once submitted'
+    assert kinds.index('candidate.scored') < kinds.index('idea.status'), 'the idea settles once the commit is scored'
 
     repo = Repo(campaign.path)
-    assert [r.path for r in repo.refs if r.path.startswith('refs/piloop/')] == [f'refs/piloop/demo/r{run_id}/0']
+    assert sorted(r.path for r in repo.refs if r.path.startswith('refs/piloop/')) == [
+        f'refs/piloop/demo/r{run_id}/0',
+        f'refs/piloop/demo/r{run_id}/s0',
+    ], 'its version, and its submission'
     assert repo.head.commit.summary == 'baseline', 'the campaign checkout never moves'
     log_dir = tmp_path / 'runs' / str(run_id)
     assert (
@@ -491,7 +505,6 @@ HARNESS_WRITES_THE_WORKSPACE = (
 )
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaigns_after_its_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -503,73 +516,15 @@ def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaign
     write_toml(Path(campaign.path), HARNESS_WRITES_THE_WORKSPACE + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     assert (live / 'idea1' / 'out.txt').read_text() == 'out\n'
     assert (live / 'idea1' / 'seen.txt').read_text() == 'the notes\n', 'it started from the workspace'
     assert (live / 'NOTES.md').read_text() == 'mine\n'
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED
     [c] = candidates(db, run_id)
     assert c.summary == 'add a line', 'what it wrote in the workspace is not in its commit'
-
-
-@pytest.mark.run_end
-def test_every_commit_is_scored_and_descends_from_the_one_before(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    first, second = candidates(db, run_id)
-    assert (first.summary, first.metrics['score'], first.parent_id) == ('first', 2.0, 1)
-    assert (second.summary, second.metrics['score'], second.parent_id) == ('second', 3.0, first.id)
-    assert (first.best, second.best) == (False, True)
-    assert (first.told, second.told) == snapshot(
-        (
-            'score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1',
-            'score 3 over 1 eval: the best of the score track now, rank 1 of 3; vs parent +1',
-        )
-    )
-
-
-@pytest.mark.run_end
-def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A commit became a candidate only when the evaluations of the commits before it were
-    done, 33 minutes after its run, so it looked lost. Each commit is a pending candidate when its run closes."""
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    ex = controller(db, runtime, tmp_path)
-    measure = ex._measure
-    seen: list[list[tuple[str | None, int, int | None]]] = []
-
-    def watched(
-        run: RunId | None,
-        campaign_id: CampaignId,
-        cfg: CampaignConfig,
-        sha: Revision,
-        candidate_id: CandidateId,
-        evaluator_id: EvaluatorId,
-        eval_dir: Path,
-        *,
-        repeats: int = 1,
-        gate: CandidateId | None = None,
-        split: Split = Split.VISIBLE,
-    ) -> Measuring:
-        with db.session() as s:
-            rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-            seen.append([(c.summary, len(c.measurements), c.parent_id) for c in rows])
-        return measure(
-            run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir, repeats=repeats, gate=gate, split=split
-        )
-
-    monkeypatch.setattr(ex, '_measure', watched)
-    execute(ex, db, run_id)
-    first, second = candidates(db, run_id)
-    assert seen[0] == [('first', 0, 1), ('second', 0, first.id)], 'all at once, in order'
-    assert (first.metrics['score'], second.metrics['score'], second.best) == (2.0, 3.0, True)
 
 
 @pytest.mark.parametrize('moved_to', [None, IdeaStatus.DROPPED, IdeaStatus.DROPPED])
@@ -606,7 +561,6 @@ def test_a_run_counts_toward_max_runs_from_its_close_to_its_score(
         assert s.scalar(select(Run.id).where(runs_stop.unsettled())) is None, f'run#{run_id} settled'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_worse_commit_is_scored_below_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -614,20 +568,22 @@ def test_a_worse_commit_is_scored_below_the_best(
     write_toml(Path(campaign.path), HARNESS_WORSE + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [e] = candidates(db, run_id)
     assert (e.best, e.metrics['score']) == (False, 0.0)
     assert e.told == snapshot('score 0 over 1 eval: rank 2 of 2; vs parent -1, vs best candidate#1 -1')
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The example plugin ``examples/plugins/min-gain``, installed, is selected by ``[plugins.best_rule]``.
 
-    The daemon scores the run's commit with it: ``baseline`` would let a gain of 1 be best, ``min_gain = 2`` does not.
+    The daemon scores the run's submission with it: ``baseline`` would let a gain of 1 be best, ``min_gain = 2`` does not.
     """
     example(tmp_path / 'site', 'min-gain')
     monkeypatch.syspath_prepend(tmp_path / 'site')
@@ -650,7 +606,9 @@ def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
             s.get_one(Campaign, campaign.id).config = cfg
             s.commit()
         run_id = make_run(db, campaign)
-        execute(controller(db, runtime, tmp_path), db, run_id)
+        ex = controller(db, runtime, tmp_path)
+        with scoring(ex, db):
+            execute(ex, db, run_id)
         [e] = candidates(db, run_id)
         assert (e.best, e.metrics['score']) == (False, 2.0)
         assert e.told == snapshot(
@@ -664,14 +622,13 @@ def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
         host.close()
 
 
-@pytest.mark.run_end
 def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_is_open_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A failed implementer's uncommitted tree was scored, and could become the best, never declared ready.
 
-    It is now ``recovered``: committed, pinned, never measured, never in the pool. The run's claim ends: its idea is
-    open for the next worker, which starts from the best.
+    It is now committed as recovered work, pinned, and kept as a ``skipped`` candidate: never measured, never in the
+    pool. The run's claim ends: its idea is open for the next worker, which starts from the best.
     """
     write_toml(Path(campaign.path), HARNESS_FORGETS_COMMIT)
     reload_campaign(db, campaign)
@@ -679,7 +636,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
     [(summary, status, told, measurements, _)] = scored(db, run_id)
-    assert (summary, status, told, measurements) == (UNCOMMITTED, Origin.RECOVERED, None, 0)
+    assert (summary, status, told, measurements) == (UNCOMMITTED, Origin.SKIPPED, None, 0)
     with db.session() as s:
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.OPEN
@@ -696,7 +653,6 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
     )
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as_made(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -704,11 +660,13 @@ def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as
     write_toml(Path(campaign.path), HARNESS_COMMITS_AND_LEAVES_DIRT + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     assert [(c[0], c[1], c[3]) for c in scored(db, run_id)] == [
         ('the idea', 'best', 1),
-        (UNCOMMITTED, Origin.RECOVERED, 0),
-    ], 'never amended: the implementer declared its commit, not the dirt after it'
+        (UNCOMMITTED, Origin.SKIPPED, 0),
+    ], 'never amended: the implementer submitted its commit, not the dirt after it'
     [e] = [c for c in candidates_measured(db, run_id)]
     assert e.metrics['score'] == 2.0
     with db.session() as s:
@@ -805,7 +763,6 @@ def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
     assert [run_row(db, r).error for r in (first, second)] == ['agent timeout after 0.5s', 'agent timeout after 0.7s']
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_an_evaluate_failure_is_a_crash(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -819,31 +776,34 @@ def test_an_evaluate_failure_is_a_crash(
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [e] = candidates(db, run_id)
     assert (e.best, e.told, e.metrics) == (False, 'crash: no evaluation succeeded', {})
     assert e.error is not None and e.error.startswith('evaluate exit 9')
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'the implementer did its job; the candidate crashed'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A crash that the host caused (a full disk) says nothing about the code, and its tree cannot be committed again.
 
     ``piloop candidate remeasure`` asks the daemon to measure the candidate again with the current evaluator. Once the
-    fault is gone, the candidate is scored into the pool as its run would have scored it.
+    fault is gone, the candidate is scored into the pool as its submission would have been.
     """
     fault = tmp_path / 'disk-full'
     measure = f'test -e {fault} && exit 28; ' + reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)')
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
+    write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=['sh', '-c', measure])
     reload_campaign(db, campaign)
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(baseline(db, campaign.id).id)  # the new evaluator measures the baseline first, as the daemon does
     run_id = make_run(db, campaign)
     fault.touch()
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [crashed] = candidates(db, run_id)
     assert (crashed.best, crashed.told) == (False, 'crash: no evaluation succeeded')
     with db.session() as s:
@@ -873,7 +833,7 @@ def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_score
         )
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_timeout_is_raised(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -881,14 +841,15 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
     again. The timeout is no part of the evaluator, so once it is raised, ``piloop candidate remeasure`` measures the
     candidate again under the same evaluator, with the new timeout, and scores it again."""
     measure = f'test $(wc -l < solve.txt) -gt 1 && sleep 1; {reports(score="$(wc -l < solve.txt)", size="1")}'
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
+    write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=['sh', '-c', measure])
     toml = Path(campaign.path) / 'piloop.toml'
     toml.write_text(toml.read_text().replace('evaluate_timeout = 30', 'evaluate_timeout = 0.2'))
     reload_campaign(db, campaign)
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(baseline(db, campaign.id).id)
     run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [crashed] = candidates(db, run_id)
     assert (crashed.told, crashed.error) == ('crash: no evaluation succeeded', 'evaluate timeout after 0.2s')
     with db.session() as s:
@@ -1111,7 +1072,6 @@ def test_a_new_evaluator_measures_the_baseline_and_the_old_best_then_what_someon
         assert [c.tree_sha for c in due(s, proj)] == ['b', 'fresh'], 'measured: no longer due'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_transcript_failure_is_only_an_event(
     db: Database,
@@ -1124,7 +1084,9 @@ def test_transcript_failure_is_only_an_event(
 ) -> None:
     mocker.patch.object(runtime, 'read', side_effect=OSError('pane gone'))
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path, tracer), db, run_id)
+    ex = controller(db, runtime, tmp_path, tracer)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED
     assert events(spans, 'agent_session.transcript_lost') == [{'error': 'pane gone'}]
 
@@ -1141,7 +1103,6 @@ def test_a_rejection_during_the_run_is_not_undone(
         assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
 
 
-@pytest.mark.run_end
 def test_implementer_env_points_at_the_daemon_home(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1161,27 +1122,12 @@ def test_implementer_env_points_at_the_daemon_home(
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, ScriptRuntime(), tmp_path), db, run_id)
-    [e] = candidates(db, run_id)
-    lines = Repo(campaign.path).git.show(f'{e.revision}:env.txt').splitlines()
+    with db.session() as s:
+        revision = s.scalars(select(Candidate.revision).where(Candidate.run_id == run_id)).one()
+    lines = Repo(campaign.path).git.show(f'{revision}:env.txt').splitlines()
     env = dict(line.split('=', 1) for line in lines if '=' in line)
     assert (env['PILOOP_HOME'], env['PATH']) == (str(tmp_path), f'{tmp_path / "bin"}{os.pathsep}{os.environ["PATH"]}')
     assert {name: env.get(name) for name in cleared} == dict.fromkeys(cleared, '')
-
-
-@pytest.mark.run_end
-def test_lineage_follows_the_actual_predecessor(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    write_toml(
-        Path(campaign.path),
-        '#!/bin/sh\n: > solve.txt\ngit commit -qam worse\necho a >> solve.txt\necho b >> solve.txt\ngit commit -qam better\n',
-    )
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    worse, better = candidates(db, run_id)
-    assert (worse.best, better.best) == (False, True)
-    assert better.parent_id == worse.id, 'built on the worse commit'
 
 
 def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_run_fails(
@@ -1435,25 +1381,30 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
         assert s.scalars(select(Event).where(Event.kind == 'run.relaunched')).all() == []
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancelled(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The daemon ends a cancelled implementer on its next tick; one that ends before that does not requeue its idea."""
+    """The daemon ends a cancelled implementer on its next tick; one that ends before that does not requeue its idea.
+
+    What it submitted meanwhile is scored all the same."""
+    write_toml(Path(campaign.path), HARNESS_APPEND + SUBMIT)
+    reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     with db.session() as s:
         stop.request_cancel(s, s.get_one(Run, run_id), System.HUMAN, ending=Ending.NOW)
         s.commit()
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, idea_of(run).status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
         assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
-def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_commit_counts(
+def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_counts(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     """A relaunched implementer gets a brief that names it, not the dead implementer, and its own run end counts."""
@@ -1461,13 +1412,15 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
     idea_id = claimed_id(run_row(db, run_id))
     note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'note', 'no effect')"
     me = 'me=$(grep -o "sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n{END_RUN}')
+    commit = 'echo line >> solve.txt\ngit commit -qam "a line"\n'
+    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n{commit}{END_RUN}')
     reload_campaign(db, campaign)
     start = mocker.patch.object(runtime, 'start', wraps=runtime.start)
     start.side_effect = [RuntimeError('no pickup'), DEFAULT]
     ex = controller(db, runtime, tmp_path)
     execute(ex, db, run_id)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     brief = brief_of(db, run.id)
@@ -1476,13 +1429,12 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
         [author] = s.scalars(select(Comment.author).where(Comment.body == 'no effect')).all()
         assert author == f'implementer#{replacement}'
         assert f'implementer#{dead}' not in brief and f'You are implementer#{replacement},' in brief
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN
+        assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE, 'its submission is scored'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize(
-    ('work', 'ended'), [('commit', RunEnd.FINISHED), ('note', RunEnd.GAVE_UP), ('end', RunEnd.FINISHED)]
+    ('work', 'ended'), [('commit', RunEnd.GAVE_UP), ('note', RunEnd.GAVE_UP), ('end', RunEnd.GAVE_UP)]
 )
 def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it_committed_wrote_or_ended_its_run(
     db: Database,
@@ -1496,8 +1448,8 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     """An implementer whose tokens are unknown is not a startup death when it committed, wrote a comment, or ended its run.
 
     The runtime may report no session for an implementer, so its tokens cannot be read. Work done within the startup window
-    proves that it started. Its clean exit ends its run: finished with a commit, in a campaign that scores every
-    version after the run as this one does, and given up with only a note.
+    proves that it started. It submitted nothing, so its run ends as given up, by its clean exit or by its own
+    ``piloop run end gave_up``.
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))  # no session file: the tokens are unknown
     run_id = make_run(db, campaign)
@@ -1507,7 +1459,7 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     bodies = {
         'commit': HARNESS_APPEND,
         'note': f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n',
-        'end': f'#!/bin/sh\n{END_RUN}',
+        'end': '#!/bin/sh\n"$PILOOP_BIN" run end gave_up\n',
     }
     write_toml(Path(campaign.path), bodies[work])
     script = load_campaign_config(Path(campaign.path)).harness['script'].model_dump(mode='json')
@@ -1521,7 +1473,6 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
         assert not s.scalars(select(Event).where(has(RunRelaunched) | has(StartupAnomaly))).all()
 
 
-@pytest.mark.run_end
 @pytest.mark.parametrize('edit', ['echo line >> solve.txt', 'echo note > new.txt'])
 def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_recovered(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edit: str
@@ -1539,7 +1490,7 @@ def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_r
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
     [(summary, status, *_)] = scored(db, run_id)
-    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED)
+    assert (summary, status) == (UNCOMMITTED, Origin.SKIPPED)
     with db.session() as s:
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1, 'no relaunch'
         assert not s.scalars(select(Event).where(has(StartupAnomaly))).all()
@@ -1561,31 +1512,6 @@ def test_a_startup_death_during_a_stop_leaves_the_run_to_the_stop(
     with db.session() as s:
         assert s.get_one(Run, run_id).status is RunStatus.RUNNING, 'left for the stop to fail'
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1
-
-
-@pytest.mark.run_end
-@pytest.mark.usefixtures('daemon_api')
-def test_a_run_ended_as_submitted_without_a_commit_is_a_result(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A run whose worker posts a note, commits nothing and ends it as submitted succeeds, and its idea is done.
-
-    Some plans, such as an audit, produce a note and no code.
-    """
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        idea_id, agent_session_id = claimed_id(run_row(db, run_id)), s.scalars(select(AgentSession.id)).one()
-    note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, 'implementer#{agent_session_id}', 'note', 'arm B: no effect')"
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{PILOOP_HINT} sql "{note}"\n{END_RUN}')
-    reload_campaign(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
-    with db.session() as s:
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN, 'no score, so not done'
-        assert [c.body for c in s.scalars(select(Comment).where(Comment.author == 'daemon'))] == [
-            f'open: run#{run_id} gave the idea back; it finished, but nothing that it saved has a score'
-        ]
 
 
 TIMEOUT = 'implementer timeout after 1s'
@@ -1659,7 +1585,6 @@ def test_a_failed_start_or_a_lost_job_while_the_daemon_stops_leaves_the_run_to_t
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'stop() writes the row, not the run thread'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize('timed_out', [True, False])
 def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_then_ends(
@@ -1690,7 +1615,9 @@ def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_t
 
     if timed_out:  # a loaded host can take longer than any short timeout to end the run
         mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_end)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
@@ -1703,7 +1630,6 @@ def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_t
         assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1719,7 +1645,9 @@ def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
         implementer_timeout=600,  # `piloop sql` and `piloop run end` before the deadline, also on a loaded host
     )
     reload_campaign(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         assert [c.acks for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION))] == [[]], 'still asked'
         run = s.get_one(Run, run_id)
@@ -1728,7 +1656,6 @@ def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
         assert s.scalars(select(Comment).where(Comment.author == 'daemon', Comment.target_id == idea_id)).all() == []
 
 
-@pytest.mark.run_end
 def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, no_git_identity: None
 ) -> None:
@@ -1739,7 +1666,7 @@ def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
     [(summary, status, *_)] = scored(db, run_id)
-    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED)
+    assert (summary, status) == (UNCOMMITTED, Origin.SKIPPED)
 
 
 def test_a_save_that_fails_fails_the_run_and_keeps_the_unsaved_changes_in_the_cas(
@@ -1763,7 +1690,6 @@ def test_a_save_that_fails_fails_the_run_and_keeps_the_unsaved_changes_in_the_ca
     assert patch is not None and b'+line' in patch
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_git_identity(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, no_git_identity: None
@@ -1772,7 +1698,9 @@ def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_g
     write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n' + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         session = s.scalars(select(AgentSession.id).where(working_on(run_id))).one()
     [e] = candidates(db, run_id)
@@ -1782,15 +1710,14 @@ def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_g
     assert 'user.name' not in repo.git.config('--list')
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_attempt_that_finished(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """An implementer that leaves uncommitted changes and does not end its run did not finish its idea.
 
-    The daemon saves the changes, but the run fails and the idea is open again. A note changes nothing: only
-    ``piloop run end`` makes the same run a success.
+    The daemon saves the changes, but the run gives up and the idea is open again. A note changes nothing: only a
+    submission makes the same run a success.
     """
     write_toml(Path(campaign.path), HARNESS_FORGETS_COMMIT)
     reload_campaign(db, campaign)
@@ -1799,7 +1726,7 @@ def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_att
     run = run_row(db, run_id)
     assert (run.end, run.error) == (RunEnd.GAVE_UP, None)
     [(summary, status, *_)] = scored(db, run_id)
-    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED), 'what it left is kept, not scored'
+    assert (summary, status) == (UNCOMMITTED, Origin.SKIPPED), 'what it left is kept, not scored'
     with db.session() as s:
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN
 
@@ -1825,10 +1752,12 @@ def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_att
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None), 'its notes end no run'
 
     run_id = make_run(db, campaign, title='ended')
-    write_toml(Path(campaign.path), '#!/bin/sh\necho more >> solve.txt\n' + END_RUN)
+    write_toml(Path(campaign.path), '#!/bin/sh\necho more >> solve.txt\ngit commit -qam more\n' + END_RUN)
     reload_campaign(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'its worker ended it as submitted'
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
+    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'its worker submitted its commit and ended it'
 
 
 def test_a_cancelled_executor_leaves_the_bookkeeping_to_the_scheduler(
@@ -1901,7 +1830,7 @@ def test_an_evaluator_spawned_after_cancel_is_killed_at_once(
     assert proc.wait(timeout=2) == -9
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_measured_again(
     db: Database,
     campaign: Campaign,
@@ -1910,10 +1839,16 @@ def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_meas
     tracer: Tracer,
     spans: InMemorySpanExporter,
 ) -> None:
-    write_toml(Path(campaign.path), HARNESS_TRY_AND_REVERT)
+    """The worker submits its try, then reverts it: the revert is the baseline's tree, so it is the baseline."""
+    try_submit_and_revert = (
+        f'#!/bin/sh\necho line >> solve.txt\ngit commit -qam "try"\n{SUBMIT}git revert --no-edit HEAD >/dev/null\n'
+    )
+    write_toml(Path(campaign.path), try_submit_and_revert)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path, tracer), db, run_id)
+    ex = controller(db, runtime, tmp_path, tracer)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [tried] = candidates(db, run_id)
     assert (tried.summary, tried.best, tried.metrics['score']) == ('try', True, 2.0)
     base = baseline(db, campaign.id)
@@ -1922,24 +1857,28 @@ def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_meas
         assert len(s.get_one(Candidate, base.id).measurements) == 1, 'and the baseline was not measured again'
         kinds = [ev.kind for ev in s.scalars(select(Event)).all()]
     assert kinds.count('measurement.recorded') == 1 and 'candidate.scored' in kinds
-    known = [sp for sp in spans.get_finished_spans() if sp.name == 'piloop.candidate' and sp.attributes]
-    assert [sp.attributes.get('status') for sp in known if sp.attributes] == snapshot(
-        [Measuring.MEASURED, Measuring.MEASURED]
-    )
+    submissions = [sp for sp in spans.get_finished_spans() if sp.name == 'piloop.submission' and sp.attributes]
+    assert [sp.attributes.get('status') for sp in submissions if sp.attributes] == [Measuring.MEASURED]
     repo = Repo(campaign.path)
-    assert len([r for r in repo.refs if r.path.startswith('refs/piloop/')]) == 2, 'both commits are still pinned'
+    assert {r.path for r in repo.refs if r.path.startswith(f'refs/piloop/demo/r{run_id}/')} == {
+        f'refs/piloop/demo/r{run_id}/0',
+        f'refs/piloop/demo/r{run_id}/1',
+        f'refs/piloop/demo/r{run_id}/s0',
+    }, 'both commits are still pinned, and the submission too'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [added] = candidates(db, run_id)
     assert added.metrics['score'] == 2.0
     doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
-    write_toml(Path(campaign.path), HARNESS_TRY_AND_REVERT, evaluate=doubled)
+    write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         before = proj.evaluator_id
@@ -1949,23 +1888,26 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         assert unmeasured(s, proj) == [added.id, 1], (
             'nothing is measured under the new evaluator yet: runs wait for the baseline and the best under the old one'
         )
+    for due_first in (added.id, CandidateId(1)):  # as the daemon's pass does, before it starts a run
+        ex.remeasure(due_first)
     second = make_run(db, campaign, title='again')
     with db.session() as s:
         s.get_one(Run, second).base_candidate_id = added.id
         s.commit()
-    execute(controller(db, runtime, tmp_path), db, second)
+    with scoring(ex, db):
+        execute(ex, db, second)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         tried = s.scalars(select(Candidate).where(Candidate.run_id == second)).one()
         assert [m.metrics['score'] for m in tried.measurements] == [6.0], 'measured under the doubled evaluator'
         base = s.get_one(Candidate, added.id)
         assert [m.metrics['score'] for m in base.measurements] == [2.0, 4.0], (
-            'the revert to the base is measured under the new evaluator, which had not measured it'
+            'the base is measured under the new evaluator, which had not measured it'
         )
         assert best_of(s, proj) == tried, '6 against 4: the old 2 does not count'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1973,18 +1915,20 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
     gate = Gate()
     monkeypatch.setattr(runtime, 'start', gate.wrap(runtime.start))
     run_id = make_run(db, campaign)
-    thread = threading.Thread(target=execute, args=(controller(db, runtime, tmp_path), db, run_id))
-    thread.start()
-    assert gate.entered.wait(10), 'the implementer is about to start; the run holds the old config'
-    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        sync(s, proj)
-        s.commit()
-        new_evaluator = proj.evaluator_id
-    gate.release.set()
-    thread.join(30)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        thread = threading.Thread(target=execute, args=(ex, db, run_id))
+        thread.start()
+        assert gate.entered.wait(10), 'the implementer is about to start; the run holds the old config'
+        doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
+        write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=doubled)
+        with db.session() as s:
+            proj = s.get_one(Campaign, campaign.id)
+            sync(s, proj)
+            s.commit()
+            new_evaluator = proj.evaluator_id
+        gate.release.set()
+        thread.join(30)
     [added] = candidates(db, run_id)
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).evaluator_id == new_evaluator
@@ -1992,12 +1936,19 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
         assert added.metrics['score'] == 4.0, 'measured under the doubled evaluator'
 
 
-@pytest.mark.run_end
+HARNESS_SUBMITS_TWO_COMMITS = (
+    f'#!/bin/sh\necho a >> solve.txt\ngit commit -qam "first"\n{SUBMIT}'
+    f'echo b >> solve.txt\ngit commit -qam "second"\n{END_RUN}'
+)
+"""Submits two commits, one after the other, and ends its run, through the API that ``daemon_api`` serves."""
+
+
+@pytest.mark.usefixtures('daemon_api')
 def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop init`` between two commits' evaluations: the second is measured and scored under the new evaluator."""
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
+    """``piloop init`` between two submissions' evaluations: the second is measured and scored under the new evaluator."""
+    write_toml(Path(campaign.path), HARNESS_SUBMITS_TWO_COMMITS)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
@@ -2006,7 +1957,7 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
     def then_init[**P](fn: Callable[P, Measuring]) -> Callable[P, Measuring]:
         def measured(*args: P.args, **kwargs: P.kwargs) -> Measuring:
             done = fn(*args, **kwargs)
-            write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
+            write_toml(Path(campaign.path), HARNESS_SUBMITS_TWO_COMMITS, evaluate=doubled)
             with db.session() as s:
                 sync(s, s.get_one(Campaign, campaign.id))
                 s.commit()
@@ -2015,7 +1966,8 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
         return measured
 
     monkeypatch.setattr(ex, '_measure', then_init(ex._measure))
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         new_evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
@@ -2030,12 +1982,12 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
         assert best_of(s, s.get_one(Campaign, campaign.id)) == second
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop init`` while the run's first evaluation starts: no commit is scored on the old evaluator."""
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
+    """``piloop init`` while the run's first evaluation starts: no submission is scored on the old evaluator."""
+    write_toml(Path(campaign.path), HARNESS_SUBMITS_TWO_COMMITS)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
@@ -2046,7 +1998,7 @@ def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_eval
         def measuring(*args: P.args, **kwargs: P.kwargs) -> Measuring:
             if not inits:
                 inits.append(None)
-                write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
+                write_toml(Path(campaign.path), HARNESS_SUBMITS_TWO_COMMITS, evaluate=doubled)
                 with db.session() as s:
                     sync(s, s.get_one(Campaign, campaign.id))
                     s.commit()
@@ -2055,7 +2007,8 @@ def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_eval
         return measuring
 
     monkeypatch.setattr(ex, '_measure', init_during(ex._measure))
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         new = s.get_one(Campaign, campaign.id).evaluator_id
         first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
@@ -2064,7 +2017,7 @@ def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_eval
             return [m.metrics['score'] for m in s.get_one(Candidate, c).measurements if m.evaluator_id == new]
 
         assert [under_new(c) for c in (first.id, second.id)] == [[4.0], [6.0]], (
-            'both commits are measured under the evaluator that scores them'
+            'both submissions are measured under the evaluator that scores them'
         )
         scores = [(e.target_id, scored.score) for e, scored in in_order(s, CandidateScored)]
         assert scores == [(first.id, 4.0), (second.id, 6.0)], 'each scored under the new evaluator'
@@ -2073,7 +2026,8 @@ def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_eval
 SPLIT_UNITS = [
     'sh',
     '-c',
-    'L=$(wc -l < solve.txt); printf \'{"metrics": {"score": %d, "size": %d}, "units": {"score": {"a": %d, "b": %d}}}\\n\''
+    'L=$(wc -l < solve.txt); printf \'{"status": "ok", "score": %d, "direction": "higher", "metrics": {"size": %d},'
+    ' "units": {"score": {"a": %d, "b": %d}}}\\n\''
     ' $L $(wc -c < solve.txt) $((2*L-1)) $((1-L)) >> "$PILOOP_RESULT_FILE"',
 ]
 """score = lines, split over two units so one more line is +2 on ``a`` and -1 on ``b``: up, but not significantly."""
@@ -2085,14 +2039,16 @@ def set_config(db: Database, campaign: Campaign, **overrides: object) -> None:
         s.commit()
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_per_unit_results_live_outside_the_database(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     units_dir = tmp_path / 'units'
     set_config(db, campaign, evaluate=SPLIT_UNITS)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         [m] = c.measurements
@@ -2101,7 +2057,7 @@ def test_per_unit_results_live_outside_the_database(
     assert sorted(p.name for p in units_dir.iterdir()) == [f'{m.id}.json'], 'no pending file is left behind'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2116,7 +2072,9 @@ def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
         proj = s.get_one(Campaign, campaign.id)
         proj.status, proj.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 1'
         s.commit()
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         assert (is_best(s, c), told_of(s, c.id)) == snapshot(
@@ -2147,12 +2105,6 @@ def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
         )
 
 
-HARNESS_SCAFFOLD_THEN_WORK = (
-    '#!/bin/sh\necho a >> solve.txt\ngit commit -qam scaffold -m "piloop-eval: SKIP"\n'
-    'echo b >> solve.txt\ngit commit -qam work\n'
-)
-
-
 def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | None, int, int | None]]:
     """``(summary, status, told, measurements, parent)`` of each candidate the run produced, in order.
 
@@ -2172,84 +2124,18 @@ def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | Non
         ]
 
 
-@pytest.mark.run_end
-def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_that_never_enters_the_pool(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_SCAFFOLD_THEN_WORK)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    with db.session() as s:
-        first = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).first()
-        assert first is not None
-        skip_id = first.id
-    assert scored(db, run_id) == snapshot(
-        [
-            ('scaffold', Origin.SKIPPED, None, 0, 1),
-            ('work', 'best', 'score 3 over 1 eval: the best of the score track now, rank 1 of 2', 1, 2),
-        ]
-    ), 'the next commit descends from the scaffold'
-    with db.session() as s:
-        assert [e for _, e in in_order(s, OriginChanged)] == [OriginChanged(old=Origin.RUN, new=Origin.SKIPPED)]
-        assert [e.target_id for e, _ in in_order(s, CandidateScored)] == [skip_id + 1], 'a skipped commit is not scored'
-
-
-@pytest.mark.run_end
-def test_a_skipped_tree_reached_again_without_the_trailer_is_measured_and_scored(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A revert to a skipped tree is measured and scored like a new candidate.
-
-    The run makes a scaffold commit marked skip, then a work commit that is best, then reverts to the scaffold's tree.
-    """
-    write_toml(Path(campaign.path), HARNESS_SCAFFOLD_THEN_WORK + 'git revert --no-edit HEAD >/dev/null\n')
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [scaffold, work] = scored(db, run_id)
-    assert scaffold[1:4] == snapshot(
-        ('scored', 'score 2 over 1 eval: rank 2 of 3; vs parent +1, vs best candidate#3 -1', 1)
-    )
-    assert work[1] == 'best'
-
-
-def test_a_skip_commit_on_a_known_tree_leaves_it_unmeasured(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    harness = HARNESS_TRY_AND_REVERT + 'git commit -q --amend -m "back" -m "Piloop-Eval: skip"\n'
-    write_toml(Path(campaign.path), harness)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    with db.session() as s:
-        base = s.get_one(Candidate, baseline(db, campaign.id).id)
-        assert (base.origin, len(base.measurements)) == (Origin.BASELINE, 1)
-
-
-@pytest.mark.run_end
-def test_dirt_after_a_skip_commit_is_committed_on_its_own_and_evaluated(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    harness = '#!/bin/sh\necho a >> solve.txt\ngit commit -qam scaffold -m "Piloop-Eval: skip"\necho b >> solve.txt\n'
-    write_toml(Path(campaign.path), harness)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    assert [(c[0], c[1], c[3]) for c in scored(db, run_id)] == [
-        ('scaffold', Origin.SKIPPED, 0),
-        (UNCOMMITTED, Origin.RECOVERED, 0),
-    ], 'the work after a skip commit is recovered on its own: never amended into the commit'
-
-
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_commit_that_moves_no_deciding_metric_is_level_with_its_parent(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    write_toml(Path(campaign.path), '#!/bin/sh\necho x > notes.txt\ngit add notes.txt\ngit commit -qm notes\n')
+    write_toml(
+        Path(campaign.path), '#!/bin/sh\necho x > notes.txt\ngit add notes.txt\ngit commit -qm notes\n' + END_RUN
+    )
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [(_, status, told, _, _)] = scored(db, run_id)
     assert (status, told) == snapshot(
         (
@@ -2325,29 +2211,36 @@ def test_two_sessions_that_register_one_new_tree_share_one_candidate(
         assert s.scalar(select(func.count()).select_from(Candidate).where(Candidate.tree_sha == first.tree_sha)) == 1
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_known_tree_that_another_run_reaches_again_is_not_measured_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The same tree again says nothing new about it: it keeps its score, and stays the best."""
+    """The same tree again says nothing new about it: it keeps its score, and stays the best.
+
+    The second run's version is that candidate, which a run cannot submit again: the run submits nothing."""
     ex = controller(db, runtime, tmp_path)
     first = make_run(db, campaign)
-    execute(ex, db, first)
+    with scoring(ex, db):
+        execute(ex, db, first)
     [known] = candidates(db, first)
-    execute(ex, db, make_run(db, campaign, title='a compose that reproduces the tree'))
+    write_toml(Path(campaign.path), HARNESS_APPEND)
+    reload_campaign(db, campaign)
+    second = make_run(db, campaign, title='a compose that reproduces the tree')
+    execute(ex, db, second)
+    assert (run_row(db, second).end, run_row(db, second).error) == (RunEnd.GAVE_UP, None)
     with db.session() as s:
         again = s.get_one(Candidate, known.id)
         assert (len(again.measurements), again.run_id) == (1, first), 'scored with the measurement it has'
         assert best_of(s, s.get_one(Campaign, campaign.id)) == again
 
 
-@pytest.mark.run_end
 def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A run's commits are its first-parent history, so a merge's parent is the run's base.
 
-    The merged-in line is not the run's, and its commits are known candidates already.
+    The merged-in line is not the run's, and its commits are known candidates already. The merge, which the worker
+    did not submit, is kept as ``skipped`` under the run's base.
     """
     metrics = {'score': 1.0, 'size': 5.0}
     side = scored_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, metrics)
@@ -2361,8 +2254,8 @@ def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
         s.get_one(Run, run_id).base_candidate_id = trunk
         s.commit()
     execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, _, _, measurements, parent)] = scored(db, run_id)
-    assert (measurements, parent) == (1, trunk)
+    [(_, status, _, measurements, parent)] = scored(db, run_id)
+    assert (status, measurements, parent) == (Origin.SKIPPED, 0, trunk)
     with db.session() as s:
         assert len(s.get_one(Candidate, side).measurements) == 1, 'the merged line is not measured again'
 
@@ -2385,7 +2278,7 @@ def cancelling(db: Database, measure: Callable[..., Measuring], cancelled: Candi
     return measured
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2393,7 +2286,8 @@ def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
     ex = controller(db, runtime, tmp_path)
     measure = ex._measure
     monkeypatch.setattr(ex, '_measure', cancelling(db, measure, CandidateId(2)))
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     monkeypatch.setattr(ex, '_measure', measure)
     ex.resume(run_id)
     with db.session() as s:
@@ -2402,74 +2296,7 @@ def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
         assert status(found, s.get_one(Campaign, campaign.id).evaluator_id).state is Measured.CANCELLED
 
 
-@pytest.mark.run_end
-def test_a_tree_two_runs_reach_is_never_scored_against_itself(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A tree that two runs reach is never compared with itself.
-
-    The second run reaches the tree while the first run's evaluation is pending. The first run's score then makes the
-    tree the best, so the second run's evaluation adds to its mean, and its worker hears that it is the best.
-    """
-    ex = controller(db, runtime, tmp_path)
-    first = make_run(db, campaign)
-    execute(ex, db, first)
-    [kept] = candidates(db, first)
-    assert kept.best
-    with db.session() as s:  # rewind to before the first run's measurement landed
-        candidate = s.get_one(Candidate, kept.id)
-        [measurement] = candidate.measurements
-        evaluator_id = measurement.evaluator_id
-        s.delete(measurement)
-        s.commit()
-    track = evaluation_jobs._track
-
-    def kept_meanwhile(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
-        """Land the first run's measurement while the second run evaluates the same tree."""
-        track(control, proc)
-        if proc is None:
-            with db.session() as s:
-                s.add(Measurement(candidate_id=kept.id, evaluator_id=evaluator_id, metrics=kept.metrics))
-                s.commit()
-
-    monkeypatch.setattr(evaluation_jobs, '_track', kept_meanwhile)
-    execute(ex, db, make_run(db, campaign, title='same lines'))
-    with db.session() as s:
-        again = s.get_one(Candidate, kept.id)
-        assert (len(again.measurements), told_of(s, kept.id)) == snapshot(
-            (2, 'score 2 over 2 evals: the best of the score track now, rank 1 of 2; vs parent +1')
-        ), 'the best, with no delta to itself'
-
-
-HARNESS_NOTED = (
-    '#!/bin/sh\n: > solve.txt\n'
-    'git commit -qam wipe -m "Piloop-Note: faster, though it scores less\nPiloop-Follow-Up: wipe, then refill"\n'
-    'echo a >> solve.txt\necho b >> solve.txt\n'
-    'git commit -qam refill -m "Piloop-Note: redundant"\n'
-)
-
-
-@pytest.mark.run_end
-def test_a_piloop_note_is_a_note_on_its_candidate_that_files_no_follow_up_and_moves_no_score(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_NOTED)
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, wipe, _, _, _), (_, refill, _, _, _)] = scored(db, run_id)
-    assert (wipe, refill) == ('scored', 'best')
-    with db.session() as s:
-        notes = s.scalars(select(Comment).where(Comment.target_kind == CANDIDATE).order_by(Comment.id)).all()
-        assert [(c.target_id, c.author, c.kind, c.body) for c in notes] == [
-            (2, 'implementer#1', CommentKind.NOTE, 'faster, though it scores less'),
-            (3, 'implementer#1', CommentKind.NOTE, 'redundant'),
-        ], "each note is its implementer's, on the candidate of its commit"
-        follow_ups = s.scalars(select(Idea).where(Idea.provenance.like('candidate#%'))).all()
-        assert follow_ups == [], 'a Piloop-Follow-Up trailer files no seed: an implementer files none'
-
-
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_the_best_of_one_track_must_hold_the_other_track_primaries_and_the_brief_lists_the_tracks(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2493,7 +2320,8 @@ def test_the_best_of_one_track_must_hold_the_other_track_primaries_and_the_brief
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(CandidateId(1))  # the baseline has a score under the new evaluator
     run_id = make_run(db, campaign, track='accuracy')
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [(_, status, told, _, _)] = scored(db, run_id)
     assert (status, told) == snapshot(
         (
@@ -2516,7 +2344,7 @@ TWO_TRACKS = {
 """Two tracks: accuracy on ``score``, the lines of ``solve.txt``, and cost on ``size``, its bytes."""
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2524,12 +2352,13 @@ def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
 
     Its worker hears where it stands on its run's track. The best of each track is a query over the whole pool.
     """
-    write_toml(Path(campaign.path), "#!/bin/sh\nprintf 'a\\n' > solve.txt\ngit commit -qam 'shorter'\n")
+    write_toml(Path(campaign.path), "#!/bin/sh\nprintf 'a\\n' > solve.txt\ngit commit -qam 'shorter'\n" + END_RUN)
     set_config(db, campaign, **TWO_TRACKS)
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(CandidateId(1))
     run_id = make_run(db, campaign, track='accuracy')
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         [c] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
         scores = [(e.track, e.score, e.best) for _, e in in_order(s, CandidateScored, Event.target_id == c.id)]
@@ -2539,15 +2368,15 @@ def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
         assert (best_of(s, p, accuracy), best_of(s, p, cost)) == (s.get_one(Candidate, 1), c)
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_recovered_work_whose_tree_is_already_a_candidate_leaves_that_candidate_as_it_is(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """The recovery commit is that candidate, which keeps its score; the claim of the run that left it ends."""
-    write_toml(Path(campaign.path), HARNESS_APPEND)
-    reload_campaign(db, campaign)
     first = make_run(db, campaign, title='commits the line')
-    execute(controller(db, runtime, tmp_path), db, first)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, first)
     [known] = candidates(db, first)
     write_toml(Path(campaign.path), HARNESS_FORGETS_COMMIT)
     reload_campaign(db, campaign)
@@ -2666,7 +2495,7 @@ def test_an_evaluation_that_imports_a_linked_module_finds_its_bytecode_current(
     py_compile.compile(str(data / 'mod.py'), doraise=True)
     imports = (
         "import json, os, sys; sys.path.insert(0, 'data'); import mod;"
-        " open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'metrics': {'score': 1, 'size': 1}}) + chr(10))"
+        " open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'status': 'ok', 'score': 1, 'direction': 'higher', 'metrics': {'size': 1}}) + chr(10))"
     )
     set_config(
         db, campaign, link=['data'], evaluate=['env', '-u', 'PYTHONDONTWRITEBYTECODE', sys.executable, '-c', imports]
@@ -2687,32 +2516,6 @@ def reflinks(tmp_path: Path) -> bool:
     except OSError:
         return False
     return True
-
-
-@pytest.mark.run_end
-def test_a_resumed_run_scores_the_versions_that_it_received(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stop during scoring leaves the run's versions recorded: the next daemon scores them, whatever refs say."""
-    run_id = make_run(db, campaign)
-    ex = controller(db, runtime, tmp_path)
-    measure = ex._measure
-
-    def stopped(*args: object, **kwargs: object) -> Measuring:
-        return Measuring.STOPPED  # what a stop does to the evaluation in flight
-
-    monkeypatch.setattr(ex, '_measure', stopped)
-    execute(ex, db, run_id)
-    with db.session() as s:
-        [waiting] = s.scalars(select(Candidate.id).where(Candidate.run_id == run_id)).all()
-        assert told_of(s, waiting) is None
-    repo = Repo(campaign.path)
-    for ref in repo.git.for_each_ref('--format=%(refname)', f'refs/piloop/demo/r{run_id}/').split():
-        repo.git.update_ref('-d', ref)
-    monkeypatch.setattr(ex, '_measure', measure)
-    ex.resume(run_id)
-    [scored] = candidates(db, run_id)
-    assert scored.best
 
 
 def test_a_run_that_starts_near_the_campaigns_stop_is_told_it_ends_with_the_stop(

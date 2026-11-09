@@ -80,11 +80,15 @@ def test_a_failed_or_incomplete_evaluation_gives_an_error(tmp_path: Path) -> Non
         {'seconds': 2.0},
         'evaluate reported infra_error: 429',
     ), 'a status that the result reports wins over the exit'
-    assert evaluate(write({'errors': 3, 'seconds': 2})) == ({'errors': 3.0, 'seconds': 2.0}, None), "0.5's form"
-    assert evaluate(f'{write({"errors": 3})}; echo boom >&2; exit 1') == ({'errors': 3.0}, 'evaluate exit 1: boom'), (
+    assert evaluate(write({'errors': 3, 'seconds': 2})) == (
+        {},
+        'evaluate wrote a bad result: the last line reports no status: ok, crash, timeout or infra_error',
+    ), "0.5's form, with no status, is refused"
+    ok = {'status': 'ok', 'score': 3, 'direction': 'lower'}
+    assert evaluate(f'{write({}, **ok)}; echo boom >&2; exit 1') == ({'errors': 3.0}, 'evaluate exit 1: boom'), (
         'a non-zero exit keeps what it reported next to the error: a failed evaluation has a cost too'
     )
-    assert evaluate(write({'errors': 3})) == ({'errors': 3.0}, 'evaluate reported no value for: seconds')
+    assert evaluate(write({}, **ok)) == ({'errors': 3.0}, 'evaluate reported no value for: seconds')
     assert evaluate('echo METRIC errors=3; echo METRIC seconds=2') == (
         {},
         'evaluate wrote a bad result: it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to $PILOOP_RESULT_FILE',

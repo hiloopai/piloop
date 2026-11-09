@@ -87,8 +87,8 @@ def test_a_pause_still_measures_what_the_evaluator_needs_unless_it_holds_the_eva
     sched.stop(timeout=5)
 
 
-SKIP = '#!/bin/sh\necho a >> solve.txt\ngit commit -qam scaffold -m "Piloop-Eval: skip"\n'
-"""A run whose one commit is marked skip, so the daemon never measures it."""
+SKIP = '#!/bin/sh\necho a >> solve.txt\ngit commit -qam scaffold\n'
+"""A run whose one commit it does not submit, so the daemon never measures it: it is ``skipped``."""
 
 
 def test_a_skipped_commit_is_measured_on_request_and_enters_the_pool(

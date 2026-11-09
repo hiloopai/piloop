@@ -18,14 +18,15 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure, requested
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
-from tests.conftest import ScriptRuntime, baseline, wait_until
+from tests.conftest import ScriptRuntime, baseline, scoring, wait_until
 from tests.daemon.test_evaluation_queue import evaluated, in_thread, queued_executor, rows, run_candidates
 from tests.daemon.test_run_controller import controller, execute, make_run, set_config, told_of
 
 CLIMB = (
     'n=$(wc -l < solve.txt); echo climb >> {log};'
     ' printf \'{{"rung": "screen", "metrics": {{"score": %d, "cost": 1}}}}\\n\' $((3 - n)) >> "$PILOOP_RESULT_FILE";'
-    ' printf \'{{"metrics": {{"score": %d, "cost": 2}}}}\\n\' $n >> "$PILOOP_RESULT_FILE"'
+    ' printf \'{{"status": "ok", "score": %d, "direction": "higher", "metrics": {{"cost": 2}}}}\\n\' $n'
+    ' >> "$PILOOP_RESULT_FILE"'
 )
 """An evaluate that logs each climb to ``log``, and reports a screen that disagrees with the full panel: a line more
 scores 1 less at the screen, and 1 more in full."""
@@ -54,7 +55,7 @@ def rungs_of(db: Database, candidate_id: CandidateId) -> list[tuple[str | None, 
         return [(m.rung, m.stopped, m.metrics) for m in s.get_one(Candidate, candidate_id).measurements]
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_run_stops_its_version_at_a_rung_and_a_remeasure_climbs_in_full(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -67,7 +68,8 @@ def test_a_run_stops_its_version_at_a_rung_and_a_remeasure_climbs_in_full(
         (None, None, {'score': 1.0, 'cost': 2.0}),
     ], 'a reference climbs every rung, whatever it measures there'
     run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     assert climbs(log) == 2, 'the baseline, then one climb that stopped'
     [c] = run_candidates(db, run_id)
     assert rungs_of(db, c.id) == [('screen', 'score 1 vs 2 (-1; margin 0.5)', {'score': 1.0, 'cost': 1.0})]
@@ -87,7 +89,7 @@ def test_a_run_stops_its_version_at_a_rung_and_a_remeasure_climbs_in_full(
         assert requested(s, s.get_one(Campaign, campaign.id)) == []
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_rung_with_its_own_command_runs_first_and_its_stop_spares_the_evaluate_command(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -103,73 +105,44 @@ def test_a_rung_with_its_own_command_runs_first_and_its_stop_spares_the_evaluate
     ex.remeasure(baseline(db, campaign.id).id)
     assert climbs(log) == 2, 'a reference runs past a stop that holds'
     run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [c] = run_candidates(db, run_id)
     assert climbs(log) == 2, 'the smoke stopped the climb: the evaluate command never ran'
     assert rungs_of(db, c.id) == [('smoke', 'score 0 past its floor 1', {'score': 0.0, 'cost': 0.5})]
 
 
-@pytest.mark.run_end
-def test_two_runs_that_reach_one_tree_share_one_climb(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
-) -> None:
-    laddered(db, campaign, tmp_path, hold=True)
-    ex = queued_executor(db, runtime, tmp_path, slots=2)
-    ex.remeasure(baseline(db, campaign.id).id)
-    (tmp_path / 'hold').touch()
-    waits = mocker.spy(queue, 'request')
-    first, second = make_run(db, campaign), make_run(db, campaign, title='the same line')
-    one = in_thread(lambda: execute(ex, db, first))
-    wait_until(lambda: len(evaluated(tmp_path)) == 2, 'the first run climbs')
-    two = in_thread(lambda: execute(ex, db, second))
-    wait_until(lambda: waits.call_count == 2, 'the second request')
-    (tmp_path / 'hold').unlink()
-    one.join(30)
-    two.join(30)
-    [candidate] = run_candidates(db, first)
-    with db.session() as s:
-        shared = s.get_one(Candidate, candidate.id)
-        assert [m.rung for m in shared.measurements] == ['screen']
-        assert told_of(s, shared.id) == 'stopped at a rung of the ladder: score 1 vs 2 (-1; margin 0.5)'
-    assert len(evaluated(tmp_path)) == 2, 'the baseline, then the tree once'
-    assert rows(db) == []
-
-
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_remeasure_that_joins_a_stopped_climb_is_asked_again_and_then_climbs_in_full(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """A run that reaches a stopped tree again climbs it again. A remeasure that joins that evaluation gets the stop,
-    which leaves the request open, so the daemon asks again, and that climb goes to the full panel."""
+    """A remeasure that joins the climb of a submission gets its stop, which leaves the request open, so the daemon
+    asks again, and that climb goes to the full panel."""
     laddered(db, campaign, tmp_path, hold=True)
     ex = queued_executor(db, runtime, tmp_path, slots=2)
     ex.remeasure(baseline(db, campaign.id).id)
-    run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
-    [c] = run_candidates(db, run_id)
-    with db.session() as s:
-        current = s.get_one(Campaign, campaign.id)
-        cfg, evaluator = current.config, current.evaluator_id
-        assert evaluator is not None
     (tmp_path / 'hold').touch()
     waits = mocker.spy(queue, 'request')
-    best = baseline(db, campaign.id).id
-    again = in_thread(
-        lambda: ex._measure(run_id, campaign.id, cfg, c.revision, c.id, evaluator, tmp_path / 'again', gate=best)
-    )
-    wait_until(lambda: len(evaluated(tmp_path)) == 3, 'the climb again')
+    run_id = make_run(db, campaign)
+    with scoring(ex, db):
+        ran = in_thread(lambda: execute(ex, db, run_id))
+        wait_until(lambda: len(evaluated(tmp_path)) == 2, 'the climb of the submission')
+        [c] = run_candidates(db, run_id)
+        with db.session() as s:
+            request_remeasure(s, s.get_one(Candidate, c.id), System.HUMAN, repeats=1)
+            s.commit()
+        joined = in_thread(lambda: ex.remeasure(c.id))
+        wait_until(lambda: waits.call_count == 2, 'the remeasure joins')
+        (tmp_path / 'hold').unlink()
+        ran.join(30)
+        joined.join(30)
     with db.session() as s:
-        request_remeasure(s, s.get_one(Candidate, c.id), System.HUMAN, repeats=1)
-        s.commit()
-    joined = in_thread(lambda: ex.remeasure(c.id))
-    wait_until(lambda: waits.call_count == 2, 'the remeasure joins')
-    (tmp_path / 'hold').unlink()
-    again.join(30)
-    joined.join(30)
-    with db.session() as s:
-        assert [m.rung for m in s.get_one(Candidate, c.id).measurements] == ['screen', 'screen']
+        assert [m.rung for m in s.get_one(Candidate, c.id).measurements] == ['screen']
+        assert told_of(s, c.id) == 'stopped at a rung of the ladder: score 1 vs 2 (-1; margin 0.5)'
         assert [r.id for r, _ in requested(s, s.get_one(Campaign, campaign.id))] == [c.id], 'still asked'
+    assert len(evaluated(tmp_path)) == 2, 'the baseline, then the tree once'
     ex.remeasure(c.id)
     with db.session() as s:
         assert [m.rung for m in s.get_one(Candidate, c.id).measurements][-2:] == ['screen', None]
         assert requested(s, s.get_one(Campaign, campaign.id)) == []
+    assert rows(db) == []

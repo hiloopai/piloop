@@ -239,20 +239,9 @@ stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
 
 # The bridges of old keys (piloop.deprecated.BRIDGES): each declares the bridges that it runs after or before
 [project.entry-points."piloop.bridges"]
-scout_role = "piloop.plugins.role.bridges:scout_role"
-run_role_ideas = "piloop.plugins.role.bridges:run_role_ideas"
-leaking_funnel = "piloop.plugins.role.bridges:leaking_funnel"
-seed_trigger = "piloop.plugins.role.bridges:seed_trigger"
-idle_alert = "piloop.plugins.role.bridges:idle_alert"
-run_role_assignment = "piloop.plugins.role.bridges:run_role_assignment"
-track_shares = "piloop.deprecated:track_shares"
-end_grace = "piloop.plugins.role.bridges:end_grace"
-home_end_grace = "piloop.plugins.role.bridges:home_end_grace"
-pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
-relay_waits = "piloop.deprecated:relay_waits"
-wake_after_tries = "piloop.deprecated:wake_after_tries"
 research_memory = "piloop.deprecated:research_memory"
 wake_budget = "piloop.deprecated:wake_budget"
+evaluator_scoring = "piloop.deprecated:evaluator_scoring"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).
@@ -392,7 +381,6 @@ markers = [
     "e2e: a real campaign with real agents (make e2e)",
     "quarantine(issue): a flaky test, out of the required run until its open issue (tests/quarantine.toml) is fixed",
     "needs(*tests): skip unless these earlier tests of the module passed (tests/e2e)",
-    "run_end: a test of 0.5's scoring, which goes with Scoring.RUN_END (tests/conftest.py SCORING)",
 ]
 xfail_strict = true
 # A test that runs this long prints every thread's stack, so a hang names its test before the job times out.

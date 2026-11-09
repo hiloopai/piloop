@@ -91,7 +91,8 @@ def primes(n):
 run = subprocess.run([sys.executable, 'primes.py'], capture_output=True, text=True, timeout=60)
 if run.returncode != 0 or [int(line) for line in run.stdout.split()] != primes(50):
     sys.exit('primes.py does not print the first 50 primes')
-line = json.dumps({'metrics': {'bytes': len(pathlib.Path('primes.py').read_bytes())}})
+size = len(pathlib.Path('primes.py').read_bytes())
+line = json.dumps({'status': 'ok', 'score': size, 'direction': 'lower'})
 if path := os.environ.get('PILOOP_RESULT_FILE'):
     with open(path, 'a') as result:
         result.write(line + '\\n')

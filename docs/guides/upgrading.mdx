@@ -23,19 +23,19 @@ installed with `uv sync` is not a uv tool: upgrade it with `git pull`.
 
 ## Upgrade one release at a time
 
-Upgrade through every minor release in order: 0.4 to 0.5, then 0.5 to 0.6. Each release migrates a database only from
+Upgrade through every minor release in order: 0.4 to 0.5, then 0.5 to 0.6, then 0.6 to 0.7. Each release migrates a database only from
 the newest schema of the minor release before it, or from a newer one. On an older database, every command names the
 release that it is from, and the release to install first. It changes nothing:
 
 ```bash
-uv tool install 'piloop==0.5.*'
+uv tool install 'piloop==0.6.*'
 piloop upgrade
 ```
 
 Then install the next release in the same way. `uv tool install piloop` drops the pin. Quote the requirement: `*` is
 a glob in zsh.
 
-This page covers the upgrade to 0.6.0, and the changes on `main` after it. For an earlier one, follow the guide of the release that you upgrade to:
+This page covers the upgrades to 0.7.0 and 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
 [0.5.0](https://github.com/hiloopai/piloop/blob/v0.5.0/docs/guides/upgrading.mdx),
 [0.4.0](https://github.com/hiloopai/piloop/blob/v0.4.0/docs/guides/upgrading.mdx),
 [0.3.1](https://github.com/hiloopai/piloop/blob/v0.3.1/docs/guides/upgrading.mdx) or
@@ -122,6 +122,62 @@ Before 1.0, a minor release may break these, and the changelog says so:
 - The [database schema](/reference/schema), as `piloop sql` shows it.
 
 `piloop.capabilities` is the stable plugin API. Other `piloop.*` imports can change in any release.
+
+## Upgrading to 0.7.0
+
+### Upgrade from 0.6
+
+0.7.0 migrates a database from 0.6's heads or newer: a 0.5 home upgrades through 0.6 first, as
+[Upgrade one release at a time](#upgrade-one-release-at-a-time) says. The upgrade rewrites the copy of each
+`piloop.toml` that the database stores: it takes out every key in the tables below, and a campaign that scored at run
+end scores what its implementers submit.
+
+### Removed keys
+
+The keys that 0.5 and 0.6 deprecated now fail as unknown keys, with a link to the configuration reference. Delete
+them from each `piloop.toml` and from `config.toml`, or write them as this table says:
+
+| Removed | Write |
+|---|---|
+| Each key of [Removed features](#removed-features) of 0.6.0: the research, watchdog, scout and orchestrator roles, the trigger tables, sweeps, seeds, the `idle_queue`, `yields`, `incidents`, `reported` and `research_commands` sections, `[plugins.stop_rule] while_held` | nothing |
+| `[plugins.verdict_rule]`, a role's `follow_head`, a metric's `repeats`, `[plugins.section.judging]` | nothing: the pool replaces verdicts |
+| `"judging"` in a role's `sections` | `"scoring"` |
+| A role's `finding_grace`, in `piloop.toml` or `config.toml` | `end_grace` |
+| `share` of `[tracks.<name>]` | nothing |
+| `grace` of `[plugins.escalation]` | nothing: every escalation reaches a human at once |
+| `[agents] relay_wait` and `relay_deadline`, `[evaluation] wake_after_tries` of `config.toml` | nothing |
+
+`[evaluator] scoring` still loads, with a warning, until 0.8.0, and does nothing (see below).
+
+### Run-end scoring is removed
+
+piloop scores only what an implementer submits (`piloop submit`). Each other version of a run is a `skipped`
+candidate, never measured. `[evaluator] scoring = "run_end"`, which 0.6 kept for the campaigns that 0.5 stored, is
+gone, and so is the key: delete `scoring` from `[evaluator]`. piloop no longer reads the `Piloop-Eval: skip` and
+`Piloop-Note` trailers of a commit: a commit that is not submitted is never measured, and a note goes on the board as
+a `note` comment.
+
+### The evaluate command reports a status
+
+The result line of the [evaluate command](/concepts/campaigns#the-evaluate-command) must carry `status`, and the
+primary metric as `score`. 0.6 still took 0.5's line; 0.7 refuses it as a bad result, which is a crash:
+
+| 0.5's line, refused | Write |
+|---|---|
+| `{"metrics": {"bytes": 3688775, "seconds": 0.82}}` | `{"status": "ok", "score": 3688775, "direction": "lower", "metrics": {"seconds": 0.82}}` |
+
+A rung of the ladder still reports its metrics alone.
+
+### The API and the CLI
+
+- An inbox item and a comment show `acks`, one for each party that acknowledged it. `acked_at` and `acked_by` are
+  gone: read the ack of the `human` party, or of your role.
+- `piloop submit` takes no `--wait`: it returns at once, as in 0.6. A worker's relay from before 0.6 passed it.
+
+### A plugin
+
+- `Surface.SWEEP` is gone: write `Surface.ORCHESTRATOR`.
+- A vcs provider's `Version` has no `skip` and no `notes`, and the prompts have no `{vcs:mark}` part.
 
 ## Changes after 0.6.0
 
@@ -336,11 +392,11 @@ A line without `status` still reads as `ok`, with the primary among `metrics`, u
 | `[evaluator] noise_runs = 3` | The baseline, and each candidate whose first score beats the best, get 3 evaluations. | `1` |
 
 A campaign that 0.5 made keeps 0.5's values in its stored config. `piloop campaign sync` or `piloop init` reads its
-`piloop.toml` again, and gives it the 0.6 defaults. To keep 0.5's values, put them in `piloop.toml`:
+`piloop.toml` again, and gives it the 0.6 defaults. To keep 0.5's noise runs, put them in `piloop.toml`
+(0.7.0 removes run-end scoring):
 
 ```toml
 [evaluator]
-scoring = "run_end"
 noise_runs = 1
 ```
 

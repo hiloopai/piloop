@@ -62,31 +62,29 @@ def test_worktree_changes_hold_the_process_lock(
 @pytest.mark.parametrize(
     'message',
     [
-        'work\n\nWhy.\n\nPiloop-Eval: skip\nPiloop-Note: a lead\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n',
-        'work\n\nPiloop-Eval: skip\nPiloop-Note: a lead\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+        'work\n\nWhy.\n\nPiloop-Recovered: run#3\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n',
+        'work\n\nPiloop-Recovered: run#3\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
         '\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n',
-        'work\n\nWhy, with no blank line before the trailers.\npiloop-eval : SKIP\nPiloop-Note:  a\n  lead\n',
+        'work\n\nWhy, with no blank line before the trailers.\npiloop-recovered : run#3\n',
     ],
     ids=['before-co-authored-by', 'before-generated-with', 'in-the-body'],
 )
-def test_piloop_trailers_count_on_any_line_after_the_subject(campaign_path: Path, message: str) -> None:
+def test_a_piloop_trailer_counts_on_any_line_after_the_subject(campaign_path: Path, message: str) -> None:
     """A harness puts its own trailers in a paragraph after the implementer's, and git reads only
     the last paragraph. A line that only mentions a trailer is not one."""
     repo = Repo(campaign_path)
     repo.git.commit('-q', '--allow-empty', '-m', message)
-    version = GitRepository(repo, PILOOP).head()
-    assert version.skip
-    assert version.notes == ('a lead',)
+    assert GitRepository(repo, PILOOP).head().recovered
 
 
 def test_a_line_that_mentions_a_trailer_or_the_subject_is_not_one(campaign_path: Path) -> None:
     repo = Repo(campaign_path)
     repo.git.commit(
-        '-q', '--allow-empty', '-m', 'Piloop-Eval: skip\n\nThe trailer Piloop-Eval: skip is for scaffolding.'
+        '-q', '--allow-empty', '-m', 'Piloop-Recovered: run#3\n\nThe trailer Piloop-Recovered: run#3 marks saved work.'
     )
     version = GitRepository(repo, PILOOP).head()
-    assert not version.skip
-    assert git.trailers(git.message(repo, version.revision), 'Piloop-Eval') == []
+    assert not version.recovered
+    assert git.trailers(git.message(repo, version.revision), 'Piloop-Recovered') == []
 
 
 def test_a_checkout_changed_by_an_edit_a_new_file_or_a_commit_not_by_what_was_linked_into_it(
@@ -451,3 +449,8 @@ def test_a_blob_that_is_no_bundle_is_a_vcs_error_and_names_its_version_unknown(c
             repo.receive(cas, Transfer(blob=cas.put(b'not a bundle'), head=Revision('f' * 40)), base)
         with pytest.raises(UnknownRevision, match='names no commit'):
             repo.version('f' * 40)
+
+
+def test_a_trailer_s_value_goes_on_over_the_indented_lines_under_it() -> None:
+    message = 'work\n\nPiloop-Recovered: run#3\n  of the cut\n\tby the stop\nOther: x\n'
+    assert git.trailers(message, 'Piloop-Recovered') == ['run#3 of the cut by the stop']

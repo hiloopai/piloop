@@ -1,31 +1,22 @@
 import json
 import re
 import subprocess
-import tomllib
-import warnings
 from collections.abc import Mapping
-from datetime import timedelta
-from importlib.metadata import EntryPoint
 from pathlib import Path
 from unittest.mock import ANY
 
 import pytest
 from inline_snapshot import snapshot
-from pydantic import ValidationError
 
 from piloop import config as config_module
-from piloop.config import REMOVED_SECTIONS, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
+from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, TrackConfig
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.pool import best_rule, criterion
+from piloop.plugins.campaign_type.kit.pool.pool import criterion
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.optimization.section.history import History
-from piloop.plugins.campaign_type.optimization.section.pack import Pack
-from piloop.plugins.escalation.contract import ESCALATIONS
-from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.contract import EXECUTORS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FACT_SOURCES
@@ -41,11 +32,6 @@ from piloop.settings import Settings
 from tests.conftest import (
     AGENT_TIMEOUT,
     AUDITOR,
-    PLUGIN,
-    ROLE_GROUP,
-    bare_config,
-    forget_loaded,
-    install_plugins,
     role_of,
 )
 from tests.fixtures.plugin import Auditor
@@ -134,12 +120,6 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     )
 
 
-ORCHESTRATOR_REMOVED = (
-    'the orchestrator role is removed; delete [plugins.role.orchestrator]: escalations reach a human at once, and an'
-    ' agent that you run with the piloop-operate skill can answer them'
-)
-
-
 def dropped(warned: pytest.WarningsRecorder) -> list[str]:
     return sorted(str(w.message).partition(';')[0] for w in warned)
 
@@ -147,65 +127,6 @@ def dropped(warned: pytest.WarningsRecorder) -> list[str]:
 def said(warned: pytest.WarningsRecorder) -> list[str]:
     """Each warning in full, but the release that removes its key."""
     return sorted(str(w.message).partition('; removed')[0] for w in warned)
-
-
-def test_an_orchestrator_table_loads_from_a_file_and_from_a_stored_config_without_the_role_and_warns_once(
-    campaign_path: Path,
-) -> None:
-    """The whole table goes, its triggers included: nothing else warns about what it held."""
-    toml = campaign_path / 'piloop.toml'
-    lead = '\n[plugins.role.orchestrator]\ntriggers = ["news", "low_water", "cron", "run_failed"]\nquiet_seconds = 5\n'
-    toml.write_text(toml.read_text() + lead)
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert said(warned) == [ORCHESTRATOR_REMOVED]
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-    stored = cfg.model_dump(mode='json')
-    stored['plugins']['role']['orchestrator'] = {'triggers': ['news', 'run_failed'], 'max_ideas': 3}
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        assert CampaignConfig.model_validate(stored) == cfg, 'a stored config goes the same validation: no migration'
-    assert said(warned) == [ORCHESTRATOR_REMOVED]
-
-
-def test_the_grace_of_an_escalation_loads_from_a_file_and_from_a_stored_config_without_it_and_warns(
-    campaign_path: Path,
-) -> None:
-    """No agent waits for an escalation: each one reaches a human at once, so ``grace`` goes."""
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + '\n[plugins.escalation]\ngrace = "PT10M"\nask_words = 20\n')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    grace = 'every escalation reaches a human at once now: delete grace from [plugins.escalation]'
-    assert said(warned) == [grace]
-    assert ESCALATIONS.selected(cfg.plugins) == Structured(ask_words=20)
-    stored = cfg.model_dump(mode='json')
-    stored['plugins']['escalation']['grace'] = 1800.0
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        assert CampaignConfig.model_validate(stored) == cfg
-    assert said(warned) == [grace]
-
-
-def test_a_package_s_role_called_orchestrator_keeps_its_table(
-    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    install_plugins(monkeypatch, [EntryPoint('orchestrator', f'{PLUGIN}:Auditor', ROLE_GROUP)])
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', PiloopDeprecationWarning)
-            cfg = load_campaign_config(campaign_path, plugins={'role': {'orchestrator': {'awake': ['paused']}}})
-        assert role_of(cfg, Auditor).awake == ['paused']
-    finally:
-        forget_loaded()
-
-
-def test_the_trigger_tables_of_0_6_load_without_them_and_warn_for_each_that_sets_a_key(campaign_path: Path) -> None:
-    """No role of piloop's has a trigger table: a stored config's empty table of each goes without a word."""
-    stored = load_campaign_config(campaign_path).model_dump(mode='json')
-    stored['plugins']['trigger'] = {'news': {}, 'run_failed': {}, 'soon': {'provider': 'news', 'quiet_seconds': 3}}
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = CampaignConfig.model_validate(stored)
-    assert dropped(warned) == ['the trigger tables are removed: delete [plugins.trigger.soon]']
-    assert 'trigger' not in cfg.model_dump(mode='json')['plugins']
 
 
 def test_missing_file(tmp_path: Path) -> None:
@@ -571,28 +492,6 @@ def test_default_claude_takes_the_queued_messages_after_each_tool_call(tmp_path:
     assert hook(PILOOP_MESSAGES=str(queue)).stdout == 'took: agent messages --harness claude\n'
 
 
-def test_a_sweep_of_your_own_and_its_query_load_without_them_and_warn(campaign_path: Path) -> None:
-    """A role of your own does runs: a table of a new name without ``runs = true`` goes, and so does a ``sql`` trigger."""
-    (campaign_path / 'reviewer.md').write_text('# Review\n')
-    when = 'SELECT 1 FROM ideas WHERE campaign_id = :campaign AND created_at > :since'
-    reviewer = {'prompt': 'reviewer.md', 'triggers': ['new_idea'], 'runtime': 'subprocess'}
-    plugins = {'role': {'reviewer': reviewer}, 'trigger': {'new_idea': {'provider': 'sql', 'when': when}}}
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path, plugins=plugins)
-    assert dropped(warned) == [
-        'a sweep of your own is removed: delete [plugins.role.reviewer]',
-        'the sql trigger is removed with the sweeps of your own: delete [plugins.trigger.new_idea]',
-    ]
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-    stored = cfg.model_dump(mode='json')
-    stored['plugins']['role']['reviewer'] = reviewer
-    with pytest.warns(PiloopDeprecationWarning, match='a sweep of your own is removed'):
-        assert CampaignConfig.model_validate(stored) == cfg, 'a stored config goes the same validation: no migration'
-    for name in ('run', 'Review Bot'):
-        with pytest.raises(ConfigError, match=f'{name!r} is not a role name: use lowercase letters, digits, _ and -'):
-            load_campaign_config(campaign_path, plugins={'role': {name: {'runs': True}}})
-
-
 @pytest.mark.usefixtures('auditor')
 def test_a_table_with_runs_defines_a_role_that_does_runs_with_the_implementer_defaults(campaign_path: Path) -> None:
     quick = {'runs': True, 'timeout': 60, 'max_concurrent': 1}
@@ -761,176 +660,9 @@ def test_config_toml_holds_defaults_of_each_campaign_s_plugins_which_piloop_toml
     assert isinstance(executor, Workers) and executor.pools['serve'].usd_per_hour == 0.5
 
 
-def test_a_role_s_finding_grace_is_its_end_grace_with_a_warning(campaign_path: Path) -> None:
-    """A finding ends no run now: the grace after a worker ends its run is ``end_grace``."""
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(
-        toml.read_text().replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nfinding_grace = 5\n')
-    )
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert [(w.lineno, str(w.message).split('; removed')[0]) for w in warned] == [
-        (
-            lines.index('finding_grace = 5') + 1,
-            '`plugins.role.<name>.finding_grace` is deprecated; write `plugins.role.<name>.end_grace`',
-        )
-    ]
-    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=5)
-
-
-def test_a_scout_table_of_0_5_loads_without_a_scout_and_warns(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + '\n[plugins.role.scout]\ninterval = 3600\nseeds = 2\n')
-    with pytest.warns(PiloopDeprecationWarning, match=r'the scout role is removed; delete \[plugins.role.scout\]'):
-        cfg = load_campaign_config(campaign_path)
-    assert 'scout' not in cfg.roles.all()
-
-
-def test_the_verdict_keys_of_0_5_load_without_them_and_warn_from_a_file_and_from_a_stored_config(
-    campaign_path: Path,
-) -> None:
-    """A candidate gets no verdict, an evaluation pairs with no bar, and there is no head: piloop drops
-    ``[plugins.verdict_rule]``, ``repeats`` and ``follow_head``, and reads the section ``judging`` as ``scoring``."""
-    toml = campaign_path / 'piloop.toml'
-    metric = '[[metrics]]\nname = "size"\ndirection = "lower"\n'
-    implementer = '[plugins.role.implementer]\n'
-    text = toml.read_text().replace(metric, f'{metric}repeats = 3\n')
-    text = text.replace(
-        implementer, f'{implementer}follow_head = "message"\nsections = ["context", "judging", "goal"]\n'
-    )
-    toml.write_text(f'{text}\n[plugins.verdict_rule]\nprovider = "bootstrap"\nconfidence = 0.9\n')
-    with warnings.catch_warnings(record=True) as warned:
-        warnings.simplefilter('always')
-        cfg = load_campaign_config(campaign_path)
-    assert sorted(str(w.message).split('; removed')[0] for w in warned if w.category is PiloopDeprecationWarning) == [
-        'a candidate gets no verdict now, so [plugins.verdict_rule] is removed',
-        "an evaluation runs next to no bar now: delete repeats of metric 'size'",
-        'the section judging is scoring now: rename it in [plugins.role.implementer] sections',
-        'there is no head to follow now: delete follow_head of [plugins.role.implementer]',
-    ]
-    assert 'verdict_rule' not in cfg.plugins and best_rule(cfg) == Baseline()
-    assert [type(s).__name__ for s in cfg.sections_of(IMPLEMENTER)] == ['Context', 'Scoring', 'Goal']
-    stored = bare_config('p').model_dump(mode='json')
-    stored['plugins']['verdict_rule'] = {'provider': 'bootstrap'}
-    stored['metrics'][0]['repeats'] = None
-    with pytest.warns(PiloopDeprecationWarning, match='verdict_rule'):
-        migrated = CampaignConfig.model_validate(stored)
-    assert migrated == bare_config('p'), 'a stored config of 0.5 loads, as 0078 pinned it'
-    with pytest.raises(ValidationError):  # what is no table is left to the validation
-        CampaignConfig.model_validate('not a table')
-
-
-def test_a_stored_config_of_0_5_with_the_judging_section_table_loads_without_it() -> None:
-    """0.5 dumped every section's table, ``judging`` among them: its empty table goes without a word, and one that
-    sets a key goes with a warning."""
-    stored = bare_config('p').model_dump(mode='json')
-    stored['plugins']['section'] = {**stored['plugins'].get('section', {}), 'judging': {}}
-    assert CampaignConfig.model_validate(stored) == bare_config('p')
-    stored['plugins']['section']['judging'] = {'budget': 3}
-    with pytest.warns(
-        PiloopDeprecationWarning, match=r'the section judging is removed; delete \[plugins.section.judging\]'
-    ):
-        assert CampaignConfig.model_validate(stored) == bare_config('p')
-
-
-def test_a_research_table_of_0_6_loads_without_research_and_warns_once(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + '\n[plugins.role.research]\nmax_ideas = 3\n')
-    with pytest.warns(
-        PiloopDeprecationWarning, match=r'the research role is removed; delete \[plugins.role.research\]'
-    ) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert len(warned) == 1 and 'research' not in cfg.roles.all()
-
-
-OWN_SWEEP = 'a sweep of your own is removed: delete [plugins.role.reviewer]; a role of your own does runs (runs = true)'
-"""The warning of ``[plugins.role.reviewer]``, a sweep of the file's own, which goes after the bridges of its keys."""
-SWEEP_VOCABULARY_OF_0_6 = [
-    OWN_SWEEP,
-    'the cron trigger is removed: delete cron from [plugins.role.reviewer] triggers',
-    'the cron trigger is removed: delete late from [plugins.role.reviewer] triggers',
-    'the cron trigger is removed: delete the table [plugins.trigger.late]',
-    'the dead_at_startup trigger is removed: delete dead_at_startup from [plugins.role.reviewer] triggers',
-    'the low_yield trigger is removed: delete the table [plugins.trigger.low_yield]',
-    'the stopped trigger is removed: delete stopped from [plugins.role.reviewer] triggers',
-    'the timer and the incident and routine prompts are removed: delete [plugins.role.reviewer] incident_prompt',
-    'the timer and the incident and routine prompts are removed: delete [plugins.role.reviewer] interval',
-    'the timer and the incident and routine prompts are removed: delete [plugins.role.reviewer] routine_prompt',
-    'there is no closing review now: delete [plugins.stop_rule] while_held',
-]
-"""Each warning of a campaign that names every key of a sweep's timer, closing review and incident prompts."""
-REVIEWER_KEYS = (
-    'triggers = ["run_failed", "cron", "late", "dead_at_startup", "stopped"]\ninterval = 600\n'
-    'incident_prompt = "incident.md"\nroutine_prompt = "routine.md"'
-)
-"""The removed keys of a sweep's table, for ``[plugins.role.reviewer]``."""
-
-
 def reviewer(keys: str) -> str:
     """``[plugins.role.reviewer]``, a sweep of the file's own, with ``keys``: the lines to append to a ``piloop.toml``."""
     return f'\n[plugins.role.reviewer]\n{keys}\n'
-
-
-SWEEP_TABLES = """
-[plugins.trigger.late]
-provider = "cron"
-
-[plugins.trigger.low_yield]
-window = 10
-
-[plugins.stop_rule]
-while_held = "skip"
-max_runs = 9
-"""
-
-
-def test_the_timer_closing_review_and_incident_prompts_of_0_6_load_without_them_and_warn(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + reviewer(REVIEWER_KEYS) + SWEEP_TABLES)
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert said(warned) == SWEEP_VOCABULARY_OF_0_6
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-    assert STOP_RULES.selected(cfg.plugins) == Limits(max_runs=9)
-
-
-def test_a_campaign_that_0_6_stored_with_a_timer_and_a_closing_review_loads_without_them_and_warns(
-    campaign_path: Path,
-) -> None:
-    """The stored copy of ``piloop.toml`` (``campaigns.config``) goes the same validation as the file: no migration."""
-    stored = load_campaign_config(campaign_path).model_dump(mode='json')
-    tables = tomllib.loads(SWEEP_TABLES)['plugins']
-    stored['plugins']['role']['reviewer'] = tomllib.loads(REVIEWER_KEYS)
-    stored['plugins']['trigger'] = {**stored['plugins'].get('trigger', {}), **tables['trigger']}
-    stored['plugins']['stop_rule'] = tables['stop_rule']
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = CampaignConfig.model_validate(stored)
-    assert said(warned) == SWEEP_VOCABULARY_OF_0_6
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-
-
-def test_a_watchdog_table_of_0_6_loads_without_a_watchdog_and_warns_once(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + '\n[plugins.role.watchdog]\ninterval = 600\ntriggers = ["cron", "stopped"]\n')
-    with pytest.warns(
-        PiloopDeprecationWarning, match=r'the watchdog role is removed; delete \[plugins.role.watchdog\]'
-    ) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert len(warned) == 1 and 'watchdog' not in cfg.roles.all()
-
-
-@pytest.mark.parametrize('gone', sorted(REMOVED_SECTIONS))
-def test_a_removed_section_loads_without_it_and_warns(campaign_path: Path, gone: str) -> None:
-    toml = campaign_path / 'piloop.toml'
-    sections = f'[plugins.section]\nuse = ["headline", "{gone}", "runs"]\n\n[plugins.section.{gone}]\n'
-    implementer = f'[plugins.role.implementer]\nsections = ["context", "{gone}", "history"]\n'
-    toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', implementer) + f'\n{sections}')
-    with pytest.warns(PiloopDeprecationWarning, match=f'the {gone} section is removed') as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert len(warned) == 3, 'the use list, the table and the role list'
-    assert SECTIONS.used(cfg.plugins) == ('headline', 'runs')
-    assert cfg.roles.doing_runs()[IMPLEMENTER].sections == ['context', 'history']
 
 
 def test_the_keys_of_research_memory_load_without_it_and_warn_at_their_lines(campaign_path: Path) -> None:
@@ -960,150 +692,29 @@ def test_the_keys_of_research_memory_load_without_it_and_warn_at_their_lines(cam
     assert cfg.roles.doing_runs()[IMPLEMENTER].sections == ['context', 'history']
 
 
-def test_a_campaign_that_0_6_stored_with_a_watchdog_and_the_idle_queue_loads_and_warns(campaign_path: Path) -> None:
-    """The stored copy of ``piloop.toml`` (``campaigns.config``) goes the same validation as the file: no migration."""
-    stored = load_campaign_config(campaign_path).model_dump(mode='json')
-    stored['plugins']['role']['watchdog'] = {'triggers': ['run_failed', 'cron', 'stopped'], 'interval': 1800}
-    stored['plugins']['section']['use'] = [*stored['plugins']['section']['use'], 'idle_queue']
-    stored['plugins']['section']['idle_queue'] = {}
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = CampaignConfig.model_validate(stored)
-    assert sorted(str(w.message).split(':')[0].split(';')[0] for w in warned) == [
-        'the idle_queue section is removed',
-        'the idle_queue section is removed',
-        'the watchdog role is removed',
-    ]
-    assert 'watchdog' not in cfg.roles.all() and 'idle_queue' not in SECTIONS.used(cfg.plugins)
+@pytest.mark.parametrize('name', ['orchestrator', 'Night Shift'])
+def test_a_role_of_your_own_needs_a_role_name_that_signs_no_writes_already(campaign_path: Path, name: str) -> None:
+    with pytest.raises(ConfigError, match=re.escape(f'{name!r} is not a role name')):
+        load_campaign_config(campaign_path, plugins={'role': {name: {'runs': True}}})
 
 
-def test_a_campaign_that_0_5_stored_with_the_yields_section_loads_without_it() -> None:
-    """0.5 dumped every section's table and listed ``yields`` in ``use``: #670 deleted the section."""
-    stored = bare_config('p').model_dump(mode='json')
-    section = stored['plugins'].setdefault('section', {})
-    section['use'], section['yields'] = [*SECTIONS.used(bare_config('p').plugins), 'yields'], {}
-    with pytest.warns(PiloopDeprecationWarning, match='the yields section is removed'):
-        assert 'yields' not in SECTIONS.used(CampaignConfig.model_validate(stored).plugins)
+def test_a_role_of_your_own_that_does_no_runs_is_refused(campaign_path: Path) -> None:
+    with pytest.raises(
+        ConfigError, match=re.escape('a role of your own does runs: set runs = true in [plugins.role.nightly]')
+    ):
+        load_campaign_config(campaign_path, plugins={'role': {'nightly': {'timeout': 60}}})
 
 
-def test_the_low_water_and_stalled_triggers_of_0_6_load_without_them_and_warn(campaign_path: Path) -> None:
+@pytest.mark.parametrize(('was', 'why'), [('submit', ''), ('run_end', ', and run_end is gone')])
+def test_the_scoring_of_0_6_loads_without_it_and_warns_at_its_line(campaign_path: Path, was: str, why: str) -> None:
     toml = campaign_path / 'piloop.toml'
-    text = toml.read_text() + reviewer('triggers = ["run_failed", "stalled", "wet"]')
-    toml.write_text(f'{text}\n[plugins.trigger.wet]\nprovider = "low_water"\nbuffer = 1\n')
+    toml.write_text(toml.read_text().replace('noise_runs = 1', f'noise_runs = 1\nscoring = "{was}"', 1))
     with pytest.warns(PiloopDeprecationWarning) as warned:
         cfg = load_campaign_config(campaign_path)
-    assert sorted(str(w.message).split(':')[0] for w in warned) == [
-        'a sweep of your own is removed',
-        'the low_water trigger is removed with the research role',
-        'the low_water trigger is removed with the research role',
-        'the stalled trigger is removed with the research role',
-    ], 'the wet table, its name in the list, stalled in the list, and the sweep'
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-
-
-def test_a_campaign_that_0_6_stored_with_research_loads_without_it_and_warns(campaign_path: Path) -> None:
-    """The stored copy of ``piloop.toml`` (``campaigns.config``) goes the same validation as the file: no migration."""
-    stored = load_campaign_config(campaign_path).model_dump(mode='json')
-    stored['plugins']['role']['research'] = {'triggers': ['low_water', 'stalled'], 'max_ideas': 3}
-    stored['plugins']['role']['reviewer'] = {'triggers': ['run_failed', 'stalled']}
-    stored['plugins']['trigger'] = {'low_water': {'buffer': 2}}
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = CampaignConfig.model_validate(stored)
-    assert sorted(str(w.message).split(':')[0].split(';')[0] for w in warned) == [
-        'a sweep of your own is removed',
-        'the low_water trigger is removed with the research role',
-        'the research role is removed',
-        'the stalled trigger is removed with the research role',
-    ]
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-
-
-def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    lead = 'triggers = ["run_failed", "leaking_funnel", "leaks"]'
-    text = toml.read_text() + reviewer(lead)
-    tables = '[plugins.trigger.leaks]\nprovider = "leaking_funnel"\n\n[plugins.trigger.leaking_funnel]\nwindow = 3\n'
-    toml.write_text(f'{text}\n{tables}')
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert said(warned).count(OWN_SWEEP) == 1, 'then the sweep goes'
-    assert sorted(w.lineno for w in warned if 'leaking_funnel' in str(w.message)) == [
-        lines.index(lead) + 1,
-        lines.index('[plugins.trigger.leaks]') + 1,
-        lines.index('[plugins.trigger.leaking_funnel]') + 1,
-    ], 'the line of each'
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-
-
-def test_the_keys_that_assigned_ideas_of_0_5_load_without_them_and_warn(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    keys = 'takes = "priority < 3"\nexplore_every = 4\nrecovery_requeues = 1\n'
-    toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', f'[plugins.role.implementer]\n{keys}'))
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning, match='workers claim their ideas now') as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert sorted(w.lineno for w in warned) == sorted(
-        lines.index(line) + 1 for line in ('takes = "priority < 3"', 'explore_every = 4', 'recovery_requeues = 1')
-    ), 'the line of each'
-    assert IMPLEMENTER in cfg.roles.doing_runs()
-
-
-def test_a_track_share_of_0_5_loads_without_it_and_warns(campaign_path: Path) -> None:
-    """``share`` is removed: workers claim any open idea. A table that it leaves empty goes too."""
-    toml = campaign_path / 'piloop.toml'
-    text = toml.read_text()
-    toml.write_text(f'{text}\n[tracks.score]\nshare = 1.0\n')
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning, match=r'\[tracks\] share is removed') as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert [w.lineno for w in warned] == [lines.index('share = 1.0') + 1], 'at its line'
-    assert cfg.tracks == {}, 'the table that it leaves empty goes'
-    toml.write_text(f'{text}\n[tracks.score]\nshare = 1.0\naddendum = "brief.md"\n')
-    with pytest.warns(PiloopDeprecationWarning, match=r'\[tracks\] share is removed'):
-        cfg = load_campaign_config(campaign_path)
-    assert cfg.tracks == {TrackName('score'): TrackConfig(addendum='brief.md')}, 'a table with more keeps the rest'
-
-
-def test_the_seed_trigger_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    lead = 'triggers = ["run_failed", "seed"]'
-    text = toml.read_text() + reviewer(lead)
-    toml.write_text(f'{text}\n[plugins.trigger.seed]\n')
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert said(warned).count(OWN_SWEEP) == 1, 'then the sweep goes'
-    seeds = sorted(w.lineno for w in warned if 'seed trigger' in str(w.message))
-    assert seeds == [lines.index(lead) + 1, lines.index('[plugins.trigger.seed]') + 1]
-    assert list(cfg.roles.all()) == [IMPLEMENTER]
-
-
-def test_the_seeds_and_reviews_of_0_5_load_without_their_keys_and_warn(campaign_path: Path) -> None:
-    """``idle_alert`` and the pack's ``seeds`` go: nothing is a seed."""
-    toml = campaign_path / 'piloop.toml'
-    text = toml.read_text().replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nidle_alert = 60\n')
-    toml.write_text(f'{text}\n[plugins.section]\nuse = ["pack"]\n\n[plugins.section.pack]\nseeds = 5\nideas = 7\n')
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert sorted((w.lineno, str(w.message).partition(';')[0]) for w in warned) == sorted(
-        [
-            (lines.index('idle_alert = 60') + 1, 'an idea waits for no review now, so idle_alert is removed'),
-            (lines.index('seeds = 5') + 1, 'the research pack lists no seeds now'),
-        ]
+    [warning] = warned
+    assert toml.read_text().splitlines()[warning.lineno - 1] == f'scoring = "{was}"'
+    assert str(warning.message) == (
+        f'piloop scores what an implementer submits{why}, so [evaluator] scoring is removed; delete it;'
+        ' removed in piloop 0.8.0'
     )
-    assert SECTIONS.instances(cfg.plugins)['pack'] == Pack(ideas=7)
-
-
-def test_files_and_plan_words_of_a_role_that_does_runs_of_0_5_load_without_them_and_warn(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    text = toml.read_text().replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nfiles = "ideas"\n')
-    toml.write_text(text + '\n[plugins.role.quick]\nruns = true\nplan_words = 80\n')
-    lines = toml.read_text().splitlines()
-    with pytest.warns(PiloopDeprecationWarning, match='of a role that does runs is removed') as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert sorted(w.lineno for w in warned) == [
-        lines.index('files = "ideas"') + 1,
-        lines.index('plan_words = 80') + 1,
-    ], 'the line of each'
-    assert ['files' in r.model_dump() for r in cfg.roles.doing_runs().values()] == [False] * 2
+    assert cfg.evaluator.noise_runs == 1

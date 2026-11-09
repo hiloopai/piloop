@@ -3,7 +3,6 @@ import tests.isolation  # noqa: F401  # first: piloop reads its home from the en
 # isort: split
 import contextlib
 import json
-import os
 import re
 import shutil
 import stat
@@ -54,6 +53,7 @@ from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
+from piloop.plugins.campaign_type.kit.evaluation import submissions
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, Score, run_evaluate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -177,7 +177,7 @@ direction = "lower"
 
 [evaluator]  # one evaluation confirms: a test of the noise sets its own
 noise_runs = 1
-{scoring}
+
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"
@@ -214,18 +214,6 @@ def write_script(path: Path, body: str) -> Path:
     return path
 
 
-SCORING = 'PILOOP_TEST_SCORING'
-"""The variable that ``write_toml`` reads ``[evaluator] scoring`` from: ``run_end`` in a test marked ``run_end``."""
-
-
-@pytest.fixture(autouse=True)
-def _run_end_scoring(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A test marked ``run_end`` scores every version after its run ends, as 0.5 did: such a test goes, or scores what
-    is submitted, when ``Scoring.RUN_END`` goes. Each other test's campaign scores what its worker submits."""
-    if request.node.get_closest_marker('run_end'):
-        monkeypatch.setenv(SCORING, 'run_end')
-
-
 def write_toml(
     campaign: Path,
     harness_body: str,
@@ -240,7 +228,6 @@ def write_toml(
         implementer_timeout=implementer_timeout,
         max_implementers=max_implementers,
         script=script,
-        scoring=f'scoring = "{scoring}"\n' if (scoring := os.environ.get(SCORING)) else '',
     )
     if AUDITOR in ROLES.providers():
         toml += AUDITOR_TOML.format(timeout=AGENT_TIMEOUT)
@@ -925,6 +912,64 @@ wait returns as soon as nothing is in flight."""
 def campaigns_of(scheduler: Scheduler) -> Campaigns:
     """The campaigns' pass of ``scheduler``: the campaign type capability's machinery."""
     return next(each for each in scheduler.contributions.lifecycles if isinstance(each, Campaigns))
+
+
+def score_waiting(scheduler: Scheduler, db: Database) -> None:
+    """Start the scoring of each submission that waits, and each due remeasure, as a pass of the daemon does."""
+    passes = campaigns_of(scheduler)
+    with db.session() as s:
+        for campaign in s.scalars(select(Campaign)).all():
+            passes._planner(campaign).remeasure(s, campaign)
+
+
+def settle(scheduler: Scheduler, db: Database, timeout: float = SETTLE) -> None:
+    """Wait for the threads in flight, and score each submission that waits meanwhile, as the daemon's pass does.
+
+    A run waits for the scores of its submissions (``RunController._settle``), which only a pass of the campaigns
+    starts (``Planner.remeasure``): ``Scheduler.wait`` alone runs no pass. This one starts no run.
+
+    Raises:
+        TimeoutError: some are still in flight after ``timeout`` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        score_waiting(scheduler, db)
+        try:
+            scheduler.wait(min(0.05, max(deadline - time.monotonic(), 0)))
+            return
+        except TimeoutError:
+            if time.monotonic() >= deadline:
+                raise
+
+
+@contextmanager
+def scoring(controller: RunController, db: Database) -> Generator[None]:
+    """Score each submission that waits on a thread of its own, as the daemon's pass does (``Planner.remeasure``).
+
+    ``RunController.execute`` returns once the scores of its run's submissions are in, so a test that runs a worker
+    that submits runs it inside this. A held evaluation holds back no other submission's request.
+    """
+    done = threading.Event()
+    threads: dict[int, threading.Thread] = {}
+
+    def score() -> None:
+        while not done.wait(0.02):
+            with db.session() as s:
+                waiting = [c.id for p in s.scalars(select(Campaign)).all() for c in submissions.waiting(s, p)]
+            for candidate in waiting:
+                if candidate not in threads or not threads[candidate].is_alive():
+                    threads[candidate] = threading.Thread(target=controller.score_submission, args=(candidate,))
+                    threads[candidate].start()
+
+    follower = threading.Thread(target=score, name='scoring')
+    follower.start()
+    try:
+        yield
+    finally:
+        done.set()
+        follower.join(SETTLE)
+        for thread in threads.values():
+            thread.join(SETTLE)
 
 
 def claim(db: Database, run_id: RunId, idea_id: IdeaId) -> None:

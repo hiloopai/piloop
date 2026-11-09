@@ -34,7 +34,17 @@ from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
-from tests.conftest import AUDITOR, END_RUN, PLUGIN, SETTLE, ScriptRuntime, install_plugins, run_all, write_toml
+from tests.conftest import (
+    AUDITOR,
+    END_RUN,
+    PLUGIN,
+    SETTLE,
+    ScriptRuntime,
+    install_plugins,
+    run_all,
+    settle,
+    write_toml,
+)
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_auditor, set_config
 
 COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
@@ -182,7 +192,6 @@ HELD = 'nothing launches until you raise it and run piloop init'
 """How the escalation of ``limits`` at a limit of ``hold_at`` ends."""
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.usefixtures('auditor')
 def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised(
@@ -218,7 +227,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     assert (kind, priority) == ('escalation', 0)
     assert body.endswith(f'Details:\nStop rule limits: spend reached its hold_at of 300: {HELD}')
     hold.unlink()
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     with db.session() as s:
         assert [(r.idea_id, r.status) for r in s.scalars(select(Run))] == [(first, RunStatus.SUCCEEDED)], (
             'what ran finished and was scored; nothing else was queued'
@@ -241,7 +250,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
         sync(s, s.get_one(Campaign, campaign.id))  # This is what `piloop init` does.
         s.commit()
     assert len(run_all(scheduler)) == 2, 'the limit raised: the auditor and the next run launch'
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
 
 
 def test_a_source_that_a_sync_adds_is_read_on_the_next_turn_without_a_restart(

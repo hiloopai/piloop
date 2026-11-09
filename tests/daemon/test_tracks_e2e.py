@@ -23,20 +23,21 @@ from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.settings import Settings
 from tests.conftest import (
-    SETTLE,
     ScriptRuntime,
     factory,
     queued,
     register,
     run_all,
+    score_waiting,
     serving_api,
+    settle,
     workers_of,
     write_script,
 )
 
 TOML = """
 name = "tracks"
-evaluate = ["sh", "-c", "printf '{{\\"metrics\\": {{\\"accuracy\\": %s, \\"cost\\": %s}}}}\\n' $(wc -l < acc.txt) $(wc -l < cost.txt) >> \\"$PILOOP_RESULT_FILE\\""]
+evaluate = ["sh", "-c", "printf '{{\\"status\\": \\"ok\\", \\"score\\": %s, \\"direction\\": \\"higher\\", \\"metrics\\": {{\\"cost\\": %s}}}}\\n' $(wc -l < acc.txt) $(wc -l < cost.txt) >> \\"$PILOOP_RESULT_FILE\\""]
 evaluate_timeout = 30
 
 [plugins.runtime]
@@ -66,7 +67,6 @@ margin = 1
 floor = 5
 
 [evaluator]
-scoring = "run_end"
 noise_runs = 1
 
 [plugins.harness.script]
@@ -84,11 +84,14 @@ case "$title" in
     while [ ! -e {go} ]; do sleep 0.05; done
     echo a >> acc.txt; git commit -qam "slow accuracy" ;;
   *"idea: heavy accuracy"*) echo a >> acc.txt; printf 'c\\nc\\nc\\nc\\n' >> cost.txt; git commit -qam "heavy accuracy" ;;
+  *) exit 0 ;;
 esac
+{piloop} submit > /dev/null
 {piloop} run end submitted
 """
 """Edits by the title of the idea that its run claimed: ``slow accuracy`` waits for the test's go file, so the cost
-candidate is scored first. A run that claimed nothing saves nothing. Each ends its run as submitted."""
+candidate is scored first. Each submits its commit and ends its run as submitted. A run that claimed nothing saves
+nothing, and exits: it gave up."""
 
 
 def test_two_tracks_each_get_a_best_and_one_past_the_other_tracks_floor_is_never_best(tmp_path: Path) -> None:
@@ -105,7 +108,7 @@ def test_two_tracks_each_get_a_best_and_one_past_the_other_tracks_floor_is_never
     repo.git.commit('-qm', 'baseline')
     runtime = ScriptRuntime()
     daemon = Daemon(Settings(home=tmp_path / 'home'))
-    with serving_api(Settings(home=tmp_path / 'home')):  # each worker's `piloop run end` reaches it
+    with serving_api(Settings(home=tmp_path / 'home')):  # each worker's `piloop submit` and `run end` reach it
         workers_of(daemon.controller).worker.runtime_factory = factory(runtime)
         campaign = register(daemon.db, path)
         with daemon.db.session() as s:
@@ -123,9 +126,10 @@ def test_two_tracks_each_get_a_best_and_one_past_the_other_tracks_floor_is_never
         deadline = time.monotonic() + 120  # a macOS runner is slow
         while not _scored(daemon):
             assert time.monotonic() < deadline, 'the cost candidate was never scored'
+            score_waiting(daemon.scheduler, daemon.db)
             time.sleep(0.05)
         go.touch()
-        daemon.scheduler.wait(SETTLE)
+        settle(daemon.scheduler, daemon.db)
 
         with daemon.db.session() as s:
             p = s.get_one(Campaign, campaign.id)
@@ -160,7 +164,7 @@ def test_two_tracks_each_get_a_best_and_one_past_the_other_tracks_floor_is_never
 
         assert len(queued(daemon.db, daemon.scheduler, campaign.id, heavy_id)) == 2, 'two free slots, one idea'
         assert len(run_all(daemon.scheduler)) == 2
-        daemon.scheduler.wait(SETTLE)
+        settle(daemon.scheduler, daemon.db)
         with daemon.db.session() as s:
             p = s.get_one(Campaign, campaign.id)
             heavy = s.scalars(select(Candidate).order_by(Candidate.id.desc()).limit(1)).one()

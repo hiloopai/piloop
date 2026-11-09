@@ -16,7 +16,6 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
-from piloop import deprecated
 from piloop.plugins.escalation.contract import Choice, Escalated, EscalationPolicy, EscalationView, Now, ToHuman
 
 SENTENCE = re.compile(r'(?<=[.!?])\s+')
@@ -162,18 +161,6 @@ class Structured(EscalationPolicy):
 
     def reach(self, item: Escalated, now: datetime) -> ToHuman:
         return Now()
-
-    @model_validator(mode='before')
-    @classmethod
-    @deprecated.until('0.7.0', 'no agent waits for an escalation in 0.6: delete Structured._grace')
-    def _grace(cls, data: object) -> object:
-        """Drop ``grace``, with a warning: of a file, or of a stored config. Every escalation reaches a human at once."""
-        if not isinstance(data, dict) or 'grace' not in data:
-            return data
-        deprecated.dropped(
-            'every escalation reaches a human at once now: delete grace from [plugins.escalation]', removed_in='0.7.0'
-        )
-        return {k: v for k, v in data.items() if k != 'grace'}
 
     def view(self, item: Escalated) -> EscalationView:
         return self._view(Form.model_validate(item.form))

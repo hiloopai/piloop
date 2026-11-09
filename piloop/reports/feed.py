@@ -278,12 +278,9 @@ def inbox_view(
                 author=c.author,
                 created=iso(c.created_at),
                 body=c.body,
-                acks=acks,
-                acked_at=acked_at,
-                acked_by=acked_by,
+                acks=inbox.ack_views(c),
             )
             for c, p in inbox.waiting_for(s, me.party, campaign_id=campaign_id, kinds=kinds, acked=acked)
-            for acks, acked_at, acked_by in [inbox.ack_views(c)]
         ],
     )
 

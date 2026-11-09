@@ -34,7 +34,7 @@ def test_each_recent_candidate_says_where_it_stands_in_the_pool(db: Database, ca
         {'name': 'score', 'direction': 'higher', 'role': 'primary'},
         {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 6},
     ]
-    cfg = reconfigured(campaign.config, metrics=metrics, evaluator={'scoring': 'run_end', 'noise_runs': 2})
+    cfg = reconfigured(campaign.config, metrics=metrics, evaluator={'noise_runs': 2})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         p.config = cfg

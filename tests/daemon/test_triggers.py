@@ -49,14 +49,12 @@ def configure(
     db: Database,
     campaign: Campaign,
     harness_body: str = HARNESS_NOOP,
-    *,
-    trigger: dict[str, object] | None = None,
     **roles: dict[str, object],
 ) -> None:
-    """Rewrite the campaign's harness script, role settings and ``trigger`` tables (merged over the test toml)."""
+    """Rewrite the campaign's harness script and role settings (merged over the test toml)."""
     write_toml(Path(campaign.path), harness_body)
     with db.session() as s:
-        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles, 'trigger': trigger or {}})
+        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles})
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
 

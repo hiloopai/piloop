@@ -15,19 +15,6 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
 from piloop.plugins.metric import Direction
 
 
-class Scoring(StrEnum):
-    """Which versions of a run piloop scores."""
-
-    SUBMIT = 'submit'
-    """Those that the implementer submits while it works (``piloop submit``), each as it comes. The others are
-    ``skipped``."""
-    RUN_END = 'run_end'
-    """Every version, after the run ends: 0.5's scoring, which the upgrade pins on the campaigns that 0.5 stored.
-
-    It goes with the other 0.5 bridges: its ``deprecated.until`` marker is in ``RunController._score``.
-    """
-
-
 class EvaluatorConfig(BaseModel):
     """``[evaluator]``: how the campaign's versions are scored, beside ``evaluate``, the command that scores one."""
 
@@ -42,9 +29,6 @@ class EvaluatorConfig(BaseModel):
     primary. piloop runs it on each candidate that it confirms, and on the baseline. With the default best rule, a
     candidate may be best only when it beats the baseline there too. Keep its data and its scorer out of the repo, in the home or on the
     evaluator's machines, so that no implementer reads them. Example: ``["python3", "/srv/sealed/score.py"]``."""
-    scoring: Scoring = Scoring.SUBMIT
-    """Which versions of a run piloop scores: ``submit``, those that the implementer submits; ``run_end``, every one,
-    after the run ends."""
     submissions: int | None = Field(default=None, ge=1)
     """Optional. The most versions that one run may submit (``piloop submit``). Not set: no cap."""
     noise_runs: int = Field(default=3, ge=1)

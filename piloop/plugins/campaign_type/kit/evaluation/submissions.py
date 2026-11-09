@@ -20,7 +20,6 @@ from piloop.ids import CommentId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.campaign_type.kit.evaluation.ids import Measured
 from piloop.plugins.campaign_type.kit.evaluation.measure import remeasure_asked, request_remeasure, status
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
@@ -126,13 +125,11 @@ def refuse(s: Session, run: Run) -> None:
     """Refuse a new submission of ``run`` before anything of it is taken in.
 
     Raises:
-        SubmitRefused: the campaign scores its runs after they end, the run is not running or has claimed no idea, or
-            it used the submissions that the campaign caps it to.
+        SubmitRefused: the run is not running or has claimed no idea, or it used the submissions that the campaign
+            caps it to.
     """
     campaign = run.campaign
     cfg = campaign.config.evaluator
-    if cfg.scoring is not Scoring.SUBMIT:
-        raise SubmitRefused(f'campaign {campaign.name} scores every commit after its run ends: commit, and end the run')
     if run.status is not RunStatus.RUNNING:
         raise SubmitRefused(f'run#{run.id} is {run.status}, not running')
     if run.idea_id is None:  # scored on no track: its version would stand for no idea

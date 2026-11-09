@@ -188,12 +188,12 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
     )
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('api')
 def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_signed_as_itself(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop idea claim``, ``piloop idea propose`` and ``piloop run end`` act for the caller's run, signed by it."""
+    """``piloop idea claim``, ``piloop idea propose``, ``piloop submit`` and ``piloop run end`` act for the caller's run,
+    signed by it. A run ends as submitted only once it submitted a version."""
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'try a cache', '--hypothesis', 'decoding repeats', '--plan', 'memoize decode()'])
     db = Database(common.settings.database_url, actor=System.DAEMON)
@@ -230,9 +230,16 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
         assert s.get_one(Idea, 2).created_by == 'implementer#2'
         s.execute(update(AgentSession).values(state=AgentSessionState.RUNNING))
         s.commit()
+    with pytest.raises(SystemExit, match='run#1 submitted nothing: `piloop submit` first'):
+        as_('implementer#1', 'run', 'end', 'submitted')
+    checkout = worktree(db_campaign(db), tmp_path)
+    commit(checkout, 'base\na cached line\n')
+    monkeypatch.chdir(checkout)
+    as_('implementer#1', 'submit')
     as_('implementer#1', 'run', 'end', 'submitted')
     as_('implementer#2', 'run', 'end', 'gave_up', '--reason', 'the cache never warms')
     assert out().splitlines() == [
+        'candidate#2 is queued: where it stands comes as a [piloop] message',
         'run#1 ended as submitted: the daemon ends this session in a moment',
         'run#2 ended as gave_up: the daemon ends this session in a moment',
     ]
@@ -553,7 +560,7 @@ def test_init_example(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> N
     template = tmp_path / 'templates' / 'demo'
     template.mkdir(parents=True)
     (template / 'piloop.toml').write_text(
-        'name = "demo"\nevaluate = ["python3", "-c", "import json, os; open(os.environ[\'PILOOP_RESULT_FILE\'], \'a\').write(json.dumps({\'metrics\': {\'score\': 3}}) + chr(10))"]\n'
+        "name = \"demo\"\nevaluate = [\"python3\", \"-c\", \"import json, os; open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'status': 'ok', 'score': 3, 'direction': 'higher'}) + chr(10))\"]\n"
         '[[metrics]]\nname = "score"\ndirection = "higher"\nrole = "primary"\n[plugins.harness.claude]\nmodel = "m"\n[plugins.harness.codex]\nmodel = "m"\n'
     )
     monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
@@ -575,7 +582,7 @@ def test_init_names_a_ratio_primary_in_the_baseline_line(tmp_path: Path, out, mo
     template = tmp_path / 'templates' / 'ratio'
     template.mkdir(parents=True)
     (template / 'piloop.toml').write_text(
-        "name = \"ratio\"\nevaluate = [\"python3\", \"-c\", \"import json, os; open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'metrics': {'tokens': 512, 'seconds': 2}}) + chr(10))\"]\n"
+        "name = \"ratio\"\nevaluate = [\"python3\", \"-c\", \"import json, os; open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'status': 'ok', 'score': 256, 'direction': 'higher', 'metrics': {'tokens': 512, 'seconds': 2}}) + chr(10))\"]\n"
         '[[metrics]]\nname = "tokens_per_s"\ndirection = "higher"\nrole = "primary"\n'
         'ratio = { numerator = "tokens", denominator = "seconds" }\n'
         '[[metrics]]\nname = "tokens"\ndirection = "higher"\n'
@@ -584,7 +591,7 @@ def test_init_names_a_ratio_primary_in_the_baseline_line(tmp_path: Path, out, mo
     monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
     monkeypatch.setattr(campaign_cli, 'EXAMPLE_DATA', {'ratio': {}})
     run_cli(['init', '--example', 'ratio', str(tmp_path / 'r')])
-    assert 'baseline candidate#1: tokens 512, seconds 2, tokens_per_s 256\n' in out()
+    assert 'baseline candidate#1: tokens_per_s 256, tokens 512, seconds 2\n' in out()
 
 
 @pytest.mark.usefixtures('api')
@@ -2722,7 +2729,7 @@ def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_score(
     out()
     with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db:
         campaign = db_campaign(db)
-        set_config(db, campaign, evaluator={'scoring': 'submit'})
+        set_config(db, campaign, evaluator={})
         run_id = running(db, campaign)
         with db.session() as s:
             session = s.scalars(select(AgentSession.id).where(working_on(run_id))).one()
@@ -2742,7 +2749,7 @@ def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_score(
         s.flush()
         record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate.id)
         s.commit()
-    run_cli(['submit', revision, '--wait', '5'])
+    run_cli(['submit', revision])
     assert out().strip() == (
         'candidate#2: score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'
     ), 'its own submission again: where it stands, and no submission spent'

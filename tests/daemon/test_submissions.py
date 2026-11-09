@@ -79,8 +79,8 @@ from tests.daemon.test_evaluation_queue import (
 from tests.daemon.test_run_controller import controller, make_run, run_row, scored_elsewhere, set_config
 from tests.daemon.test_scheduler import make_scheduler
 
-SUBMIT = {'scoring': 'submit', 'noise_runs': 1}
-CONFIRM = {'scoring': 'submit', 'noise_runs': 3}
+SUBMIT = {'noise_runs': 1}
+CONFIRM = {'noise_runs': 3}
 """A first score that beats the best's is evaluated until it has 3 evaluations, and scored on the sealed split."""
 
 
@@ -208,14 +208,10 @@ def test_a_run_that_claimed_no_idea_submits_nothing(
         submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
 
 
-def test_a_campaign_that_scores_after_the_run_takes_no_submission(
+def test_a_run_that_is_not_running_takes_no_submission(
     db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
 ) -> None:
     run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
-    set_config(db, campaign, evaluator={'scoring': 'run_end'})
-    with pytest.raises(SubmitRefused, match='scores every commit after its run ends'):
-        submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
-    set_config(db, campaign, evaluator=SUBMIT)
     with db.session() as s:
         s.get_one(Run, run_id).status = RunStatus.QUEUED
         s.commit()
@@ -233,7 +229,7 @@ def test_at_the_end_of_a_run_its_versions_that_it_did_not_submit_are_skipped_and
     later = commit(checkout, 'base\na\nb\n')
     with closing(Git().open(Path(campaign.path))) as repo:
         versions = [repo.version(sent), repo.version(later)]
-        last = ex._score(run_id, campaign.id, repo, versions, tmp_path / 'logs')
+        last = ex._unsubmitted(run_id, campaign.id, repo, versions)
     with db.session() as s:
         [one, two] = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
         assert (one.origin, two.origin, two.measurements) == (Origin.RUN, Origin.SKIPPED, [])
@@ -621,10 +617,6 @@ def test_a_run_that_submitted_nothing_ends_as_given_up_not_as_submitted(
     tried = running(db, campaign, 'tried')
     submitted(db, campaign, tried, commit(worktree(campaign, tmp_path), 'base\na\n'))
     ending(db, tried, RunEnding.SUBMITTED)
-    set_config(db, campaign, evaluator={'scoring': 'run_end'})
-    ending(
-        db, running(db, campaign, 'after the run'), RunEnding.SUBMITTED
-    )  # every commit is scored after the run: nothing to submit
 
 
 def agent_running(db: Database, run_id: RunId) -> None:

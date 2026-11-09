@@ -1,7 +1,6 @@
 """``git``: the default vcs provider. A version is a commit of the campaign's git repository, and its revision the SHA.
 
-Agents work in detached worktrees and save their work as commits, with trailers for what they ask of piloop
-(``Piloop-Eval: skip``, ``Piloop-Note``). Commits travel between a worker's replica and the repo of record as git bundles
+Agents work in detached worktrees and save their work as commits. Commits travel between a worker's replica and the repo of record as git bundles
 in the CAS (``bundles``). Refs under ``refs/piloop/`` keep the commits that piloop needs from garbage collection, so
 ``git show <sha>`` keeps working.
 """
@@ -40,10 +39,6 @@ from piloop.plugins.vcs.git import bundles, commands as git
 
 NEEDED = (2, 40)
 """The oldest git that the provider works with: it merges by tree with ``git merge-tree --merge-base``, new in 2.40."""
-SKIP = 'Piloop-Eval'
-"""The trailer of a commit not to measure: ``Piloop-Eval: skip``."""
-NOTE = 'Piloop-Note'
-"""The trailer of a note on a commit, applied when it is judged."""
 RECOVERED = 'Piloop-Recovered'
 """The trailer of the commit that ``capture`` makes of what an agent left uncommitted, with its subject:
 ``Piloop-Recovered: run#12``."""
@@ -94,8 +89,6 @@ class GitRepository(Repository):
             revision=Revision(sha),
             tree=git.tree_sha(self.repo, sha),
             summary=git.subject_line(self.repo, sha),
-            skip=any(value.lower() == 'skip' for value in git.trailers(text, SKIP)),
-            notes=tuple(git.trailers(text, NOTE)),
             recovered=bool(git.trailers(text, RECOVERED)),
         )
 

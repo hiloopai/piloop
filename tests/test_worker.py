@@ -96,6 +96,7 @@ from tests.conftest import (
     no_ship,
     no_take,
     role_timeout,
+    scoring,
     serving,
     still,
     timed,
@@ -794,7 +795,6 @@ def test_a_kill_that_fails_is_tried_again_on_the_next_heartbeat(
     assert len(runtime.killed) >= 2
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_worker_killed_after_its_agent_ended_but_before_it_reported_reports_on_its_restart(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
@@ -822,7 +822,8 @@ def test_a_worker_killed_after_its_agent_ended_but_before_it_reported_reports_on
     workers_of(second).worker.start()
     with db.session() as s:
         agent_session_id = s.scalars(select(AgentSession.id)).one()
-    second.reattach(run_id, agent_session_id)
+    with scoring(second, db):
+        second.reattach(run_id, agent_session_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
         assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
@@ -963,7 +964,6 @@ def test_an_evaluator_whose_start_is_refused_by_the_fence_is_killed_at_once(
     assert not measuring.is_alive()
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_report_that_cannot_be_sent_keeps_the_worktree_and_a_restarted_worker_scores_the_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
@@ -1001,7 +1001,8 @@ def test_a_report_that_cannot_be_sent_keeps_the_worktree_and_a_restarted_worker_
     workers_of(second).worker.start()
     with db.session() as s:
         agent_session_id = s.scalars(select(AgentSession.id)).one()
-    second.reattach(run_id, agent_session_id)
+    with scoring(second, db):
+        second.reattach(run_id, agent_session_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
         assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)

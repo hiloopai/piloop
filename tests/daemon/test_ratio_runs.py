@@ -11,7 +11,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.metric import number
-from tests.conftest import ScriptRuntime, baseline
+from tests.conftest import ScriptRuntime, baseline, scoring
 from tests.daemon.test_evaluation_queue import run_candidates
 from tests.daemon.test_run_controller import controller, execute, make_run, set_config, told_of
 
@@ -21,8 +21,8 @@ import json, os
 lines = len(open('solve.txt').read().splitlines())
 solved = {{f't{{i}}': float(i < 10 * lines) for i in range({TASKS})}}
 cost = {{f't{{i}}': 0.5 * lines * lines for i in range({TASKS})}}
-result = {{'metrics': {{'solved': sum(solved.values()), 'cost_usd': sum(cost.values())}},
-          'units': {{'solved': solved, 'cost_usd': cost}}}}
+result = {{'status': 'ok', 'score': sum(solved.values()), 'direction': 'higher',
+          'metrics': {{'cost_usd': sum(cost.values())}}, 'units': {{'solved': solved, 'cost_usd': cost}}}}
 open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps(result) + '\\n')
 """
 """Each line of solve.txt solves 10 more of 40 tasks, and costs more per task than the one before."""
@@ -39,7 +39,7 @@ METRICS = [
 ]
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_a_ratio_guardrail_is_computed_from_its_parts_and_keeps_a_costlier_candidate_from_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -47,7 +47,8 @@ def test_a_ratio_guardrail_is_computed_from_its_parts_and_keeps_a_costlier_candi
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(baseline(db, campaign.id).id)
     run_id = make_run(db, campaign, track='solved')
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [c] = run_candidates(db, run_id)
     with db.session() as s:
         candidate = s.get_one(Candidate, c.id)
@@ -60,6 +61,7 @@ def test_a_ratio_guardrail_is_computed_from_its_parts_and_keeps_a_costlier_candi
         )
 
 
+@pytest.mark.usefixtures('submitting')
 def test_a_ratio_primary_over_several_evaluations_has_one_value_in_its_score_and_in_status(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -71,7 +73,9 @@ lines = len(open('solve.txt').read().splitlines())
 count = pathlib.Path({str(tmp_path)!r}) / f'count{{lines}}'
 k = int(count.read_text()) if count.exists() else 0
 count.write_text(str(k + 1))
-result = {{'metrics': {{'tokens': 512.0, 'seconds': [1.0, 2.0, 6.0][k % 3] * lines}}}}
+seconds = [1.0, 2.0, 6.0][k % 3] * lines
+result = {{'status': 'ok', 'score': 512.0 / seconds, 'direction': 'higher',
+          'metrics': {{'tokens': 512.0, 'seconds': seconds}}}}
 open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps(result) + '\\n')
 """
     throughput = {
@@ -81,12 +85,13 @@ open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps(result) + '\\n')
         'ratio': {'numerator': 'tokens', 'denominator': 'seconds'},
     }
     parts = [{'name': 'tokens', 'direction': 'higher'}, {'name': 'seconds', 'direction': 'lower'}]
-    evaluator = {'scoring': 'run_end', 'noise_runs': 3}
+    evaluator = {'noise_runs': 3}
     set_config(db, campaign, evaluate=['python3', '-c', noisy], metrics=[throughput, *parts], evaluator=evaluator)
     ex = controller(db, runtime, tmp_path)
     ex.remeasure(baseline(db, campaign.id).id)
     run_id = make_run(db, campaign, track='tokens_per_s')
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     [c] = run_candidates(db, run_id)
     with db.session() as s:
         candidate = s.get_one(Candidate, c.id)

@@ -387,7 +387,6 @@ def test_a_shipped_call_keeps_the_words_of_the_agents_call(tmp_path: Path) -> No
     sent = ['--blob', str(blob)]
     assert relay.shipped(JOB, ['submit', '--help']) == ['submit', head, *sent, '--help']
     assert relay.shipped(JOB, ['submit', '-h']) == ['submit', head, *sent, '-h']
-    assert relay.shipped(JOB, ['submit', 'abc', '--wait', '5']) == ['submit', 'abc', *sent, '--wait', '5']
     assert relay.shipped(JOB, ['sql', '--help']) == ['sql', '--help'], 'a command that ships nothing is as it came'
 
 

@@ -624,7 +624,6 @@ def test_a_sealed_split_arm_gets_dev_and_its_own_sealed_command():
     assert get(config, 'evaluate') == [*nice, 'uv', 'run', 'python', 'evaluate.py']
     sealed = get(config, 'evaluator', 'sealed')
     assert isinstance(sealed, list) and sealed[:5] == [*nice, 'python3', '/opt/evals/campaign_sealed.py']
-    assert get(config, 'evaluator', 'scoring') == 'submit'
 
 
 def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

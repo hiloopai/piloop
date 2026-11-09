@@ -15,10 +15,10 @@ class Origin(StrEnum):
     """Where a candidate comes from.
 
     ``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a
-    starting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or
-    where a daemon stop cut its run, never declared ready, so never measured; a new run of the idea starts from it.
-    ``skipped``: a commit marked ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the
-    mark is measured like a new one, and becomes ``run``.
+    starting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted where a
+    daemon stop cut its run, never measured; a new run of the idea starts from it.
+    ``skipped``: a commit that its run did not submit, never measured. A ``recovered`` or ``skipped`` tree that a later
+    submission reaches is measured like a new one, and becomes ``run``.
     """
 
     BASELINE = 'baseline'

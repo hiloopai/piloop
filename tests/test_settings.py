@@ -11,11 +11,9 @@ from piloop.actor import Agent, System
 from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
-from piloop.plugins.host import campaign_defaults
 from piloop.settings import (
     UNDER_TEST_ENV,
     AgentSettings,
-    EvaluationSettings,
     Settings,
     StorageSettings,
     TracingSettings,
@@ -145,29 +143,6 @@ def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and
     assert CampaignAgents().over(home.agents) == home.agents, "unset: the home's"
 
 
-def test_the_relay_s_wait_and_deadline_of_config_toml_are_dropped_with_a_warning(tmp_path: Path) -> None:
-    """``piloop submit`` waits for nothing, so the relay calls it once: its two keys have nothing to set."""
-    (tmp_path / 'config.toml').write_text('[agents]\nrelay_wait = "PT30S"\nrelay_deadline = "PT1H"\n')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        '`piloop submit` returns at once, so [agents] relay_wait is removed; delete it',
-        '`piloop submit` returns at once, so [agents] relay_deadline is removed; delete it',
-    ]
-    assert home.agents == AgentSettings()
-
-
-def test_wake_after_tries_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
-    """No agent wakes on the retries of an evaluation: the key has nothing to set."""
-    (tmp_path / 'config.toml').write_text('[evaluation]\nwake_after_tries = 2\nstop_after_tries = 4\n')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        'no agent wakes on the retries of an evaluation now, so [evaluation] wake_after_tries is removed; delete it'
-    ]
-    assert home.evaluation == EvaluationSettings(stop_after_tries=4)
-
-
 def test_wake_budget_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
     (tmp_path / 'config.toml').write_text('[agents]\nwake_budget = 800\nattach_lines = 10\n')
     with pytest.warns(PiloopDeprecationWarning) as warned:
@@ -176,13 +151,3 @@ def test_wake_budget_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) ->
         '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
     ]
     assert home.agents == AgentSettings(attach_lines=10)
-
-
-def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(tmp_path: Path) -> None:
-    (tmp_path / 'config.toml').write_text('[plugins.role.implementer]\nfinding_grace = 5\n')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        '`plugins.role.<name>.finding_grace` is deprecated; write `plugins.role.<name>.end_grace`'
-    ]
-    assert campaign_defaults(home.plugins) == {'role': {'implementer': {'end_grace': 5}}}

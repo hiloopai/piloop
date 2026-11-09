@@ -44,7 +44,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import Git
 from tests.conftest import EVALUATE, ScriptRuntime, bare_config, baseline, factory, reports, serving
 
-SUBMIT = {'scoring': 'submit', 'noise_runs': 3}
+SUBMIT = {'noise_runs': 3}
 """Each candidate whose first score beats the best's is evaluated until it has 3 evaluations."""
 
 
@@ -198,7 +198,7 @@ def test_two_candidates_confirmed_in_either_order_give_the_same_best(
     db: Database, campaign: Campaign, order: tuple[str, str]
 ) -> None:
     """No order of the evaluations decides the best: it is the best mean among those that may be best."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 2})
+    configure(db, campaign, evaluator={'noise_runs': 2})
     means = {'a': [5.0, 5.0], 'b': [4.0, 6.0, 4.0]}
     ids: dict[str, CandidateId] = {}
     first = baseline(db, campaign.id)
@@ -266,7 +266,7 @@ def test_a_crashed_sealed_evaluation_is_the_split_s_answer_so_what_waits_behind_
 
     ``due`` serves its first item each pass, so a candidate that stayed due for ever kept the reference from its turn.
     """
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': ['sh', '-c', 'exit 1']})
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': ['sh', '-c', 'exit 1']})
     ex = controller(db, runtime, tmp_path)
     better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
     ex.score_submission(better)
@@ -311,7 +311,7 @@ def test_a_claim_with_a_base_starts_the_run_there_and_its_submission_stands_agai
 ) -> None:
     """A run claims an idea with the base of a crash: its submission is that crash's child. A second claim, or a
     base after the claim, is refused."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    configure(db, campaign, evaluator={'noise_runs': 1})
     ex = controller(db, runtime, tmp_path)
     first = running(db, campaign)
     better = submitted(db, campaign, first, commit(checkout(campaign, tmp_path), 'base\na\nb\nc\n'))
@@ -364,7 +364,7 @@ def test_the_brief_lists_the_best_and_the_best_of_three_other_lines_one_per_line
     db: Database, campaign: Campaign
 ) -> None:
     """Five lines from the baseline. The best's own ancestor and a child of another line are left out."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    configure(db, campaign, evaluator={'noise_runs': 1})
     first = baseline(db, campaign.id).id
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
@@ -408,14 +408,12 @@ def test_after_an_evaluator_change_runs_wait_for_the_baseline_and_the_old_best_a
 ) -> None:
     """No candidate has a score under a new evaluator. The daemon measures the baseline and the best of the old one,
     runs wait meanwhile, and the old best is the best again once measured."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    configure(db, campaign, evaluator={'noise_runs': 1})
     ex = controller(db, runtime, tmp_path)
     better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
     ex.score_submission(better)
     assert pool(db, campaign).best() == better
-    configure(
-        db, campaign, evaluate=[*EVALUATE[:2], EVALUATE[2] + ' # v2'], evaluator={'scoring': 'submit', 'noise_runs': 1}
-    )
+    configure(db, campaign, evaluate=[*EVALUATE[:2], EVALUATE[2] + ' # v2'], evaluator={'noise_runs': 1})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         current_evaluator(s, p, p.config)
@@ -455,12 +453,12 @@ def test_one_evaluation_confirms_but_the_sealed_split_still_scores_what_beats_th
 ) -> None:
     """With ``noise_runs = 1`` a candidate is confirmed by its first evaluation: the sealed split scores it all the
     same. A new sealed command has no score of it: the daemon scores the would-be best there, and only there."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': lines('none')})
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('none')})
     ex = controller(db, runtime, tmp_path)
     better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
     ex.score_submission(better)
     assert evaluations(db, campaign, better) == (1, 1) and pool(db, campaign).best() == better
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': lines('other')})
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('other')})
     assert pool(db, campaign).best() == baseline(db, campaign.id).id, 'the new sealed split has scored it not'
     with db.session() as s:
         assert [c.id for c in due(s, s.get_one(Campaign, campaign.id))] == [better]
@@ -472,7 +470,7 @@ def test_one_evaluation_confirms_but_the_sealed_split_still_scores_what_beats_th
 def test_a_submission_whose_evaluation_is_cancelled_waits_for_no_score(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    configure(db, campaign, evaluator={'noise_runs': 1})
     run_id = running(db, campaign)
     made = submitted(db, campaign, run_id, commit(checkout(campaign, tmp_path), 'base\na\n'))
     with db.session() as s:
@@ -544,7 +542,7 @@ def test_a_cancelled_confirmation_of_the_baseline_stands_until_someone_asks_agai
 
 
 def test_a_cancelled_sealed_evaluation_stands(db: Database, campaign: Campaign, tmp_path: Path) -> None:
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': lines('gamed')})
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('gamed')})
     better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
     evaluator = current(db, campaign)
     with db.session() as s:
@@ -567,14 +565,12 @@ def test_a_cancelled_remeasure_of_the_carried_best_keeps_it_in_every_pool(
 ) -> None:
     """After an evaluator change the daemon measures the best before it. A cancel of that keeps it the best, and runs
     no longer wait for it."""
-    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    configure(db, campaign, evaluator={'noise_runs': 1})
     ex = controller(db, runtime, tmp_path)
     better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
     ex.score_submission(better)
     old = current(db, campaign)
-    configure(
-        db, campaign, evaluate=[*EVALUATE[:2], EVALUATE[2] + ' # v2'], evaluator={'scoring': 'submit', 'noise_runs': 1}
-    )
+    configure(db, campaign, evaluate=[*EVALUATE[:2], EVALUATE[2] + ' # v2'], evaluator={'noise_runs': 1})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         current_evaluator(s, p, p.config)

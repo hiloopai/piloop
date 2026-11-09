@@ -87,6 +87,7 @@ from piloop.plugins.stop_rule.limits import Limits
 from piloop.reports.overview import progress
 from tests.conftest import (
     AUDITOR,
+    END_RUN,
     HARNESS_APPEND,
     HARNESS_NOOP,
     HARNESS_WORSE,
@@ -98,6 +99,7 @@ from tests.conftest import (
     example,
     install_plugins,
     run_all,
+    settle,
     span_named,
     spent,
     write_toml,
@@ -447,7 +449,7 @@ def test_plateau_counts_finished_runs_since_the_last_new_best(db: Database, camp
 
 
 def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: Database, campaign: Campaign) -> None:
-    """A run with no commit, or with only ``Piloop-Eval: skip`` commits, does not count toward ``max_runs``.
+    """A run with no commit, or with only ``skipped`` commits, does not count toward ``max_runs``.
 
     A run in flight counts toward ``max_runs``, so the queue never starts more runs than ``max_runs`` allows. A run
     whose candidate waits for its measurement also counts.
@@ -762,8 +764,7 @@ def test_the_close_waits_until_the_stopped_campaigns_runs_are_scored_and_comes_o
     restarted.stop(timeout=5)
 
 
-@pytest.mark.run_end
-@pytest.mark.usefixtures('auditor')
+@pytest.mark.usefixtures('auditor', 'daemon_api')
 def test_a_stopped_campaign_gets_no_trigger_requests(
     db: Database,
     campaign: Campaign,
@@ -772,11 +773,11 @@ def test_a_stopped_campaign_gets_no_trigger_requests(
     tracer: Tracer,
     spans: InMemorySpanExporter,
 ) -> None:
-    configure(db, campaign, harness=HARNESS_WORSE, max_runs=1)
+    configure(db, campaign, harness=HARNESS_WORSE + END_RUN, max_runs=1)
     add_ideas(db, campaign, 'a', 'b')
     sched = make_scheduler(db, runtime, tmp_path, tracer)
-    assert run_all(sched) == [1], 'below max_runs: the queue trigger creates run 1, which commits a measured discard'
-    sched.wait(SETTLE)
+    assert run_all(sched) == [1], 'below max_runs: the queue trigger creates run 1, which submits a measured discard'
+    settle(sched, db)
     assert campaign_state(db, campaign) == (CampaignStatus.ACTIVE, None)
 
     assert run_all(sched) == [], 'nothing launches on the tick that stops the campaign'
@@ -918,7 +919,7 @@ def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_p
         host.close()
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -930,7 +931,7 @@ def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
     monkeypatch.syspath_prepend(tmp_path / 'site')
     host.close()
     try:
-        write_toml(Path(campaign.path), HARNESS_APPEND)
+        write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN)
         for table, error in [
             ({'provider': 'never'}, "plugins.stop_rule: provider = 'never': unknown stop rule 'never'"),
             ({'provider': 'after_bests'}, 'bests: Field required'),
@@ -950,7 +951,7 @@ def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
         add_ideas(db, campaign, 'a', 'b')
         sched = make_scheduler(db, runtime, tmp_path)
         assert run_all(sched) == [1]
-        sched.wait(SETTLE)
+        settle(sched, db)
         run_all(sched)
         assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'after_bests: 1 new bests')
         sched.stop(timeout=5)

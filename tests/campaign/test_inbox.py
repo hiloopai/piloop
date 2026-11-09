@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent, Orchestrating, Person, Service, System, party_of
-from piloop.api.views import AckOutcome, CommentView, Item, News, Relation, thread_lines
+from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import escalations, inbox
 from piloop.campaign.escalations import DecisionWritten
 from piloop.db import feed as db_feed
@@ -27,7 +27,6 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import DECISION, ESCALATION, Choice, EscalationView
-from piloop.reports import feed
 from piloop.settings import DaemonSettings
 from tests.conftest import elsewhere
 from tests.reports.test_history import idea
@@ -576,32 +575,3 @@ def test_an_escalation_takes_one_answer_whoever_writes_the_second(db: Database, 
     with db.session() as s:
         decisions = s.scalars(select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == DECISION)).all()
         assert [d.author for d in decisions] == ['orchestrator']
-
-
-def test_the_deprecated_acked_at_and_acked_by_still_read_as_the_earliest_ack_of_any_party(
-    db: Database, campaign: Campaign
-) -> None:
-    """0.6's one ack was the first of whoever acknowledged the item. Until 0.7.0 the API views keep it, derived from
-    ``acks``, for a client that reads them (the hosted console), and the OpenAPI marks both fields deprecated."""
-    with db.session() as s:
-        item = Comment(
-            target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='implementer#3', priority=1, body='look'
-        )
-        s.add(item)
-        s.commit()
-        assert inbox.comment_view(item).model_dump(include={'acks', 'acked_at', 'acked_by'}) == {
-            'acks': [],
-            'acked_at': None,
-            'acked_by': None,
-        }
-        inbox.ack(s, [item.id], System.ORCHESTRATOR)
-        s.commit()
-        inbox.ack(s, [item.id], System.HUMAN)
-        s.commit()
-        view = inbox.comment_view(item).model_dump(mode='json')
-        listed = feed.inbox_view(s, 0, System.HUMAN, acked=True).model_dump(mode='json')['items']
-    [first, _] = view['acks']
-    assert (view['acked_at'], view['acked_by'], first['party']) == (first['at'], 'orchestrator', 'orchestrator')
-    assert [(i['acked_at'], i['acked_by']) for i in listed] == [(first['at'], 'orchestrator')]
-    schemas = CommentView.model_json_schema()['properties'], Item.model_json_schema()['properties']
-    assert all(p[field].get('deprecated') for p in schemas for field in ('acked_at', 'acked_by'))

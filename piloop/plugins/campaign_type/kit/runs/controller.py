@@ -21,8 +21,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, undefer
 
-from piloop import deprecated
-from piloop.actor import Actor, Agent, System
+from piloop.actor import Agent, System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
     AGENT_SESSION_STATES,
@@ -56,7 +55,6 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
-    Comment,
     Event,
     EventModel,
     Limit,
@@ -69,7 +67,6 @@ from piloop.ids import (
     AgentSessionId,
     CampaignId,
     CampaignStatus,
-    CommentKind,
     Revision,
     RoleName,
     TargetKind,
@@ -79,11 +76,10 @@ from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue, submissions
-from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import (
@@ -143,8 +139,6 @@ from piloop.plugins.stop_rule.contract import Stop
 from piloop.plugins.vcs.contract import Pin, Repository, Transfer, Version
 from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
 
-type Unmeasured = Literal[Origin.RECOVERED, Origin.SKIPPED]
-"""A version that the daemon does not measure: its recovered work, or one that asked to be skipped."""
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
 RUNS = 'runs'
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
@@ -546,7 +540,7 @@ class RunController:
                     self._cut(span, run_id, agent_session_id, name, repo, base_revision, None)
                 case DaemonStopped(work=work):  # the stop of an earlier daemon process, which ended before the rows
                     self._cut_by_earlier_stop(
-                        span, run_id, campaign_id, agent_session_id, name, repo, base_revision, work, log_dir
+                        span, run_id, campaign_id, agent_session_id, name, repo, base_revision, work
                     )
                 case Lost(reason=reason):
                     self._close(span, run_id, RunEnd.WORKER_LOST, reason)
@@ -566,7 +560,6 @@ class RunController:
                         repo,
                         base_revision,
                         ended,
-                        log_dir,
                         stop_cut=self._cut_by_stop(agent_session_id, role_timeout),
                     )
                 case _:
@@ -607,7 +600,6 @@ class RunController:
         repo: Repository,
         base_revision: Revision,
         work: Transfer | None,
-        log_dir: Path,
     ) -> None:
         """Keep the work of a run that the stop of an earlier daemon process cut, and write the rows that it did not.
 
@@ -620,7 +612,7 @@ class RunController:
         self._keep_cut_work(run_id, name, repo, versions, cut=ending is None)
         end, error = handed_off(ending) if ending is not None else (RunEnd.DAEMON_STOPPED, None)
         self._close(span, run_id, end, error)
-        last = self._score(run_id, campaign_id, repo, versions, log_dir) if ending is not None and versions else None
+        last = self._unsubmitted(run_id, campaign_id, repo, versions) if ending is not None and versions else None
         self._settle(run_id, end, last)
 
     def _stopped(self, span: Span, run_id: RunId) -> None:
@@ -640,7 +632,6 @@ class RunController:
         repo: Repository,
         base_revision: Revision,
         ended: Ran,
-        log_dir: Path,
         *,
         stop_cut: bool = False,
     ) -> None:
@@ -659,10 +650,7 @@ class RunController:
             )
             cancelled = run_cancel(s, run_id) is not None
             unsaved = latest(s, WorkUnsaved, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
-            if s.get_one(Run, run_id).campaign.config.evaluator.scoring is Scoring.SUBMIT:
-                sent = bool(submitted(s, run_id))
-            else:
-                sent = any(not v.recovered for v in versions)
+            sent = bool(submitted(s, run_id))
         facts = RunFacts(
             ending=ending,
             ended=stop_ended is not None,
@@ -675,8 +663,7 @@ class RunController:
         )
         end, error = run_outcome(facts)
         self._close(span, run_id, end, error)
-        # Score all commits, even if the implementer then timed out or crashed.
-        last = self._score(run_id, campaign_id, repo, versions, log_dir) if versions else None
+        last = self._unsubmitted(run_id, campaign_id, repo, versions) if versions else None
         self._settle(run_id, end, last)
 
     def _relaunch(self, span: Span, run_id: RunId, agent_session_id: AgentSessionId, log_dir: Path) -> bool:
@@ -752,8 +739,9 @@ class RunController:
     ) -> list[Version]:
         """Take the run's versions into the repo of record (``Repository.receive``), and return them, oldest first.
 
-        They are recorded (``RunReceived``), for ``resume``. The worker saved the unsaved work first, as a version of its own, so its candidate is ``recovered``
-        (``_score``).
+        They are recorded (``RunReceived``), for ``resume``. The worker saved the unsaved work first, as a version of
+        its own: a run that ends keeps it ``skipped`` (``_unsubmitted``), and one that a stop cut keeps it ``recovered``
+        (``_keep_cut_work``).
         """
         versions = repo.receive(self.cas, work, base_revision) if work is not None else []
         with self._db.session() as s:
@@ -791,7 +779,7 @@ class RunController:
                     revisions = received[1].revisions if received is not None else []
                     versions = [repo.version(revision) for revision in revisions]
                     span.set(versions=len(versions))
-                    last = self._score(run_id, campaign_id, repo, versions, self._runs_dir / str(run_id))
+                    last = self._unsubmitted(run_id, campaign_id, repo, versions)
             except Exception as e:
                 span.error(e)
                 end = RunEnd.FAILED
@@ -1002,96 +990,6 @@ class RunController:
             campaign = s.get_one(Campaign, candidate.campaign_id)
             record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate_id)
             s.commit()
-
-    def _score(
-        self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version], log_dir: Path
-    ) -> CandidateId | None:
-        """Score the versions of a run that ended, as ``[evaluator] scoring`` says. Return the candidate of its idea.
-
-        That candidate settles the run's idea (``release``). ``run_end``: each version, now (``_score_each``).
-        ``submit``: its submissions, which ``score_submission`` scores as they come; ``_unsubmitted`` keeps the other
-        versions as ``skipped``, and ``_settle`` waits for their scores.
-        """
-        with self._db.session() as s:
-            scoring = s.get_one(Run, run_id).campaign.config.evaluator.scoring
-        match scoring:
-            case Scoring.SUBMIT:
-                return self._unsubmitted(run_id, campaign_id, repo, versions)
-            case Scoring.RUN_END:
-                deprecated.until(
-                    '0.7.0',
-                    "0.5's scoring: delete Scoring.RUN_END, _score_each, the trailers that only it reads, the Measure"
-                    " section's run_end.md and the vcs part that names them (Part.MARK), and a revision that sets"
-                    ' scoring = "submit" where 0078 pinned run_end',
-                )
-                return self._score_each(run_id, repo, versions, log_dir)
-            case never:
-                assert_never(never)
-
-    def _score_each(
-        self, run_id: RunId, repo: Repository, versions: list[Version], log_dir: Path
-    ) -> CandidateId | None:
-        """Turn each new version into a candidate, or find its existing candidate, then score it (``_score_one``).
-
-        Return the id of the newest candidate of the run's versions that has a score, or None: none has, or a stop cut
-        the scoring. Each version is a child of the one before, the first of the run's base. A version that asks to be
-        skipped (``Version.skip``) is not measured: a new candidate is ``skipped``, and never enters the pool. So a
-        later version that does not ask, with the same tree, is measured like a new one. The version the worker saved
-        of the implementer's unsaved work (``Version.recovered``) is not measured either: it is ``recovered``. All
-        commits are candidates and pinned first, so after a stop, ``resume`` finds all of them. A version's
-        ``Piloop-Note`` trailers become notes on its candidate, signed by the run's implementer.
-        """
-        with self._db.session() as s:
-            run = s.get_one(Run, run_id)
-            name, candidate, campaign_id = run.campaign.name, run.base, run.campaign_id
-            ids: list[CandidateId] = []
-            for version in versions:
-                candidate, _ = resolve(s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RUN)
-                ids.append(candidate.id)
-            s.commit()
-        for i, version in enumerate(versions):
-            repo.keep(version.revision, run_pin(name, run_id, i))
-        last: CandidateId | None = None
-        for i, (version, candidate_id) in enumerate(zip(versions, ids, strict=True)):
-            with self._tracer.span(
-                'piloop.candidate', run=run_id, revision=version.revision, candidate=candidate_id
-            ) as span:
-                with self._db.session() as s:
-                    candidate = s.get_one(Candidate, candidate_id)
-                    match unmeasured_of(version):
-                        case Origin() as unmeasured if candidate.run_id == run_id and not candidate.measurements:
-                            candidate.origin = unmeasured
-                            s.commit()
-                            span.set(status=unmeasured)
-                            continue
-                        case _:
-                            if candidate.origin in UNSCORED:
-                                candidate.origin = Origin.RUN  # a tree that was skipped or recovered is measured now
-                            s.commit()
-                match ended := self._score_one(run_id, candidate_id, log_dir / f'eval-{i}'):
-                    case Measuring.STOPPED:
-                        span.set(status='cancelled')
-                        return None
-                    case Measuring.CANCELLED:  # no score: its cancel stands (``Cancel``)
-                        span.set(status='cancelled')
-                    case Measuring.ABANDONED:  # no score: the campaign's measurements wait for a human
-                        span.set(status=ended)
-                    case Measuring.MEASURED:
-                        span.set(status=ended)
-                        last = candidate_id
-                    case never:
-                        assert_never(never)
-            if version.notes:
-                with self._db.session() as s:
-                    by = implementer_of(s, run_id).signature
-                    for why in version.notes:
-                        s.add(
-                            Comment(
-                                target=TargetRef(CANDIDATE, candidate_id), author=by, kind=CommentKind.NOTE, body=why
-                            )
-                        )
-                    s.commit()
-        return last
 
     def _measure(
         self,
@@ -1516,24 +1414,9 @@ def handed_off(ending: RunEndRequested) -> tuple[RunEnd, str | None]:
     return run_outcome(RunFacts(ending=ending))
 
 
-def unmeasured_of(version: Version) -> Unmeasured | None:
-    """Return why the daemon does not measure ``version``: it is the saved unsaved work, or it asks to be skipped."""
-    if version.recovered:
-        return Origin.RECOVERED
-    if version.skip:
-        return Origin.SKIPPED
-    return None
-
-
 def run_place(run_id: int) -> str:
     """The place of a run's implementer under the daemon's home: its log directory, ``runs/<id>``."""
     return f'{RUNS}/{run_id}'
-
-
-def implementer_of(s: Session, run_id: RunId) -> Actor:
-    """The run's newest implementer, which a note on the run is by; the daemon for a run that has none."""
-    w = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id.desc()).limit(1)).first()
-    return Agent(role=w.kind, session=w.id) if w is not None else System.DAEMON
 
 
 def run_pin(campaign: str, run: RunId, index: int) -> Pin:

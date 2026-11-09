@@ -5657,32 +5657,6 @@
             "title": "Acks",
             "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
           },
-          "acked_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked At",
-            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
-            "deprecated": true
-          },
-          "acked_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked By",
-            "description": "Deprecated: who wrote the earliest of ``acks``.",
-            "deprecated": true
-          },
           "body": {
             "type": "string",
             "title": "Body"
@@ -6799,32 +6773,6 @@
             "title": "Acks",
             "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
           },
-          "acked_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked At",
-            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
-            "deprecated": true
-          },
-          "acked_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked By",
-            "description": "Deprecated: who wrote the earliest of ``acks``.",
-            "deprecated": true
-          },
           "body": {
             "type": "string",
             "title": "Body"
@@ -7149,32 +7097,6 @@
             "type": "array",
             "title": "Acks",
             "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
-          },
-          "acked_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked At",
-            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
-            "deprecated": true
-          },
-          "acked_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acked By",
-            "description": "Deprecated: who wrote the earliest of ``acks``.",
-            "deprecated": true
           },
           "body": {
             "type": "string",
@@ -7690,7 +7612,7 @@
           "skipped"
         ],
         "title": "Origin",
-        "description": "Where a candidate comes from.\n\n``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a\nstarting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or\nwhere a daemon stop cut its run, never declared ready, so never measured; a new run of the idea starts from it.\n``skipped``: a commit marked ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the\nmark is measured like a new one, and becomes ``run``."
+        "description": "Where a candidate comes from.\n\n``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a\nstarting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted where a\ndaemon stop cut its run, never measured; a new run of the idea starts from it.\n``skipped``: a commit that its run did not submit, never measured. A ``recovered`` or ``skipped`` tree that a later\nsubmission reaches is measured like a new one, and becomes ``run``."
       },
       "Overview": {
         "properties": {

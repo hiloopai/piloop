@@ -38,7 +38,7 @@ from piloop.db.requests import pending
 from piloop.db.session import Database
 from piloop.ids import Ending, TargetKind
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
@@ -55,15 +55,16 @@ from piloop.plugins.vcs.git import bundles as store_commits
 from piloop.proc import alive, started
 from piloop.settings import Settings
 from tests.conftest import (
-    SETTLE,
+    END_RUN,
     WRITE_PID,
     ScriptRuntime,
     at_head,
     baseline,
-    end,
+    claim,
     factory,
     register,
     serving,
+    settle,
     timed,
     wait_until,
     workers_of,
@@ -374,13 +375,13 @@ def test_a_partitioned_worker_stops_its_job_before_its_lease_expires_and_its_rep
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.WORKER_LOST)
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finishes_the_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, hold: Path
 ) -> None:
     """A daemon restart after ``kill -9``: the next daemon renews the lease, its worker re-attaches to the agent, and
     the run ends as if nothing had happened. Nothing is queued again only because of the restart."""
-    write_toml(Path(campaign.path), COMMIT_THEN_HOLD.format(hold=hold))
+    write_toml(Path(campaign.path), COMMIT_THEN_HOLD.format(hold=hold) + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = control_plane(db, runtime, tmp_path)
@@ -394,9 +395,8 @@ def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finish
     thread.join(30)
     scheduler = next_daemon(db, tmp_path)
     scheduler.reap()
-    end(db, run_id)
     hold.unlink()
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
@@ -412,7 +412,6 @@ def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finish
         )
 
 
-@pytest.mark.run_end
 def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_on_the_same_lease(
     campaign_path: Path, tmp_path: Path, schema: Path
 ) -> None:
@@ -421,7 +420,7 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
     cfg = Settings(home=tmp_path / 'home')
     hold = tmp_path / 'hold'
     hold.touch()
-    write_toml(campaign_path, COMMIT_THEN_HOLD.format(hold=hold), implementer_timeout=600)
+    write_toml(campaign_path, COMMIT_THEN_HOLD.format(hold=hold) + END_RUN, implementer_timeout=600)
     at_head(schema, cfg.home / 'piloop.db')
     db = Database(cfg.database_url, actor=cfg.actor)
     campaign = register(db, campaign_path)
@@ -440,8 +439,8 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
         with (tmp_path / 'second.log').open('w') as log:
             daemons.append(subprocess.Popen(SERVE_ARGV, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env))
         wait_until(lambda: 'agent_session.reattached' in (tmp_path / 'second.log').read_text(), timeout=60)
-        end(db, RunId(1))
-        hold.unlink()
+        claim(db, RunId(1), IdeaId(1))
+        hold.unlink()  # the agent submits its line and ends its run through the second daemon
         wait_until(
             lambda: run_row(db, RunId(1)).status is RunStatus.SUCCEEDED and not run_row(db, RunId(1)).scoring,
             timeout=60,

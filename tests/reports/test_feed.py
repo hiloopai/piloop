@@ -392,7 +392,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
     [item] = inbox['items']
     assert inbox['cursor'] == cursor and item['kind'] == 'escalation' and item['body'] == 'look'
     assert (item['campaign'], item['campaign_name']) == (campaign.id, 'demo')
-    assert item['target'] == {'kind': 'campaign', 'id': campaign.id} and item['acked_at'] is None
+    assert item['target'] == {'kind': 'campaign', 'id': campaign.id} and item['acks'] == []
     assert item['priority'] == 1 and item['created'].endswith('Z')
     assert 'seeds' not in inbox
     json.dumps([state.model_dump(mode='json'), inbox])

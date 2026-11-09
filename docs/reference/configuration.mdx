@@ -115,7 +115,6 @@ Experimental: campaigns with more than one track.
 |---|---|---|---|
 | `dev` | list\[string\] \| null | `null` | Optional. A fast command (argv) that checks a change, which an implementer runs in its own checkout as often as it likes. Each implementer's brief names it. piloop never runs it and records nothing of it. Example: `["uv", "run", "python", "evaluate.py", "--quick"]`. |
 | `sealed` | list\[string\] \| null | `null` | Optional. The command (argv) that scores a version on the sealed split, as `evaluate` does: its score is the primary. piloop runs it on each candidate that it confirms, and on the baseline. With the default best rule, a candidate may be best only when it beats the baseline there too. Keep its data and its scorer out of the repo, in the home or on the evaluator's machines, so that no implementer reads them. Example: `["python3", "/srv/sealed/score.py"]`. |
-| `scoring` | `submit` \| `run_end` | `"submit"` | Which versions of a run piloop scores: `submit`, those that the implementer submits; `run_end`, every one, after the run ends. |
 | `submissions` | integer \| null | `null` | Optional. The most versions that one run may submit (`piloop submit`). Not set: no cap. |
 | `noise_runs` | integer | `3` | How many successful evaluations confirm a candidate, under each evaluator. piloop evaluates the baseline this many times, and each candidate whose first score beats the best's mean until it has this many: only then may it be best. The standard deviation of the best's evaluations is the noise that a worker's message names. When the baseline's evaluations agree, the evaluator is deterministic, and one evaluation confirms. 1: one evaluation confirms. |
 
@@ -759,17 +758,6 @@ With `provider = "local"`, the table has no other key.
 
 These keys still work. Each one shows a `PiloopDeprecationWarning` that names the file, the key, its replacement and the release that removes it. The changelog lists them too.
 
-- A role's `finding_grace` is its `end_grace`: the daemon ends a worker that grace after it ended its run.
-- `idle_alert` of a role that does runs is removed: an idea is never `proposed`, so no slot waits for a review. piloop drops it.
-- The `leaking_funnel` trigger is removed: stop rules and escalations cover a stuck campaign. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
-- `[plugins.section.pack] seeds` is removed: there are no seeds, so the research pack lists none.
+- `scoring` of `[evaluator]` is removed: piloop scores what an implementer submits. piloop drops the key. 0.5's `run_end` scoring is gone: every version of a run that its implementer does not submit is `skipped`.
 - `[plugins.memory]` and the `lessons` section are removed with research memory. piloop drops them. The lessons, documents and journal are gone: an orchestrator keeps its notes as `note` comments on the campaign. A section table of `provider = "lessons"` goes too, and so does its name in `[plugins.section] use` and in a role's `sections`.
-- `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the best, and its worker claims an idea. piloop drops the keys.
-- `files` and `plan_words` of a role that does runs are removed: its agents file no seeds, and no ideas for others. piloop drops them. An implementer's hunch goes in a note on the board.
-- `[plugins.role.scout]` is removed with the scout role: piloop drops the table, and no scout starts.
-- The `seed` trigger is removed: an idea is open on the board from the start, so there is no seed to develop. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
-- `share` of a `[tracks.<name>]` is removed: workers claim any open idea, so no track has a share of the slots. piloop drops it, and drops a table that it leaves empty.
-- In `config.toml`, a role's `finding_grace` is its `end_grace`, as in `piloop.toml`.
-- `relay_wait` and `relay_deadline` of `[agents]` are removed. piloop drops them. `piloop submit` returns at once, so the relay of a worker elsewhere calls it once.
-- `wake_after_tries` of `[evaluation]` is removed: no agent wakes on an evaluation's retries. piloop drops it. An evaluation that fails `stop_after_tries` times in a row for the machine still escalates.
 - `wake_budget` of `[agents]` is removed with `piloop wake`. piloop drops it.

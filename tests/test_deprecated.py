@@ -22,9 +22,8 @@ import pytest
 from piloop import deprecated
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.host import PluginError, Scope
-from piloop.plugins.role import bridges as role_bridges
 from piloop.version import Version
-from tests.conftest import HARNESS_APPEND, install_plugins, write_toml
+from tests.conftest import install_plugins
 
 
 @deprecated.bridge('9.0.0', 'size is width: delete rename_size')
@@ -78,23 +77,6 @@ def test_a_dotted_key_warns_at_its_table_header_or_at_the_line_that_sets_its_las
     assert [w.lineno for w in record] == [4, 2]
 
 
-def deprecated_config(campaign_path: Path, tables: str) -> Path:
-    """Write the test campaign's piloop.toml with ``tables`` after it."""
-    write_toml(campaign_path, HARNESS_APPEND)
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + tables)
-    return toml
-
-
-def without_plugin_tables(text: str) -> str:
-    """``text`` without its ``[plugins.<…>]`` tables, so that a test can set ``plugins`` to something else."""
-    return re.sub(r'^\[plugins\.[^\]]*\]\n(?:[^\[\n].*\n)*', '', text, flags=re.MULTILINE)
-
-
-TEMPLATES = Path(__file__).parent / 'fixtures' / 'templates'
-"""The campaign template that ``piloop init`` wrote in 0.1.0, and in this release before the scout was a role."""
-
-
 ROOT = Path(__file__).parents[1]
 NOTE = re.compile(
     r'\b(?:TODO|FIXME|XXX)\b.*\d+\.\d+'  # a TODO tied to a version
@@ -105,60 +87,6 @@ NOTE = re.compile(
 DEPRECATED = re.compile(r'(?<![\w.])deprecated(?![\w.])', re.IGNORECASE)
 """A comment that calls code deprecated (but not one that names ``piloop.deprecated``). A docstring may: it describes a
 deprecated key to the reader."""
-
-
-OLD_SHAPE = """
-name = "demo"
-evaluate = ["true"]
-harnesses = ["script"]
-model = { script = "test-model", pi = "p" }
-max_concurrent = { script = 2 }
-
-[[metrics]]
-name = "score"
-direction = "higher"
-role = "primary"
-
-[harness.script]
-executable = "agent"
-headless = ["{prompt}"]
-
-[roles.implementer]
-max_concurrent = 3
-
-[plugins.role.research]
-max_ideas = 0
-harnesses = ["script", "pi"]
-"""
-"""A piloop.toml of 0.3: the harnesses, their models and caps, and the roles at the top. Research is in its new table."""
-NEW_SHAPE = """
-name = "demo"
-evaluate = ["true"]
-
-[plugins.harness]
-use = ["script"]
-
-[[metrics]]
-name = "score"
-direction = "higher"
-role = "primary"
-
-[plugins.harness.script]
-model = "test-model"
-max_concurrent = 2
-executable = "agent"
-headless = ["{prompt}"]
-
-[plugins.harness.pi]
-model = "p"
-
-[plugins.role.implementer]
-max_concurrent = 3
-
-[plugins.role.research]
-max_ideas = 0
-harnesses = ["script", "pi"]
-"""
 
 
 TABLES = (
@@ -447,7 +375,7 @@ def test_until_leaves_what_it_marks_as_it_is() -> None:
     assert deprecated.until('0.3.0', 'r')(f) is f
 
 
-@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('end_grace',))
+@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('research_memory',))
 def shade(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A package's bridge of ``piloop.toml``: ``[plugins.role.<name>] shade`` is ``tint``."""
     for role in (deprecated.table_at(raw, 'plugins', 'role') or {}).values():
@@ -473,10 +401,10 @@ def second(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
 def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """It reads ``[plugins.role]``, which ``end_grace`` writes to; a cycle or a missing name is refused."""
+    """It runs after the bridge that it names (``research_memory``); a cycle or a missing name is refused."""
     install_plugins(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
     order = deprecated.bridges(Scope.CAMPAIGN)
-    assert order.index(shade) > order.index(role_bridges.end_grace)
+    assert order.index(shade) > order.index(deprecated.research_memory)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
     raw: dict[str, object] = {'plugins': {'role': {'quick': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'

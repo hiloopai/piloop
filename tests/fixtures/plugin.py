@@ -12,7 +12,6 @@ from sqlalchemy import select
 
 from piloop.actor import Agent
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
-from piloop.api.views import Rendered
 from piloop.campaign.campaigns import workspace_dir
 from piloop.db.models import AgentSession, Campaign, Comment, EventModel, utcnow
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
@@ -26,7 +25,7 @@ from piloop.plugins.host import Capability, Parameters, Tier
 from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, Quiet, StartsItsAgents, Wake
 from piloop.plugins.runtime.contract import Handle, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
-from piloop.plugins.section.contract import Rendering, Section, Surface
+from piloop.plugins.section.contract import Rendering, Surface
 from piloop.plugins.stop_rule.contract import GO, Escalate, Go, Hold, Stop, StopCase, StopRule
 
 
@@ -180,13 +179,6 @@ class Auditor(StartsItsAgents):
             resumed_brief=None if resumed is None else cas.put(resumed.encode()),
             read=[n.id for n in notes],
         )
-
-
-class Yields(Section):
-    """A package's section called ``yields``, a name that piloop's own removed section had: it is its own now."""
-
-    def render(self, r: Rendering) -> Rendered | None:
-        return None
 
 
 class Fast(ImplementerRole):

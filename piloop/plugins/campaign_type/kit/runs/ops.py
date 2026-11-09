@@ -10,7 +10,6 @@ from piloop.db.events import emit, latest
 from piloop.db.models import AgentSession, AgentSessionState, Event, EventModel
 from piloop.db.session import write_transaction
 from piloop.ids import TargetRef
-from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnding, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
@@ -51,7 +50,7 @@ def end_run(s: Session, how: RunEnding, reason: str | None, *, actor: Actor) -> 
 
     Raises:
         Refused: the actor has no open run, the daemon is ending the actor, its run is not running or was ended
-            already, or ``submitted`` comes from a run that submitted nothing (``[evaluator] scoring = "submit"``).
+            already, or ``submitted`` comes from a run that submitted nothing.
     """
     write_transaction(s)
     s.expire_all()  # read inside the lock what an earlier read of this session may have cached
@@ -64,14 +63,11 @@ def end_run(s: Session, how: RunEnding, reason: str | None, *, actor: Actor) -> 
         raise Refused(f'{actor} is {state}: the daemon ended it before its run ended')
     if (asked := end_requested(s, run)) is not None:
         raise Refused(f'run#{run.id} was ended already: {asked.how}')
-    match how, run.campaign.config.evaluator.scoring:
-        case RunEnding.SUBMITTED, Scoring.SUBMIT if not submitted(s, run.id):
-            raise Refused(
-                f'run#{run.id} submitted nothing: `piloop submit` first, or `piloop run end gave_up` to put its idea'
-                ' back on the board'
-            )
-        case _:
-            pass
+    if how is RunEnding.SUBMITTED and not submitted(s, run.id):
+        raise Refused(
+            f'run#{run.id} submitted nothing: `piloop submit` first, or `piloop run end gave_up` to put its idea'
+            ' back on the board'
+        )
     why = ((reason or '').strip() or None) if how is RunEnding.GAVE_UP else None
     emit(s, RunEndRequested(how=how, reason=why), TargetRef(RUN, run.id), actor)
     return run

@@ -20,7 +20,6 @@ from typing import Annotated, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
-from piloop import deprecated
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Rung
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
@@ -519,7 +518,7 @@ def _last(result: Result, score: Score, *, rung: bool) -> Reported | BadResult:
         case _ if rung:
             return BadResult('a rung reports its metrics, not a status')
         case None:
-            deprecated.until('0.7.0', "a last line without status is 0.5's: delete this case, require status")
+            return BadResult('the last line reports no status: ok, crash, timeout or infra_error')
         case Status.OK:
             if result.score is None or result.direction is None:
                 return BadResult('status ok needs a score and a direction')

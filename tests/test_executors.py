@@ -58,6 +58,8 @@ from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
 from tests.conftest import (
     AUDITOR,
+    END_RUN,
+    HARNESS_APPEND,
     HARNESS_SLEEPS,
     PLUGIN,
     ROLE_GROUP,
@@ -68,8 +70,11 @@ from tests.conftest import (
     factory,
     package,
     role_timeout,
+    scoring,
     serving,
+    serving_api,
     wait_until,
+    write_script,
     write_toml,
 )
 from tests.daemon.test_run_controller import execute, make_run, reload_campaign, run_row
@@ -146,14 +151,14 @@ def launch_in_thread(
     return agent_session_id, ended
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_run_brings_its_commits_back_and_is_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, provider: str, controller: Controller
 ) -> None:
     run_id = make_run(db, campaign)
     ex = controller(tmp_path, provider, runtime)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     assert run_row(db, run_id).status.value == 'succeeded'
     with db.session() as s:
         [candidate] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
@@ -367,22 +372,32 @@ def strings(value: object) -> Iterator[str]:
             pass
 
 
-@pytest.mark.run_end
+@pytest.fixture
+def apart(db: Database, tmp_path: Path, campaign_path: Path) -> Iterator[Path]:
+    """A home apart from the campaign's directory, whose API serves the test's database: its worker adds a line,
+    commits it, submits it and ends its run, as ``submitting``'s does. Return the home."""
+    home = tmp_path / 'home'
+    home.mkdir()
+    (home / 'piloop.db').symlink_to(tmp_path / 'piloop.db')
+    write_script(campaign_path.parent / 'harness.sh', HARNESS_APPEND + END_RUN)
+    with serving_api(Settings(home=home)):
+        yield home
+
+
 def test_a_job_that_the_daemon_queues_names_no_path_under_its_home(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, controller: Controller
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, apart: Path, controller: Controller
 ) -> None:
     """The jobs of a run and of its measurement, as they are queued: no string of theirs names the daemon's home."""
     run_id = make_run(db, campaign)
-    home = tmp_path / 'home'
+    home = apart
     ex = controller(home, 'workers', runtime)
-    execute(ex, db, run_id)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
     with db.session() as s:
         jobs = [read_job(disk(home), lease.id, lease.job_cid) for lease in s.scalars(select(Lease).order_by(Lease.id))]
     assert {job.kind for job in jobs} == {'agent', 'evaluation'}
     run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.SUCCEEDED, None), (
-        'it committed and exited, and its campaign scores at run end'
-    )
+    assert (run.status, run.error) == (RunStatus.SUCCEEDED, None), 'it committed, submitted its commit and exited'
     assert (home / 'runs' / str(run_id) / 'transcript.txt').is_file()
     for job in jobs:
         dumped = JOB.dump_python(job, mode='json')

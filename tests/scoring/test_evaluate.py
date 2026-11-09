@@ -89,14 +89,17 @@ def test_an_evaluate_that_its_tracker_refuses_is_killed_and_reaped(tmp_path: Pat
 
 
 def test_a_result_is_measured(tmp_path: Path) -> None:
-    r = evaluate(tmp_path, f'echo working; {write({"metrics": {"a": 1, "b": 2.5}, "units": {"a": {"x": 1}}})}')
+    r = evaluate(
+        tmp_path,
+        f'echo working; {write({"status": "ok", "score": 1, "direction": "higher", "metrics": {"b": 2.5}, "units": {"a": {"x": 1}}})}',
+    )
     assert r == Measured({'a': 1.0, 'b': 2.5}, r.seconds, {'a': {'x': 1.0}})
     assert (tmp_path / 'eval.stdout').read_text() == 'working\n', 'stdout is a log'
     assert not (tmp_path / '.result').exists()
 
 
 def test_a_watch_metric_may_be_left_out(tmp_path: Path) -> None:
-    r = evaluate(tmp_path, write({'metrics': {'a': 1}}))
+    r = evaluate(tmp_path, write({'status': 'ok', 'score': 1, 'direction': 'higher'}))
     assert isinstance(r, Measured) and r.metrics == {'a': 1.0}
 
 
@@ -165,7 +168,7 @@ def test_an_ok_result_that_exits_non_zero_is_a_crash(tmp_path: Path) -> None:
 
 
 def test_a_result_written_in_parts_and_without_a_final_newline_is_read(tmp_path: Path) -> None:
-    script = 'f="$PILOOP_RESULT_FILE"; printf \'{"metrics": \' >> "$f"; sleep 0.1; printf \'{"a": 3}}\' >> "$f"'
+    script = 'f="$PILOOP_RESULT_FILE"; printf \'{"status": "ok", \' >> "$f"; sleep 0.1; printf \'"score": 3, "direction": "higher"}\' >> "$f"'
     r = evaluate(tmp_path, script)
     assert isinstance(r, Measured) and r.metrics == {'a': 3.0}
 
@@ -173,7 +176,9 @@ def test_a_result_written_in_parts_and_without_a_final_newline_is_read(tmp_path:
 def test_a_large_result_does_not_block_the_command(tmp_path: Path) -> None:
     """The pipe holds about 64 KB: the reader drains it while the command writes."""
     units = {f'u{i}': 1 / 20000 for i in range(20000)}
-    (tmp_path / 'result.json').write_text(json.dumps({'metrics': {'a': 1}, 'units': {'a': units}}) + '\n')
+    (tmp_path / 'result.json').write_text(
+        json.dumps({'status': 'ok', 'score': 1, 'direction': 'higher', 'units': {'a': units}}) + '\n'
+    )
     script = 'cat result.json >> "$PILOOP_RESULT_FILE"'
     r = evaluate(tmp_path, script)
     assert isinstance(r, Measured) and len(r.units['a']) == 20000
@@ -181,14 +186,19 @@ def test_a_large_result_does_not_block_the_command(tmp_path: Path) -> None:
 
 def test_a_nonzero_exit_keeps_what_it_reported(tmp_path: Path) -> None:
     """A failed evaluation costs money too: what it reported, the cost among it, goes into the measurement."""
-    r = evaluate(tmp_path, f'{write({"metrics": {"a": 1, "cost": 0.4}})}; echo boom >&2; exit 2')
+    r = evaluate(
+        tmp_path,
+        f'{write({"status": "ok", "score": 1, "direction": "higher", "metrics": {"cost": 0.4}})}; echo boom >&2; exit 2',
+    )
     assert isinstance(r, Failed) and r.why == Exited(2, 'boom')
     assert (r.error, r.printed) == (snapshot('evaluate exit 2: boom'), {'a': 1.0, 'cost': 0.4})
 
 
 def test_evaluate_killed_by_a_signal_names_the_signal(tmp_path: Path) -> None:
     """A ``pkill`` from another process ends the evaluate with a signal: the error says so, not just ``exit -15``."""
-    r = evaluate(tmp_path, f'{write({"metrics": {"a": 1}})}; echo boom >&2; kill -TERM $$')
+    r = evaluate(
+        tmp_path, f'{write({"status": "ok", "score": 1, "direction": "higher"})}; echo boom >&2; kill -TERM $$'
+    )
     assert isinstance(r, Failed) and r.why == Killed(signal.SIGTERM, 'boom')
     assert isinstance(r.why, Killed) and r.why.sent, 'another process sent it: the evaluate measured nothing'
     assert r.error == snapshot('evaluate killed by SIGTERM (exit -15), not by its own exit: boom')
@@ -204,13 +214,13 @@ def test_evaluate_killed_by_a_signal_with_no_name_gives_its_number(tmp_path: Pat
 
 
 def test_a_missing_required_metric_fails(tmp_path: Path) -> None:
-    r = evaluate(tmp_path, write({'metrics': {'a': 1}}), required=frozenset({'a', 'b'}))
+    r = evaluate(tmp_path, write({'status': 'ok', 'score': 1, 'direction': 'higher'}), required=frozenset({'a', 'b'}))
     assert isinstance(r, Failed) and r.why == MissingMetrics(('b',))
     assert (r.error, r.printed) == (snapshot('evaluate reported no value for: b'), {'a': 1.0})
 
 
 def test_evaluate_timeout_kills_grandchildren_and_keeps_logs(tmp_path: Path) -> None:
-    script = f'echo started; {write({"metrics": {"a": 1}})}; sleep 30 & echo $! > child.pid; wait'
+    script = f'echo started; {write({"status": "ok", "score": 1, "direction": "higher"})}; sleep 30 & echo $! > child.pid; wait'
     r = evaluate(tmp_path, script, timeout=0.3)
     assert isinstance(r, Failed) and r.why == TimedOut(0.3)
     assert (r.error, r.printed) == (snapshot('evaluate timeout after 0.3s'), {'a': 1.0})
@@ -219,7 +229,7 @@ def test_evaluate_timeout_kills_grandchildren_and_keeps_logs(tmp_path: Path) -> 
 
 
 def test_a_child_left_holding_the_pipe_does_not_hold_the_evaluation(tmp_path: Path) -> None:
-    script = f'{write({"metrics": {"a": 1}})}; (exec 3>>"$PILOOP_RESULT_FILE"; exec sleep 30) & echo $! > child.pid'
+    script = f'{write({"status": "ok", "score": 1, "direction": "higher"})}; (exec 3>>"$PILOOP_RESULT_FILE"; exec sleep 30) & echo $! > child.pid'
     started = time.monotonic()
     r = evaluate(tmp_path, script)
     assert isinstance(r, Measured) and time.monotonic() - started < 5
@@ -242,7 +252,7 @@ def assert_dead(pid: int) -> None:
             'it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to $PILOOP_RESULT_FILE',
         ),
         (
-            f'{write({"metrics": {"a": 1}})}; {write({"metrics": {"a": 2}})}',
+            f'{write({"status": "ok", "score": 1, "direction": "higher"})}; {write({"status": "ok", "score": 2, "direction": "higher"})}',
             'it wrote a line after its last one',
         ),
         (
@@ -277,11 +287,23 @@ def assert_dead(pid: int) -> None:
             write({'metrics': {'a': 1}, 'notes': 'x'}),
             'expected one JSON object of the result schema: notes: Extra inputs are not permitted',
         ),
-        (write({'metrics': {'a': 1, 'acc': 2}}), 'unknown metrics acc; [[metrics]] has a, b, cost'),
-        (write({'metrics': {'a': 1}, 'units': {'z': {'x': 1}}}), 'unknown metrics z; [[metrics]] has a, b, cost'),
-        (write({'metrics': {'a': 1}, 'units': {'b': {'x': 1}}}), "units for 'b', which has no value"),
-        (write({'metrics': {'a': 1}, 'units': {'a': {}}}), "no units for 'a'"),
-        (write({'metrics': {'a': 3}, 'units': {'a': {'x': 1, 'y': 1}}}), "units of 'a' sum to 2, its value is 3"),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'metrics': {'acc': 2}}),
+            'unknown metrics acc; [[metrics]] has a, b, cost',
+        ),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'units': {'z': {'x': 1}}}),
+            'unknown metrics z; [[metrics]] has a, b, cost',
+        ),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'units': {'b': {'x': 1}}}),
+            "units for 'b', which has no value",
+        ),
+        (write({'status': 'ok', 'score': 1, 'direction': 'higher', 'units': {'a': {}}}), "no units for 'a'"),
+        (
+            write({'status': 'ok', 'score': 3, 'direction': 'higher', 'units': {'a': {'x': 1, 'y': 1}}}),
+            "units of 'a' sum to 2, its value is 3",
+        ),
         (
             write({'status': 'ok', 'direction': 'higher'}),
             'status ok needs a score and a direction',
@@ -313,12 +335,12 @@ def test_a_bad_result_is_a_crash_that_says_why(tmp_path: Path, script: str, erro
 
 def test_a_rounded_value_still_matches_its_units(tmp_path: Path) -> None:
     thirds = {f'r{i}': 1 / 3 for i in range(9)}  # 3.0000000000000004 in floats; the value says 3
-    r = evaluate(tmp_path, write({'metrics': {'a': 3}, 'units': {'a': thirds}}))
+    r = evaluate(tmp_path, write({'status': 'ok', 'score': 3, 'direction': 'higher', 'units': {'a': thirds}}))
     assert isinstance(r, Measured) and len(r.units['a']) == 9
 
 
 def test_evidence_is_kept_with_the_logs(tmp_path: Path) -> None:
-    script = f'mkdir -p out; echo "3 errors" > out/errors.md; {write({"metrics": {"a": 1}, "evidence": {"errors": "out/errors.md"}})}'
+    script = f'mkdir -p out; echo "3 errors" > out/errors.md; {write({"status": "ok", "score": 1, "direction": "higher", "evidence": {"errors": "out/errors.md"}})}'
     r = evaluate(tmp_path, script)
     assert isinstance(r, Measured)
     assert (tmp_path / 'evidence' / 'errors.md').read_text() == '3 errors\n'
@@ -328,19 +350,19 @@ def test_evidence_is_kept_with_the_logs(tmp_path: Path) -> None:
     ('script', 'error'),
     [
         (
-            write({'metrics': {'a': 1}, 'evidence': {'e': 'missing.md'}}),
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'evidence': {'e': 'missing.md'}}),
             "evidence 'e': 'missing.md' is not a file in the worktree",
         ),
         (
-            write({'metrics': {'a': 1}, 'evidence': {'e': '/etc/hostname'}}),
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'evidence': {'e': '/etc/hostname'}}),
             "evidence 'e': '/etc/hostname' is not a file in the worktree",
         ),
         (
-            write({'metrics': {'a': 1}, 'evidence': {'e': '../outside'}}),
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'evidence': {'e': '../outside'}}),
             "evidence 'e': '../outside' is not a file in the worktree",
         ),
         (
-            f'head -c 1001 /dev/zero > big; {write({"metrics": {"a": 1}, "evidence": {"e": "big"}})}',
+            f'head -c 1001 /dev/zero > big; {write({"status": "ok", "score": 1, "direction": "higher", "evidence": {"e": "big"}})}',
             'its evidence is 1001 bytes, over the 1000 of [evaluation] max_evidence_mb',
         ),
     ],
@@ -393,9 +415,7 @@ def rung(name: str, metrics: dict[str, float]) -> str:
 
 
 def test_a_climb_reports_each_rung_then_the_full_panel(tmp_path: Path) -> None:
-    script = (
-        f'{rung("screen", {"a": 0.65, "cost": 0.1})}; {rung("wide", {"b": 10.5})}; {write({"metrics": {"a": 0.7}})}'
-    )
+    script = f'{rung("screen", {"a": 0.65, "cost": 0.1})}; {rung("wide", {"b": 10.5})}; {write({"status": "ok", "score": 0.7, "direction": "higher"})}'
     results = climb(tmp_path, script, Step(rungs=(SCREEN, WIDE)))
     assert [(type(r).__name__, getattr(r, 'rung', None), printed(r)) for r in results] == [
         ('Measured', 'screen', {'a': 0.65, 'cost': 0.1}),
@@ -405,7 +425,7 @@ def test_a_climb_reports_each_rung_then_the_full_panel(tmp_path: Path) -> None:
 
 
 def test_a_stop_ends_the_command_and_its_later_lines_are_not_read(tmp_path: Path) -> None:
-    script = f'{rung("screen", {"a": 0.5})}; sleep 30; {write({"metrics": {"a": 0.9}})}'
+    script = f'{rung("screen", {"a": 0.5})}; sleep 30; {write({"status": "ok", "score": 0.9, "direction": "higher"})}'
     started = time.monotonic()
     results = climb(tmp_path, script, Step(rungs=(SCREEN, WIDE)))
     assert results == [StoppedAt(RungName('screen'), 'a 0.5 vs 0.7 (-0.2; margin 0.1)', {'a': 0.5}, results[0].seconds)]
@@ -435,7 +455,7 @@ def test_a_stop_kills_what_its_command_leaves_once_the_command_ends(tmp_path: Pa
 
 
 def test_without_a_gate_every_rung_is_climbed(tmp_path: Path) -> None:
-    script = f'{rung("screen", {"a": 0.1})}; {write({"metrics": {"a": 0.9}})}'
+    script = f'{rung("screen", {"a": 0.1})}; {write({"status": "ok", "score": 0.9, "direction": "higher"})}'
     results = climb(tmp_path, script, Step(rungs=(SCREEN,)), gate=None)
     assert [getattr(r, 'rung', None) for r in results] == ['screen', None]
     assert all(isinstance(r, Measured) for r in results)
@@ -444,7 +464,10 @@ def test_without_a_gate_every_rung_is_climbed(tmp_path: Path) -> None:
 def test_a_rung_that_the_bar_lacks_stops_only_on_a_floor(tmp_path: Path) -> None:
     lacking = Gate(bar={}, directions=GATE.directions)
     results = climb(
-        tmp_path, f'{rung("screen", {"a": 0.1})}; {write({"metrics": {"a": 0.9}})}', Step(rungs=(SCREEN,)), gate=lacking
+        tmp_path,
+        f'{rung("screen", {"a": 0.1})}; {write({"status": "ok", "score": 0.9, "direction": "higher"})}',
+        Step(rungs=(SCREEN,)),
+        gate=lacking,
     )
     assert isinstance(results[-1], Measured)
 
@@ -460,7 +483,11 @@ def test_a_rungs_own_command_reports_one_line_without_its_name(tmp_path: Path) -
     ('script', 'error', 'rung_of_failure'),
     [
         (rung('wide', {'b': 1}), "it reported rung 'wide' where 'screen' comes", 'screen'),
-        (write({'metrics': {'a': 1}}), "it reported rung None where 'screen' comes", 'screen'),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'higher'}),
+            "it reported rung None where 'screen' comes",
+            'screen',
+        ),
         (rung('screen', {'cost': 1}), None, 'screen'),
         (rung('screen', {'a': 0.7}), 'it stopped after rung screen, before its last line', None),
         (

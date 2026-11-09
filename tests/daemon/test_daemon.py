@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from git import Repo
 from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
 from sqlalchemy import func, select
@@ -19,10 +20,10 @@ from piloop.daemon.serve import LOCK_ENV, RESTART_SIGNAL, SERVE_ARGV, running_pi
 from piloop.db.events import latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event
 from piloop.db.session import Database
-from piloop.ids import TargetRef
+from piloop.ids import Revision, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
@@ -47,12 +48,15 @@ from tests.conftest import (
     register,
     run_all,
     serving_api,
+    settle,
     trace,
     wait_until,
     workers_of,
     write_script,
     write_toml,
 )
+from tests.daemon.test_scheduler import run_closed
+from tests.daemon.test_submissions import submitted
 
 
 def scored(s: Session, candidate: CandidateId) -> bool:
@@ -60,7 +64,6 @@ def scored(s: Session, candidate: CandidateId) -> bool:
     return latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate)) is not None
 
 
-@pytest.mark.run_end
 def test_daemon_end_to_end(
     campaign_path: Path, tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -79,7 +82,8 @@ def test_daemon_end_to_end(
         daemon.scheduler.reap()
         assert queued(daemon.db, daemon.scheduler, campaign.id, IdeaId(1)) == [1]
         assert run_all(daemon.scheduler) == [1]
-        daemon.scheduler.wait(SETTLE)
+        wait_until(lambda: run_closed(daemon.db, RunId(1)))  # the trace is in order: its submission is scored after
+        settle(daemon.scheduler, daemon.db)
         with daemon.db.session() as s:
             run = s.get_one(Run, 1)
             assert (run.status, run.updated_by) == (RunStatus.SUCCEEDED, ACTOR.signature)
@@ -104,6 +108,7 @@ def test_daemon_end_to_end(
                 'lease.acquired agent_session',
                 'lease.started agent_session',
                 'agent_session.running agent_session',
+                'run.submitted run',
                 'run.end_requested run',
                 'lease.reported agent_session',
                 'agent_session.finished agent_session',
@@ -267,7 +272,6 @@ HARNESS_HELD = (
 """An implementer that commits, says it is under way, waits while the test holds it, then commits again."""
 
 
-@pytest.mark.run_end
 def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finishes_their_runs(
     campaign_path: Path, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -278,7 +282,7 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     """
     hold = tmp_path / 'hold'
     hold.touch()
-    write_toml(campaign_path, HARNESS_HELD.format(hold=hold), implementer_timeout=60)
+    write_toml(campaign_path, HARNESS_HELD.format(hold=hold) + END_RUN, implementer_timeout=60)
     cfg = Settings(home=tmp_path / 'home')
     first = Daemon(cfg)
     campaign = register(first.db, campaign_path)
@@ -310,9 +314,9 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     after.close()
     second = Daemon(cfg)
     second.scheduler.reap()
-    end(second.db, RunId(1))
-    hold.unlink()
-    second.scheduler.wait(SETTLE)
+    with serving_api(cfg):  # the agent's `piloop submit` and `piloop run end` reach the new daemon
+        hold.unlink()
+        settle(second.scheduler, second.db)
     with second.db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.error, s.get_one(AgentSession, 1).state) == (
@@ -321,7 +325,10 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
             AgentSessionState.EXITED,
         )
         made = s.scalars(select(Candidate).where(Candidate.run_id == 1).order_by(Candidate.id)).all()
-        assert [(c.summary, scored(s, c.id)) for c in made] == [('first', True), ('second', True)]
+        assert [(c.summary, c.origin, scored(s, c.id)) for c in made] == [
+            ('second', Origin.RUN, True),
+            ('first', Origin.SKIPPED, False),
+        ], 'its submission is scored; the commit before it is kept unsubmitted'
         best = best_of(s, s.get_one(Campaign, campaign.id))
         assert best is not None and best.summary == 'second'
         assert s.get_one(Idea, 1).status is IdeaStatus.DONE
@@ -332,7 +339,6 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     first.scheduler.wait(SETTLE)
 
 
-@pytest.mark.run_end
 @pytest.mark.parametrize(
     ('ended', 'run_end', 'idea_status', 'is_scored'),
     [
@@ -354,7 +360,8 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
 
     The first daemon stops its agent, cannot apply the report (a locked database), and dies before it writes the rows.
     The next daemon adopts the agent and applies the spooled report: the run is cut by the stop, not failed, and its
-    commit is kept unmeasured. A run whose implementer ended it is handed off, and its commit is scored.
+    commit is kept unmeasured. A run whose implementer submitted its commit and ended it is handed off, and its
+    submission is scored.
     """
     hold = tmp_path / 'hold'
     hold.touch()
@@ -370,6 +377,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
     claim(first.db, RunId(1), IdeaId(1))
     if ended:
+        submitted(first.db, campaign, RunId(1), Revision(Repo(cfg.home / 'runs' / '1' / 'worktree').head.commit.hexsha))
         end(first.db, RunId(1))
     locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
     first.controller.stop(timeout=SETTLE)
@@ -383,7 +391,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
 
     second = Daemon(cfg)
     second.scheduler.reap()
-    second.scheduler.wait(SETTLE)
+    settle(second.scheduler, second.db)
     with second.db.session() as s:
         run, agent = s.get_one(Run, 1), s.get_one(AgentSession, 1)
         assert ((run.status, run.end), agent.state, agent.error) == (

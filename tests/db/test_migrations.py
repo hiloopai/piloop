@@ -1725,3 +1725,27 @@ def test_0087_scores_what_is_submitted_where_a_stored_config_scored_at_run_end_a
     command.downgrade(cfg, '0086')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert [loads(c) for (c,) in con.execute(stored)] == after, '0.6 scores submit as 0.7 does'
+
+
+def test_0088_takes_scoring_out_of_each_stored_config_and_counts_them(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0087')
+    configs = {'p': {'evaluator': {'scoring': 'submit', 'noise_runs': 1}}, 'q': {'evaluator': {}}, 'r': {'name': 'r'}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in configs.items():
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    with caplog.at_level('INFO'):
+        command.upgrade(cfg, '0088')
+    assert 'migration 0088 took scoring out of 1 stored configs' in caplog.messages
+    after = [{'evaluator': {'noise_runs': 1}}, configs['q'], configs['r']]
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == after
+    command.downgrade(cfg, '0087')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == after, '0.6 reads no scoring as submit'

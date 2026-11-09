@@ -9,7 +9,6 @@ agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
 split = "sealed"
 
 [overlay.evaluator]
-scoring = "submit"
 noise_runs = 3
 
 [overlay.plugins.role.implementer]

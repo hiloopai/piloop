@@ -118,22 +118,18 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     assert ImplementerRole().shown() == ['context', 'measure', 'idea_comments', 'history'], 'no guides'
 
 
-@pytest.mark.run_end
 def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaign: Campaign) -> None:
-    """The dev command, which piloop never runs, and which of its commits are scored."""
+    """The dev command, which piloop never runs, and that only what it submits is scored, up to its cap."""
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         assert markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == snapshot("""\
 ## Measure a change
 
-- After your run ends, piloop scores each of its versions on its own. Nothing is scored while you work:
-  do not wait for a score.
-- End the message of a commit that scores worse but opens a direction with the trailer `Piloop-Note: <why>`: its
-  candidate gets the note, so that a later run can start from it. Mark a commit that cannot run at all with `Piloop-Eval: skip`, never one
-  that you want to keep from a score.\
+- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on. Its score comes as a `[piloop]` message, with its gain over its parent, your line's best and the best. A score that beats the best is evaluated again until it is confirmed. Nothing is discarded: every score stays in the pool.
+- Submit each version that beats your best so far. Only submitted versions are scored.\
 """)
     dev = ['uv', 'run', 'evaluate.py', '--n', '50 rows']
-    set_config(db, campaign, evaluator={'dev': dev, 'scoring': 'submit', 'submissions': 2})
+    set_config(db, campaign, evaluator={'dev': dev, 'submissions': 2})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         text = markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
@@ -144,13 +140,6 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
 - `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on. Its score comes as a `[piloop]` message, with its gain over its parent, your line's best and the best. A score that beats the best is evaluated again until it is confirmed. Nothing is discarded: every score stays in the pool.
 - Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored.\
 """)
-    set_config(db, campaign, evaluator={'scoring': 'submit'})
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        text = markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-    assert '- Submit each version that beats your best so far. Only submitted versions are scored.' in text, (
-        'no cap, and no count'
-    )
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:

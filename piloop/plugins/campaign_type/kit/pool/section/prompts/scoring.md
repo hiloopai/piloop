@@ -8,7 +8,7 @@ Every scored candidate is in the campaign's pool. Nothing is kept or discarded:
 - A candidate's **line** is its chain of parents. A run starts from the best, or from any candidate that its claim
   names with `--base <candidate>`.
 - `excluded_reason` says why the orchestrator or a person took a candidate out of the race for the best.
-- A `skipped` version asked not to be evaluated (scaffolding). It has no measurement and says nothing about the idea.
+- A `skipped` version is one that its run did not submit. It has no measurement and says nothing about the idea.
 
 Roles, tracks, margins and floors are in `campaigns.config`.
 

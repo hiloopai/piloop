@@ -1,11 +1,7 @@
 import shlex
-from importlib.resources import files
-from typing import assert_never
 
 from piloop.api.views import Rendered, Text
-from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.plugins.vcs.contract import VCS, prompted
 
 SUBMIT = (
     '- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on.'
@@ -13,8 +9,6 @@ SUBMIT = (
     ' that beats the best is evaluated again until it is confirmed. Nothing is discarded: every score stays in the pool.'
 )
 """The line that names ``piloop submit``: on a worker elsewhere, the relay lets an agent run it."""
-RUN_END = files(__package__) / 'prompts' / 'run_end.md'
-"""0.5's scoring: every version is scored after the run, and a version can ask to be noted or skipped."""
 
 
 class Measure(Section):
@@ -30,16 +24,10 @@ class Measure(Section):
             lines.append(
                 f'- `{shlex.join(cfg.dev)}` checks a change fast, in your checkout: piloop never runs it or records it.'
             )
-        match cfg.scoring:
-            case Scoring.SUBMIT:
-                lines += [
-                    SUBMIT,
-                    '- Submit each version that beats your best so far'
-                    + ('' if cfg.submissions is None else f': your run has {cfg.submissions} submissions')
-                    + '. Only submitted versions are scored.',
-                ]
-            case Scoring.RUN_END:
-                lines.append(prompted(RUN_END.read_text().strip(), VCS.selected(r.campaign.config.plugins)))
-            case never:
-                assert_never(never)
+        lines += [
+            SUBMIT,
+            '- Submit each version that beats your best so far'
+            + ('' if cfg.submissions is None else f': your run has {cfg.submissions} submissions')
+            + '. Only submitted versions are scored.',
+        ]
         return Rendered(title='Measure a change', blocks=(Text(text='\n'.join(lines)),))

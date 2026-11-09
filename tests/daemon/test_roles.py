@@ -64,6 +64,7 @@ from tests.conftest import (
     reconfigured,
     run_all,
     serving,
+    settle,
     store_config,
     wait_until,
     write_toml,
@@ -93,14 +94,12 @@ def configure(
     db: Database,
     campaign: Campaign,
     harness_body: str,
-    *,
-    trigger: dict[str, object] | None = None,
     **roles: dict[str, object],
 ) -> None:
-    """Rewrite the campaign's harness script, role settings and ``trigger`` tables (merged over the test toml)."""
+    """Rewrite the campaign's harness script and role settings (merged over the test toml)."""
     write_toml(Path(campaign.path), harness_body)
     with db.session() as s:
-        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles, 'trigger': trigger or {}})
+        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles})
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
 
@@ -138,14 +137,13 @@ def queue(db: Database, sched: Scheduler, campaign: Campaign) -> None:
         s.commit()
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
-def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_scored(
+def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_submission_is_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """``[plugins.role.quick]`` with ``runs = true`` gets a fresh run of its own, as the implementer does.
 
-    The quick agent works with its own prompt in a new worktree at the best, and its commit is measured and scored.
+    The quick agent works with its own prompt in a new worktree at the best, and its submission is measured and scored.
     """
     (Path(campaign.path) / 'quick.md').write_text('# Quick\nTry the idea in a few minutes.\n')
     configure(db, campaign, HARNESS_SIGNS, quick=QUICK)
@@ -154,7 +152,7 @@ def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_sco
     sched = scheduler(db, recording(runtime, []), tmp_path)
     assert queued(db, sched, campaign.id, IdeaId(cheap), IdeaId(deep)) == [1, 2]
     assert sorted(run_all(sched)) == [1, 2]
-    sched.wait(SETTLE)
+    settle(sched, db)
     sched.stop(timeout=5)
     assert runs_by_role(db) == [(1, 'quick', cheap, 'quick'), (2, 'implementer', deep, 'implementer')]
     assert (tmp_path / 'runs' / '1' / 'brief.md').read_text().startswith('# Quick\nTry the idea')
@@ -449,35 +447,6 @@ def test_a_package_role_that_starts_its_agents_wakes_on_the_timer_that_its_reque
     sched.stop(timeout=5)
     assert sorted(Ticker.woken) == [('research', now), ('ticker', now), ('watchdog', now)]
     assert sched.loop.next_due() == now + timedelta(seconds=3)
-
-
-@pytest.fixture
-def tickers_and_yields(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """``TICKERS``, and a section that the package calls ``yields``."""
-    install_plugins(monkeypatch, [*TICKERS, EntryPoint('yields', f'{PLUGIN}:Yields', SECTIONS.group)])
-    yield
-    forget_loaded()
-
-
-@pytest.mark.usefixtures('tickers_and_yields')
-def test_the_0_6_bridges_keep_a_package_s_role_and_section_that_have_the_names_of_removed_ones(
-    campaign_path: Path,
-) -> None:
-    """A bridge drops only what piloop's own removed roles, keys and sections left: never a package's own."""
-    own = {'triggers': ['stalled', 'cron'], 'follow_head': True, 'interval': 5, 'sections': ['goal', 'yields']}
-    plugins = {'role': {'research': own}, 'section': {'use': ['goal', 'yields'], 'yields': {}}}
-    with warnings.catch_warnings():
-        warnings.simplefilter('error', PiloopDeprecationWarning)
-        cfg = load_campaign_config(campaign_path, plugins=plugins)
-    research = cfg.roles.starting()[RoleName('research')]
-    assert isinstance(research, Ticker)
-    assert (research.triggers, research.follow_head, research.interval, research.sections) == (
-        ['stalled', 'cron'],
-        True,
-        5,
-        ['goal', 'yields'],
-    )
-    assert SECTIONS.used(cfg.plugins) == ('goal', 'yields')
 
 
 HARNESS_NICENESS = '#!/bin/sh\nps -o nice= -p $$ | tr -d " " > "$PILOOP_HOME/niceness.txt"\n'

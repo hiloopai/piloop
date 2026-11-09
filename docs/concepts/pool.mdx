@@ -81,7 +81,7 @@ The message gives the score, the rank among the candidates that may be best, and
   its next tool call.
 
 A run submits as many commits as it likes, unless `[evaluator] submissions` caps it. A commit that is not submitted is
-never scored. `[evaluator] scoring = "run_end"` scores every commit after the run instead.
+never scored: it is a `skipped` candidate.
 
 ## Lines and bases
 

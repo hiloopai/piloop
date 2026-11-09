@@ -280,7 +280,7 @@ def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId 
         value = score(c, evaluator_id, primary)
         if value is not None and (best is None or primary.better(value, best[0])):
             best = (value, c, run.base_candidate_id)
-    if best is None:  # Every commit crashed in measurement or was skipped (Piloop-Eval: skip).
+    if best is None:  # Every commit crashed in measurement or was skipped (not submitted).
         c, _ = produced[-1]
         now = status(c, evaluator_id)
         where = now.climb()

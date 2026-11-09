@@ -13,7 +13,6 @@ from typing import Annotated, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from piloop import deprecated
 from piloop.api.contract import Access, Revealed
 from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
@@ -206,10 +205,6 @@ class Target(View):
     id: int
 
 
-ACKED_AT = 'acked_at and acked_by are the earliest ack of any party: read acks, one per party; removed in piloop 0.7.0'
-deprecated.until('0.7.0', 'delete ACKED_AT and the acked_at and acked_by fields of CommentView and Item: read acks')
-
-
 class AckView(View):
     """One party's acknowledgement of an inbox item."""
 
@@ -234,10 +229,6 @@ class Item(View):
     created: str
     acks: list[AckView]
     """Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."""
-    acked_at: str | None = Field(default=None, deprecated=ACKED_AT)
-    """Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none."""
-    acked_by: str | None = Field(default=None, deprecated=ACKED_AT)
-    """Deprecated: who wrote the earliest of ``acks``."""
     body: str
 
 
@@ -428,10 +419,6 @@ class CommentView(View):
     """Null for a comment that is not in the inbox."""
     acks: list[AckView]
     """Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."""
-    acked_at: str | None = Field(default=None, deprecated=ACKED_AT)
-    """Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none."""
-    acked_by: str | None = Field(default=None, deprecated=ACKED_AT)
-    """Deprecated: who wrote the earliest of ``acks``."""
     body: str
 
 

@@ -30,4 +30,3 @@ direction = "lower"
 role = "guardrail"
 margin = 60
 floor = 120
-repeats = 3

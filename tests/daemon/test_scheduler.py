@@ -78,13 +78,14 @@ from piloop.plugins.campaign_type.kit.candidates.references import import_refere
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested, current_evaluator, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.submissions import submit, submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, close_run, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_run
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_run, run_of_actor
 from piloop.plugins.campaign_type.kit.runs.stop import release, runs
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, run_of
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner, RunQueued
@@ -124,7 +125,9 @@ from tests.conftest import (
     register,
     reports,
     run_all,
+    score_waiting,
     serving,
+    settle,
     span_named,
     store_config,
     wait_for_agent_session_handle,
@@ -142,6 +145,19 @@ pytestmark = pytest.mark.usefixtures('auditor')
 def scored(s: Session, candidate: CandidateId) -> bool:
     """Whether the daemon scored ``candidate`` into the pool (``candidate.scored``)."""
     return latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate)) is not None
+
+
+def scoring_until(scheduler: Scheduler, db: Database, done: Callable[[], bool]) -> None:
+    """Start scoring each submission that waits, as the daemon's pass does (``Planner.remeasure``), until ``done``.
+
+    Unlike ``settle``, it waits for nothing in flight, and it starts no run either.
+    """
+
+    def scored_or_done() -> bool:
+        score_waiting(scheduler, db)
+        return done()
+
+    wait_until(scored_or_done)
 
 
 def make_scheduler(
@@ -319,7 +335,6 @@ def test_a_job_submitted_while_the_scheduler_counts_its_slots_still_takes_one(
     scheduler.stop(timeout=5)
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_the_workers_of_free_slots_take_the_open_ideas_most_urgent_first(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -348,10 +363,10 @@ def test_the_workers_of_free_slots_take_the_open_ideas_most_urgent_first(
             'a free slot',
         )
     assert run_all(scheduler) == [], 'max_concurrent=1: the second idea waits'
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
 
     assert run_all(scheduler) == [2]
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     scheduler.stop(timeout=1)
     with db.session() as s:
         assert [(i.id, i.status) for i in s.scalars(select(Idea).order_by(Idea.id))] == [
@@ -430,12 +445,10 @@ def test_no_run_starts_while_the_baseline_waits_for_a_measurement_by_a_new_evalu
     assert (run.idea_id, run.base_candidate_id) == (None, 1)
 
 
-@pytest.mark.run_end
-@pytest.mark.usefixtures('submitting')
 def test_a_run_that_claimed_nothing_ends_and_settles_no_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """Its worker saved a version without a claim: the version is scored, and no idea changes."""
+    """Its worker committed without a claim, so it submitted nothing: its version is skipped, and no idea changes."""
     (idea,) = add_ideas(db, campaign, 'never claimed')
     scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
     assert run_all(scheduler) == [1]
@@ -443,8 +456,9 @@ def test_a_run_that_claimed_nothing_ends_and_settles_no_idea(
     scheduler.stop(timeout=5)
     with db.session() as s:
         run = s.get_one(Run, 1)
-        assert (run.idea_id, run.end, run.scoring) == (None, RunEnd.FINISHED, False)
-        assert [scored(s, c.id) for c in s.scalars(select(Candidate).where(Candidate.run_id == 1))] == [True]
+        assert (run.idea_id, run.end, run.scoring) == (None, RunEnd.GAVE_UP, False)
+        made = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
+        assert [(c.origin, scored(s, c.id), c.measurements) for c in made] == [(Origin.SKIPPED, False, [])]
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         assert s.scalars(select(Comment)).all() == [], 'nothing to settle, so nothing to say'
 
@@ -525,14 +539,14 @@ def test_a_claim_ends_with_its_run(
         assert s.get_one(Idea, idea).status is after, 'an idea that the run no longer holds stays as it is'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_an_agent_without_a_run_checks_out_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     scheduler = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'more')
     assert run_all(scheduler) == [1]
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     with db.session() as s:
         best = s.get_one(Candidate, 2)
         found = best_of(s, s.get_one(Campaign, campaign.id))
@@ -723,7 +737,6 @@ def test_a_run_starts_from_the_best_as_of_its_start_not_as_of_the_idea(
         assert (s.get_one(Run, 1).idea_id, s.get_one(Run, 1).base_candidate_id) == (idea, 2)
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_held_idea_waits_for_every_prerequisite_then_starts_from_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -737,12 +750,12 @@ def test_a_held_idea_waits_for_every_prerequisite_then_starts_from_the_best(
     with db.session() as s:
         assert s.get_one(Run, 1).idea_id == first, 'the urgent idea is held, so the lower priorities run first'
         assert s.get_one(Idea, third).status is IdeaStatus.OPEN, 'skipped, not touched'
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     assert run_all(scheduler) == [2]
     with db.session() as s:
         assert s.get_one(Run, 2).idea_id == second, 'one prerequisite done is not enough'
         assert s.get_one(Idea, third).status is IdeaStatus.OPEN
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     with db.session() as s:
         best = best_of(s, s.get_one(Campaign, campaign.id))
         assert best is not None and best.id == 3, 'scores 2, then 3'
@@ -754,7 +767,7 @@ def test_a_held_idea_waits_for_every_prerequisite_then_starts_from_the_best(
         s.commit()
 
     assert run_all(scheduler) == [3]
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     scheduler.stop(timeout=1)
     with db.session() as s:
         run = s.get_one(Run, 3)
@@ -1196,7 +1209,6 @@ def test_a_cut_commit_of_a_known_tree_is_that_candidate(
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize('escalated', [False, True])
 def test_a_stop_after_the_implementer_ended_its_run_scores_it_on_the_next_start_and_never_requeues_its_idea(
@@ -1205,8 +1217,8 @@ def test_a_stop_after_the_implementer_ended_its_run_scores_it_on_the_next_start_
     """An implementer that ended its run has handed it off, even when a job of its own keeps the run open.
 
     A stop then closes the run as succeeded instead of returning the idea to ``open``, which would start a second run
-    of the same work. The commits are pinned and the next daemon scores them and settles the idea, as for any run whose
-    scoring a stop cut. An escalation that the implementer left open changes none of this.
+    of the same work. The commits are pinned and the next daemon scores its submission and settles the idea, as for
+    any run whose scoring a stop cut. An escalation that the implementer left open changes none of this.
     """
     note = (
         "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', 1, 'implementer#1', 'note',"
@@ -1234,12 +1246,14 @@ def test_a_stop_after_the_implementer_ended_its_run_scores_it_on_the_next_start_
         assert s.get_one(Idea, idea).status is IdeaStatus.CLAIMED, 'not ready: a second run would redo the work'
         notes = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR)).all()
         assert notes == [], 'its commits are scored, so no note sends the next run to them'
-    [step] = pinned(Repo(campaign.path), 'refs/piloop/demo/r1/')
-    assert Repo(campaign.path).commit(step).summary == 'step'
+    repo = Repo(campaign.path)
+    assert [repo.commit(f'refs/piloop/demo/r1/{pin}').summary for pin in ('0', 's0')] == ['step', 'step'], (
+        'pinned as the version of the run and as its submission'
+    )
 
     restarted = make_scheduler(db, runtime, tmp_path)
     restarted.reap()
-    restarted.wait(SETTLE)
+    settle(restarted, db)
     with db.session() as s:
         [candidate] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
         assert (candidate.summary, scored(s, candidate.id)) == ('step', True)
@@ -1400,7 +1414,6 @@ def test_stop_waits_for_a_start_in_flight_then_kills_the_implementer(
     assert active(scheduler) == []
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_stop_kills_the_evaluator_and_scores_nothing_more(
     db: Database,
@@ -1416,10 +1429,16 @@ def test_stop_kills_the_evaluator_and_scores_nothing_more(
     set_config(
         db, campaign, evaluate=['sh', '-c', f'echo $$ > {pid_file}.part; mv {pid_file}.part {pid_file}; exec sleep 30']
     )
+    with db.session() as s:  # the new evaluator measured the baseline: what it measures now is the submission
+        p = s.get_one(Campaign, campaign.id)
+        evaluator = current_evaluator(s, p, p.config)
+        s.add(Measurement(candidate_id=1, evaluator_id=evaluator.id, metrics={'score': 1, 'size': 1}))
+        s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path, tracer)
     add_ideas(db, campaign, 'two commits')
     run_all(scheduler)
-    wait_until(pid_file.exists)
+    # the submission is scored while its implementer works on: wait for the run to close too
+    scoring_until(scheduler, db, lambda: pid_file.exists() and run_closed(db, RunId(1)))
     pid = int(pid_file.read_text())
 
     started = time.monotonic()
@@ -1437,27 +1456,26 @@ def test_stop_kills_the_evaluator_and_scores_nothing_more(
             'the implementer had finished; only scoring was cut'
         )
         made = s.scalars(select(Candidate).where(Candidate.run_id == 1).order_by(Candidate.id)).all()
-        assert [(c.summary, scored(s, c.id), c.measurements) for c in made] == [
-            ('first', False, []),
-            ('second', False, []),
-        ], 'both trees are candidates; the measurement of the first was killed and nothing scored them'
+        assert [(c.summary, c.origin, scored(s, c.id), c.measurements) for c in made] == [
+            ('second', Origin.RUN, False, []),
+            ('first', Origin.SKIPPED, False, []),
+        ], 'its submission is a candidate first, its other commit is skipped; the measurement was killed'
     measured = [sp for sp in spans.get_finished_spans() if sp.name == 'piloop.measure']
-    assert len(measured) == 1, 'the second commit is never measured'
+    assert len(measured) == 1, 'the commit that it did not submit is never measured'
     assert dict(measured[0].attributes or {})['status'] == 'cancelled'
     traced = dict(span_named(spans, 'piloop.run').attributes or {})
     assert (traced['status'], traced['end']) == (RunStatus.SUCCEEDED, RunEnd.FINISHED), 'only its scoring was cut'
     assert not (tmp_path / 'runs' / '1' / 'worktree').exists()
-    assert list((tmp_path / 'runs' / '1' / 'eval-0').glob('eval/lease-*/worktree')) == []
+    assert list((tmp_path / 'runs' / '1').glob('submission-*/eval/lease-*/worktree')) == []
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_its_idea_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """After a restart during an evaluation, the next daemon scores the run's commits and does not run its idea again.
+    """After a restart during an evaluation, the next daemon scores the run's submission and does not run its idea again.
 
-    The next daemon scores every commit of the run, and settles the idea once.
+    The next daemon scores the submission that the restart cut, and settles the idea once.
     """
     hold = tmp_path / 'hold'
     hold.touch()
@@ -1471,7 +1489,15 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     first = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'two commits')
     run_all(first)
-    wait_until(lambda: list((tmp_path / 'runs' / '1' / 'eval-0').glob('eval/lease-*/candidate-0/eval.stdout')))
+    run_dir = tmp_path / 'runs' / '1'
+    # the submission is scored while its implementer works on: wait for the run to close too
+    scoring_until(
+        first,
+        db,
+        lambda: (
+            bool(list(run_dir.glob('submission-*/eval/lease-*/candidate-0/eval.stdout'))) and run_closed(db, RunId(1))
+        ),
+    )
     first.stop(timeout=10)
     with db.session() as s:
         assert s.get_one(Idea, 1).status is IdeaStatus.CLAIMED
@@ -1480,17 +1506,15 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     hold.unlink()
     second = make_scheduler(db, runtime, tmp_path)
     second.reap()
-    second.wait(SETTLE)
+    settle(second, db)
     with db.session() as s:
         made = s.scalars(select(Candidate).where(Candidate.run_id == 1).order_by(Candidate.id)).all()
-        assert [(c.summary, scored(s, c.id), len(c.measurements)) for c in made] == [
-            ('first', True, 1),
-            ('second', True, 1),
-        ], 'the cut commit and the one never reached are both measured and scored'
+        assert [(c.summary, c.origin, scored(s, c.id), len(c.measurements)) for c in made] == [
+            ('second', Origin.RUN, True, 1),
+            ('first', Origin.SKIPPED, False, 0),
+        ], 'the cut submission is measured and scored; the commit that it did not submit is not'
         assert s.get_one(Idea, 1).status is IdeaStatus.DONE, 'settled by its one finished run'
-    run_all(second)  # the cut run made the evaluator: runs wait until it measured the baseline
-    second.wait(SETTLE)
-    run_all(second)
+    run_all(second)  # the passes that scored the submission measured the baseline under the new evaluator too
     second.wait(SETTLE)
     with db.session() as s:
         assert s.scalars(select(Run.idea_id).order_by(Run.id)).all() == [1, None], (
@@ -1601,7 +1625,6 @@ def test_a_baseline_that_fails_to_evaluate_pauses_its_campaign_and_one_measured_
     assert [error is None for _, _, error in measured_by(db, baseline.id)] == [False, True, False]
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wait_for_them(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1616,13 +1639,13 @@ def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wai
     sched = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'one more line')
     run_all(sched)
-    sched.wait(SETTLE)
+    settle(sched, db)
     with db.session() as s:
         old = s.get_one(Campaign, campaign.id).evaluator_id
         kept = s.scalars(select(Candidate).where(Candidate.run_id == 1)).one()
         assert best_of(s, s.get_one(Campaign, campaign.id)) == kept
     doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
+    write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         sync(s, proj)
@@ -1641,7 +1664,7 @@ def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wai
     assert measured_by(db, CandidateId(1)) == [(old, 1.0, None), (new, 2.0, None)], 'then the baseline'
 
     assert run_all(sched) == [2], 'both have a score: the run starts from the best'
-    sched.wait(SETTLE)
+    settle(sched, db)
     with db.session() as s:
         assert s.get_one(Run, 2).base_candidate_id == kept.id
         request_remeasure(s, s.get_one(Candidate, kept.id), System.HUMAN, repeats=1)
@@ -1651,7 +1674,6 @@ def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wai
     assert measured_by(db, kept.id) == [(old, 2.0, None), (new, 4.0, None), (new, 4.0, None)], 'measured when asked'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_after_a_new_evaluator_runs_start_once_the_baseline_and_the_carried_best_alone_are_measured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1663,14 +1685,14 @@ def test_after_a_new_evaluator_runs_start_once_the_baseline_and_the_carried_best
     sched = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'first line')
     run_all(sched)
-    sched.wait(SETTLE)
+    settle(sched, db)
     add_ideas(db, campaign, 'second line')
     run_all(sched)
-    sched.wait(SETTLE)
+    settle(sched, db)
     with db.session() as s:
         older, newer = (s.scalars(select(Candidate).where(Candidate.run_id == r)).one().id for r in (1, 2))
     doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
+    write_toml(Path(campaign.path), HARNESS_APPEND + END_RUN, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         sync(s, proj)
@@ -1684,11 +1706,10 @@ def test_after_a_new_evaluator_runs_start_once_the_baseline_and_the_carried_best
     assert run_all(sched) == [3], 'the baseline and the carried best have scores'
     with db.session() as s:
         assert (s.get_one(Run, 3).idea_id, s.get_one(Run, 3).base_candidate_id) == (free, newer)
-    sched.wait(SETTLE)
+    settle(sched, db)
     sched.stop(timeout=5)
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_after_a_new_evaluator_no_run_starts_until_the_best_of_the_old_one_is_measured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1703,10 +1724,10 @@ def test_after_a_new_evaluator_no_run_starts_until_the_best_of_the_old_one_is_me
     sched = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'first line')
     run_all(sched)
-    sched.wait(SETTLE)
+    settle(sched, db)
     (second,) = add_ideas(db, campaign, 'second line')
     run_all(sched)
-    sched.wait(SETTLE)
+    settle(sched, db)
     with db.session() as s:
         older, newer = (s.scalars(select(Candidate).where(Candidate.run_id == r)).one().id for r in (1, 2))
         assert best_of(s, s.get_one(Campaign, campaign.id)) == s.get_one(Candidate, newer)
@@ -2125,12 +2146,14 @@ def test_a_message_that_cannot_be_delivered_is_settled_as_undelivered_and_never_
     )
 
 
-@pytest.mark.run_end
-@pytest.mark.usefixtures('submitting')
+@pytest.mark.usefixtures('daemon_api')
 def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_once_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A run frees its implementer slot when its implementer ends, and its idea settles only when the commits are scored."""
+    """A run frees its implementer slot when its implementer ends, and its idea settles only once its submission is
+    scored."""
+    # each worker signs its line: the second run starts from the baseline too, and submits a tree of its own
+    write_toml(Path(campaign.path), '#!/bin/sh\necho "$PILOOP_ACTOR" >> solve.txt\ngit commit -qam "sign"\n' + END_RUN)
     go = tmp_path / 'go'
     gated = f'while [ ! -f {go} ]; do sleep 0.05; done; {reports(score="$(wc -l < solve.txt)", size="1")}'
     set_config(db, campaign, evaluate=['sh', '-c', gated])
@@ -2142,8 +2165,8 @@ def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_onc
         s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == [1]
-    # the run closes, then its commit becomes a candidate: wait for both, the evaluation is gated
-    wait_until(lambda: candidate_rows(db, RunId(1)))
+    # its commit became a candidate when it submitted it, before the run closed: the evaluation is gated
+    wait_until(lambda: run_closed(db, RunId(1)))
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.finished_at is not None) == (RunStatus.SUCCEEDED, True), 'closed: its implementer ended'
@@ -2151,16 +2174,21 @@ def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_onc
         assert not scored(s, s.scalars(select(Candidate.id).where(Candidate.run_id == 1)).one())
     assert run_all(scheduler) == [2], 'the one slot is free while run#1 is scored'
     go.touch()
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     assert statuses(db) == [IdeaStatus.DONE, IdeaStatus.DONE]
     with db.session() as s:
         assert scored(s, s.scalars(select(Candidate.id).where(Candidate.run_id == 1)).one())
         assert s.get_one(Idea, second).status is IdeaStatus.DONE
 
 
-def candidate_rows(db: Database, run_id: RunId) -> int:
+def submissions_of(db: Database, run_id: RunId) -> list[CandidateId]:
     with db.session() as s:
-        return len(s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all())
+        return submitted(s, run_id)
+
+
+def run_closed(db: Database, run_id: RunId) -> bool:
+    with db.session() as s:
+        return s.get_one(Run, run_id).finished_at is not None
 
 
 def stop_by_hand(tmp_path: Path, campaign: Campaign) -> None:
@@ -2222,7 +2250,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
     assert revoked(db) == ['implementer-1']
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the_campaign_stop(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2231,9 +2259,12 @@ def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the
     kill's exit status, and nothing named the stop.
 
     The run closes with ``campaign stopped``: not an attempt at its idea, and not counted toward a run limit. What
-    the implementer committed, and what it left uncommitted, is still scored.
+    the implementer submitted is still scored, and what it left uncommitted is kept.
     """
-    harness = '#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\necho draft >> solve.txt\nexec sleep 30\n'
+    harness = (
+        '#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n"$PILOOP_BIN" submit > /dev/null\n'
+        'echo draft >> solve.txt\nexec sleep 30\n'
+    )
     write_toml(Path(campaign.path), harness, implementer_timeout=60)
     set_config(db, campaign)
     (idea,) = add_ideas(db, campaign, 'long')
@@ -2250,7 +2281,7 @@ def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the
     assert [kind for kind, _ in settled(db, 'agent_session.wrap_up')] == [1], 'told, but the turn goes on'
     timings(db, campaign, wrap_up_grace=0)
     run_all(scheduler)
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     scheduler.stop(timeout=5)
     with db.session() as s:
         run = s.get_one(Run, 1)
@@ -2261,10 +2292,10 @@ def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the
             AgentEnded(reason='plateau: 5 runs without a new best', end=RunEnd.CAMPAIGN_STOPPED),
         )
         made = s.scalars(select(Candidate).where(Candidate.run_id == 1).order_by(Candidate.id))
-        assert [(c.origin, scored(s, c.id)) for c in made] == [(Origin.RUN, True), (Origin.RECOVERED, False)], (
-            'its commit is scored, its draft recovered'
+        assert [(c.origin, scored(s, c.id)) for c in made] == [(Origin.RUN, True), (Origin.SKIPPED, False)], (
+            'its submission is scored; its draft, saved by its worker, is kept unsubmitted'
         )
-        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN, 'requeued from the recovered draft'
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN, 'requeued: the stop cut its run'
         assert runs(s, s.get_one(Campaign, campaign.id)) == 0, 'cut by the stop: no run limit counts it'
 
 
@@ -2371,33 +2402,32 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
     scheduler.stop(timeout=5)
 
 
-@pytest.mark.run_end
-def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_and_reopens_its_idea(
+@pytest.mark.usefixtures('daemon_api')
+def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_submission_and_reopens_its_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """``piloop agent cancel``: the run became redundant, so its idea does not run again until it is set ready."""
-    harness = '#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\nexec sleep 30\n'
+    harness = (
+        '#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n"$PILOOP_BIN" submit > /dev/null\nexec sleep 30\n'
+    )
     write_toml(Path(campaign.path), harness, implementer_timeout=60)
     set_config(db, campaign)
     (idea,) = add_ideas(db, campaign, 'redundant')
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == [1]
     wait_for_agent_session_handle(db)
-    deadline = time.monotonic() + 10
-    while not Repo(tmp_path / 'runs' / '1' / 'worktree').git.log('--oneline').count('step'):
-        assert time.monotonic() < deadline
-        time.sleep(0.05)
+    wait_until(lambda: submissions_of(db, RunId(1)))
     with db.session() as s:
         request_cancel(s, s.get_one(AgentSession, 1), System.HUMAN, ending=Ending.NOW)
         s.commit()
     assert run_all(scheduler) == []
-    scheduler.wait(SETTLE)
+    settle(scheduler, db)
     scheduler.stop(timeout=5)
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.CANCELLED)
         made = [scored(s, c.id) for c in s.scalars(select(Candidate).where(Candidate.run_id == 1))]
-        assert made == [True], 'what it committed is scored'
+        assert made == [True], 'what it submitted is scored'
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body == 'open: run#1 was cancelled by human; drop the idea to take it off the board'
@@ -2884,9 +2914,15 @@ def test_an_implementer_is_told_to_wrap_up_before_the_deadline_of_its_launch_whe
 def ended_by_its_worker(
     db: Database, agent_session_id: int, how: RunEnding = RunEnding.SUBMITTED, *, ago: timedelta = timedelta(0)
 ) -> None:
-    """The worker of ``agent_session_id`` ends its run as ``how``, ``ago`` before now."""
+    """The worker of ``agent_session_id`` ends its run as ``how``, ``ago`` before now: ``submitted`` once it submitted a
+    version, as a run that submitted nothing cannot end so."""
+    worker = Agent(role=IMPLEMENTER, session=agent_session_id)
+    if how is RunEnding.SUBMITTED:
+        with db.session() as s:
+            submit_a_line(s, run_of_actor(s, worker), worker)
+            s.commit()
     with db.session() as s:
-        run = end_run(s, how, 'too slow', actor=Agent(role=IMPLEMENTER, session=agent_session_id))
+        run = end_run(s, how, 'too slow', actor=worker)
         s.commit()
     with db.session() as s:
         [event] = s.scalars(select(Event).where(Event.target == TargetRef(RUN, run.id), has(RunEndRequested))).all()
@@ -2894,7 +2930,19 @@ def ended_by_its_worker(
         s.commit()
 
 
-@pytest.mark.run_end
+def submit_a_line(s: Session, run: Run, worker: Agent) -> None:
+    """``worker`` commits a line of its own in a checkout of the campaign and submits it, as ``piloop submit`` does."""
+    campaign = Path(run.campaign.path)
+    checkout = campaign.parent / f'checkout-{run.id}'
+    Repo(campaign).git.worktree('add', '-q', '--detach', str(checkout), 'HEAD')
+    with Repo(checkout) as work:
+        (checkout / 'solve.txt').write_text(f'base\n{worker}\n')
+        work.git.commit('-qam', 'a line')
+        revision = work.head.commit.hexsha
+    with closing(GitRepository(Repo(campaign), PILOOP)) as repo:
+        submit(s, run, repo.version(revision), repo, worker)
+
+
 @pytest.mark.parametrize(('how', 'end'), [(RunEnding.SUBMITTED, RunEnd.FINISHED), (RunEnding.GAVE_UP, RunEnd.GAVE_UP)])
 def test_an_implementer_is_ended_a_minute_after_it_ended_its_run(
     db: Database, campaign: Campaign, tmp_path: Path, how: RunEnding, end: RunEnd
@@ -2925,7 +2973,6 @@ def test_an_implementer_is_ended_a_minute_after_it_ended_its_run(
     scheduler.stop(timeout=5)
 
 
-@pytest.mark.run_end
 @pytest.mark.parametrize('closed', [AgentSessionState.EXITED, AgentSessionState.KILLED])
 def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_leaves_it_closed(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, closed: AgentSessionState
@@ -2962,7 +3009,6 @@ def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_
     scheduler.stop(timeout=5)
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_implementer_that_left_a_job_running_after_it_ended_its_run_succeeds_and_the_job_is_killed(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2991,7 +3037,7 @@ def test_an_implementer_that_left_a_job_running_after_it_ended_its_run_succeeds_
     start = proc.started(child)
     assert start is not None
     run_all(scheduler)
-    scheduler.wait(20)
+    settle(scheduler, db, timeout=20)
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.end) == (RunStatus.SUCCEEDED, RunEnd.FINISHED)

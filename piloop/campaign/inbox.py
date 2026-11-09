@@ -19,7 +19,6 @@ from sqlalchemy import ColumnElement, ScalarSelect, case, exists, literal, selec
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, Session, aliased
 
-from piloop import deprecated
 from piloop.actor import Actor, System, by_a_person, party_of
 from piloop.api.views import (
     AckOutcome,
@@ -251,15 +250,9 @@ def withdraw(s: Session, item_id: CommentId) -> None:
         )
 
 
-def ack_views(comment: Comment) -> tuple[list[AckView], str | None, str | None]:
-    """The ``acks`` of ``comment`` as a view shows them, and 0.6's ``acked_at`` and ``acked_by``: its earliest ack.
-
-    The earliest ack of any party, not the people's: 0.6 had one ack, the first of whoever acknowledged the item.
-    """
-    deprecated.until('0.7.0', 'ack_views returns only the acks: the views lose acked_at and acked_by')
-    first = comment.acks[0] if comment.acks else None
-    views = [AckView(party=a.party, by=a.acked_by, at=iso(a.acked_at)) for a in comment.acks]
-    return views, None if first is None else iso(first.acked_at), None if first is None else first.acked_by
+def ack_views(comment: Comment) -> list[AckView]:
+    """The ``acks`` of ``comment`` as a view shows them, oldest first."""
+    return [AckView(party=a.party, by=a.acked_by, at=iso(a.acked_at)) for a in comment.acks]
 
 
 @dataclass(frozen=True)
@@ -354,7 +347,6 @@ def root_of(s: Session, comment: Comment) -> Comment:
 
 def comment_view(c: Comment) -> CommentView:
     """``c`` as the API shows it."""
-    acks, acked_at, acked_by = ack_views(c)
     return CommentView(
         id=c.id,
         kind=str(c.kind),
@@ -364,9 +356,7 @@ def comment_view(c: Comment) -> CommentView:
         created=iso(c.created_at),
         priority=c.priority,
         body=c.body,
-        acks=acks,
-        acked_at=acked_at,
-        acked_by=acked_by,
+        acks=ack_views(c),
     )
 
 

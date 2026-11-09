@@ -45,6 +45,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import EvaluationSettings
 from tests.conftest import (
+    END_RUN,
     SETTLE,
     ScriptRuntime,
     bare_config,
@@ -52,6 +53,7 @@ from tests.conftest import (
     factory,
     reports,
     run_all,
+    scoring,
     serving,
     store_config,
     wait_until,
@@ -126,6 +128,12 @@ def queued_executor(
     return serving(controller)
 
 
+def still_scoring(db: Database, run_id: RunId) -> bool:
+    """Whether the run waits for the scores of its submissions (``Run.scoring``)."""
+    with db.session() as s:
+        return s.get_one(Run, run_id).scoring
+
+
 def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], str | None]:
     """The errors of the candidate's measurements, and where its last score told it stands, or None."""
     with db.session() as s:
@@ -134,31 +142,31 @@ def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], s
         return [m.error for m in c.measurements], found[1].told if found is not None else None
 
 
-@pytest.mark.run_end
-def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
+@pytest.mark.usefixtures('submitting')
+def test_two_requests_for_one_tree_share_one_evaluation_and_its_crash(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """A tree that a second run reaches while it is evaluated is not evaluated again, not even after a crash."""
+    """A tree that a second request reaches while it is evaluated is not evaluated again, not even after a crash: a
+    remeasure of a submission while its score runs, say."""
     (tmp_path / 'hold').touch()
     held_runs(db, campaign, tmp_path, then='exit 7')
     ex = queued_executor(db, runtime, tmp_path, slots=2)
     waits = mocker.spy(queue, 'request')
-    first, second = make_run(db, campaign), make_run(db, campaign, title='the same line')
-    one = in_thread(lambda: execute(ex, db, first))
-    wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
-    two = in_thread(lambda: execute(ex, db, second))
-    wait_until(lambda: waits.call_count == 2, 'the second request')
-    (tmp_path / 'hold').unlink()
-    one.join(30)
-    two.join(30)
-    [candidate] = run_candidates(db, first)
-    assert run_candidates(db, second) == [], 'the second run reached the tree of the first'
+    run_id = make_run(db, campaign)
+    with scoring(ex, db):
+        one = in_thread(lambda: execute(ex, db, run_id))
+        wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the evaluation of the submission')
+        [candidate] = run_candidates(db, run_id)
+        two = in_thread(lambda: ex.remeasure(candidate.id))
+        wait_until(lambda: waits.call_count == 2, 'the second request')
+        (tmp_path / 'hold').unlink()
+        one.join(30)
+        two.join(30)
     assert errors(db, candidate.id) == (['evaluate exit 7: '], 'crash: no evaluation succeeded')
     assert len(evaluated(tmp_path)) == 1, 'evaluated once'
     assert rows(db) == [], 'the queue is empty'
 
 
-@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_for_every_request(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
@@ -170,29 +178,30 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
     failed: list[Path] = []
 
     def cannot_check_out(repo: Repo, path: Path, sha: str, links: dict[str, Path]) -> None:
-        if 'eval-' not in str(path) or failed:  # the implementer's worktree, or the evaluation that runs again
+        if 'submission-' not in str(path) or failed:  # the implementer's worktree, or the evaluation that runs again
             return add_worktree(repo, path, sha, links)
         wait_until(lambda: waits.call_count == 2, 'the second request')
         failed.append(path)
         raise RuntimeError('cannot check out the commit')
 
     mocker.patch('piloop.plugins.vcs.git.commands.add_worktree', side_effect=cannot_check_out)
-    first, second = make_run(db, campaign), make_run(db, campaign, title='the same line')
-    one = in_thread(lambda: execute(ex, db, first))
-    wait_until(lambda: len(rows(db)) == 1, 'the first request')
-    two = in_thread(lambda: execute(ex, db, second))
-    one.join(30)
-    two.join(30)
-    [candidate] = run_candidates(db, first)
+    run_id = make_run(db, campaign)
+    with scoring(ex, db):
+        one = in_thread(lambda: execute(ex, db, run_id))
+        wait_until(lambda: len(rows(db)) == 1, 'the request of the submission')
+        [candidate] = run_candidates(db, run_id)
+        two = in_thread(lambda: ex.remeasure(candidate.id))
+        one.join(30)
+        two.join(30)
     assert errors(db, candidate.id) == ([None], TOLD), 'measured once, after the infra error'
     with db.session() as s:
-        assert [s.get_one(Run, r).status for r in (first, second)] == [RunStatus.SUCCEEDED] * 2
+        assert s.get_one(Run, run_id).status is RunStatus.SUCCEEDED
         [infra] = [p for _, p in in_order(s, InfraFailed)]
         assert infra.error == 'RuntimeError: cannot check out the commit'
     assert rows(db) == []
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 def test_an_evaluation_that_the_executor_refuses_leaves_the_queue_as_an_infra_error_and_runs_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -213,8 +222,9 @@ def test_an_evaluation_that_the_executor_refuses_leaves_the_queue_as_an_infra_er
 
     monkeypatch.setattr(ex.executor, 'submit', full_disk)
     run_id = make_run(db, campaign)
-    done = in_thread(lambda: execute(ex, db, run_id))
-    done.join(60)
+    with scoring(ex, db):
+        done = in_thread(lambda: execute(ex, db, run_id))
+        done.join(60)
     assert not done.is_alive(), 'the request asked again, and its evaluation ran'
     [candidate] = run_candidates(db, run_id)
     assert errors(db, candidate.id) == ([None], TOLD), 'measured once, after the infra error; no crash'
@@ -244,30 +254,31 @@ def test_a_cancelled_evaluation_whose_job_is_lost_leaves_the_queue_for_good(db: 
             KIND.lost(s, evaluation.id)
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_cancelled_evaluation_is_no_score_and_its_cancel_stands_at_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A cancel is a row of its own, so it holds even if no daemon sees it; a running evaluator is stopped."""
-    write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
+    write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE + END_RUN)
     (tmp_path / 'hold').touch()
     held_runs(db, campaign, tmp_path)
     ex = queued_executor(db, runtime, tmp_path, slots=1)
     first, second = make_run(db, campaign), make_run(db, campaign, title='another line')
-    one = in_thread(lambda: execute(ex, db, first))
-    wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
-    two = in_thread(lambda: execute(ex, db, second))
-    wait_until(lambda: len(rows(db)) == 2, 'the second evaluation to wait')
-    [running] = run_candidates(db, first)
-    [waiting] = run_candidates(db, second)
-    with db.session() as s:
-        assert queue.cancel(s, waiting.id, System.ORCHESTRATOR) == 1
-        assert queue.cancel(s, running.id, System.HUMAN) == 1
-        s.commit()
-    assert rows(db) == [(running.id, True, 'human')], 'the waiting one left the queue; the running one is stopping'
-    two.join(30)
-    ex.stop_cancelled()
-    one.join(30)
+    with scoring(ex, db):
+        one = in_thread(lambda: execute(ex, db, first))
+        wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
+        two = in_thread(lambda: execute(ex, db, second))
+        wait_until(lambda: len(rows(db)) == 2, 'the second evaluation to wait')
+        [running] = run_candidates(db, first)
+        [waiting] = run_candidates(db, second)
+        with db.session() as s:
+            assert queue.cancel(s, waiting.id, System.ORCHESTRATOR) == 1
+            assert queue.cancel(s, running.id, System.HUMAN) == 1
+            s.commit()
+        assert rows(db) == [(running.id, True, 'human')], 'the waiting one left the queue; the running one is stopping'
+        two.join(30)
+        ex.stop_cancelled()
+        one.join(30)
     assert cancelled(db, running.id) == []
     assert cancelled(db, waiting.id) == []
     assert errors(db, running.id)[1] is None and errors(db, waiting.id)[1] is None, 'no score'
@@ -304,20 +315,21 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
     assert cancelled(db, other.id) == [], 'no daemon measures it'
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('daemon_api')
 def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
+    write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE + END_RUN)
     (tmp_path / 'hold').touch()
     held_runs(db, campaign, tmp_path)
     ex = queued_executor(db, runtime, tmp_path, slots=1)
     first, second = make_run(db, campaign), make_run(db, campaign, title='another line')
-    threads = [in_thread(lambda: execute(ex, db, first))]
-    wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
-    threads.append(in_thread(lambda: execute(ex, db, second)))
-    wait_until(lambda: len(rows(db)) == 2, 'the second evaluation to wait')
-    ex.stop(30)
+    with scoring(ex, db):
+        threads = [in_thread(lambda: execute(ex, db, first))]
+        wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
+        threads.append(in_thread(lambda: execute(ex, db, second)))
+        wait_until(lambda: len(rows(db)) == 2, 'the second evaluation to wait')
+        ex.stop(30)
     for thread in threads:
         thread.join(30)
     workers_of(ex).worker.join(30)
@@ -712,7 +724,7 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
         assert retired(s, hidden.id)
 
 
-@pytest.mark.run_end
+@pytest.mark.usefixtures('submitting')
 @pytest.mark.parametrize('limit', [None, 1, 5])
 def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, limit: int | None
@@ -742,14 +754,20 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
         )
         why = proj.paused_reason
     run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
-    assert tries(tmp_path) == expected * 2, "a run's version stops after its tries too"
+    ran = in_thread(lambda: execute(ex, db, run_id))
+    wait_until(lambda: run_candidates(db, run_id) != [], 'the submission')
     [version] = run_candidates(db, run_id)
+    ex.score_submission(version.id)
+    assert tries(tmp_path) == expected * 2, "a run's submission stops after its tries too"
     with db.session() as s:
         assert s.get_one(Candidate, version.id).measurements == []
         on = [c.target for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))]
         assert on == [TargetRef(CANDIDATE, base), TargetRef(CANDIDATE, version.id)], 'one escalation for each'
         assert s.get_one(Campaign, campaign.id).paused_reason == why, 'the first pause holds'
+    wait_until(lambda: still_scoring(db, run_id), 'the run to wait for the score of its submission')
+    ex.stop(30)  # the run waits for that score until the measurements resume: a stop leaves it for the next daemon
+    ran.join(30)
+    assert still_scoring(db, run_id)
 
 
 def test_retries_that_later_succeed_neither_pause_nor_escalate(
