@@ -396,6 +396,7 @@ def notes(db: Database) -> list[tuple[str, str]]:
     return [(body, actor) for body, actor in rows]
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')  # the server runs its relayed `piloop run end` against the home's API
 def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_its_piloop_calls_reach_the_server(
     db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path, dial: Dial, no_git_identity: None

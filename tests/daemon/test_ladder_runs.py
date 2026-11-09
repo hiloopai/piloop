@@ -6,6 +6,7 @@ candidate.
 
 from pathlib import Path
 
+import pytest
 from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
 
@@ -53,6 +54,7 @@ def rungs_of(db: Database, candidate_id: CandidateId) -> list[tuple[str | None, 
         return [(m.rung, m.stopped, m.metrics) for m in s.get_one(Candidate, candidate_id).measurements]
 
 
+@pytest.mark.run_end
 def test_a_run_stops_its_version_at_a_rung_and_a_remeasure_climbs_in_full(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -85,6 +87,7 @@ def test_a_run_stops_its_version_at_a_rung_and_a_remeasure_climbs_in_full(
         assert requested(s, s.get_one(Campaign, campaign.id)) == []
 
 
+@pytest.mark.run_end
 def test_a_rung_with_its_own_command_runs_first_and_its_stop_spares_the_evaluate_command(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -106,6 +109,7 @@ def test_a_rung_with_its_own_command_runs_first_and_its_stop_spares_the_evaluate
     assert rungs_of(db, c.id) == [('smoke', 'score 0 past its floor 1', {'score': 0.0, 'cost': 0.5})]
 
 
+@pytest.mark.run_end
 def test_two_runs_that_reach_one_tree_share_one_climb(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -131,6 +135,7 @@ def test_two_runs_that_reach_one_tree_share_one_climb(
     assert rows(db) == []
 
 
+@pytest.mark.run_end
 def test_a_remeasure_that_joins_a_stopped_climb_is_asked_again_and_then_climbs_in_full(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:

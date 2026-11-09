@@ -82,7 +82,7 @@ def main() -> int:
         'cpu_seconds': round(statistics.median(c for c, _ in timings), 4),
         'wall_seconds': round(statistics.median(w for _, w in timings), 4),
     }
-    line = json.dumps({'metrics': metrics})
+    line = json.dumps({'status': 'ok', 'score': metrics.pop('cpu_seconds'), 'direction': 'lower', 'metrics': metrics})
     if path := os.environ.get('PILOOP_RESULT_FILE'):
         with open(path, 'a') as f:
             f.write(line + '\n')

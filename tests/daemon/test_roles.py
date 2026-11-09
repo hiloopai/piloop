@@ -138,6 +138,7 @@ def queue(db: Database, sched: Scheduler, campaign: Campaign) -> None:
         s.commit()
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path

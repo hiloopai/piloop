@@ -188,6 +188,7 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
     )
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('api')
 def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_signed_as_itself(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch

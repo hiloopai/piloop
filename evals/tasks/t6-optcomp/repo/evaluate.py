@@ -16,7 +16,8 @@ A run may also get ``spec.private.json`` and its modules, a private split whose 
 repository: its targets count in ``proved`` too, and alone in ``proved_private``.
 
 Usage: ``python3 evaluate.py`` at the root of the repo, with Mathlib's built packages in
-``.lake/packages``. Prints one JSON line, ``{"metrics": {"proved", "proved_count", "build_seconds"}}``.
+``.lake/packages``. Prints one JSON line, ``{"status": "ok", "score": <proved>, "direction": "higher", "metrics":
+{"proved_count", "build_seconds"}}``.
 """
 
 import contextlib
@@ -252,7 +253,7 @@ def main() -> int:
     except RuntimeError as e:
         print(e, file=sys.stderr)
         return 1
-    line = json.dumps({'metrics': metrics})
+    line = json.dumps({'status': 'ok', 'score': metrics.pop('proved'), 'direction': 'higher', 'metrics': metrics})
     if path := os.environ.get('PILOOP_RESULT_FILE'):
         with open(path, 'a') as f:
             f.write(line + '\n')

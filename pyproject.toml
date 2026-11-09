@@ -392,6 +392,7 @@ markers = [
     "e2e: a real campaign with real agents (make e2e)",
     "quarantine(issue): a flaky test, out of the required run until its open issue (tests/quarantine.toml) is fixed",
     "needs(*tests): skip unless these earlier tests of the module passed (tests/e2e)",
+    "run_end: a test of 0.5's scoring, which goes with Scoring.RUN_END (tests/conftest.py SCORING)",
 ]
 xfail_strict = true
 # A test that runs this long prints every thread's stack, so a hang names its test before the job times out.

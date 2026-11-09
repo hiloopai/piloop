@@ -1373,20 +1373,47 @@ def printed_metrics(script: Path) -> set[str]:
         match node:
             case ast.AnnAssign(target=ast.Name(id='metrics'), value=ast.Dict(keys=keys)):
                 found |= {k.value for k in keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
-            case ast.Dict(keys=[ast.Constant(value='metrics')], values=[ast.Dict(keys=keys)]):
-                found |= {k.value for k in keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            case ast.Dict() if isinstance(metrics := _literal(node).get('metrics'), dict):
+                found |= {k for k in metrics if isinstance(k, str)}
     return found
 
 
+def _literal(node: ast.Dict) -> dict[object, object]:
+    """``node``'s constant keys, each with its value: a constant's value, a dict's keys (as a dict), else None."""
+    return {
+        k.value: v.value if isinstance(v, ast.Constant) else _literal(v) if isinstance(v, ast.Dict) else None
+        for k, v in zip(node.keys, node.values, strict=True)
+        if isinstance(k, ast.Constant)
+    }
+
+
+def piloop_evaluate(task: str) -> Path:
+    """The script of ``task`` that piloop's ``evaluate`` runs: its repo's ``evaluate.py``, or one in the task's dir."""
+    argv = tomllib.loads((TASKS / task / 'task.toml').read_text())['piloop']['evaluate']
+    script = Path(next(a for a in argv if a.endswith('.py')))
+    return TASKS / task / script.name if script.is_absolute() else TASKS / task / 'repo' / script
+
+
+@pytest.mark.parametrize('task', sorted(p.parent.name for p in TASKS.glob('*/task.toml')))
+def test_each_task_s_evaluate_reports_a_status_and_its_primary_as_the_score(task: str):
+    """piloop 0.7 refuses a result line without ``status``, and one that reports the primary among its metrics."""
+    piloop = tomllib.loads((TASKS / task / 'task.toml').read_text())['piloop']
+    [primary] = [m for m in piloop['metrics'] if m['role'] == 'primary']
+    source = ast.parse(piloop_evaluate(task).read_text())
+    lines = [line for n in ast.walk(source) if isinstance(n, ast.Dict) and 'score' in (line := _literal(n))]
+    assert [(line['status'], line['direction']) for line in lines] == [('ok', primary['direction'])]
+
+
 def test_piloop_bugs_ranks_a_pool_on_its_campaign_split_and_declares_what_each_evaluator_prints():
-    """piloop refuses a result that names an undeclared metric. Both evaluators run piloop's tests, so they are read."""
+    """piloop refuses a result that names an undeclared metric, or the primary beside its score. Both evaluators run
+    piloop's tests, so they are read."""
     from evals.drive import SEALED
 
     task = Task.load('t9-piloop-bugs')
     here = TASKS / 't9-piloop-bugs'
     assert task.piloop['evaluate'] == ['python3', f'{OPT}/tasks/t9-piloop-bugs/rank.py', SEALED]
     declared = tomllib.loads((here / 'task.toml').read_text())['piloop']['metrics']
-    assert printed_metrics(here / 'rank.py') == {m['name'] for m in declared} == {'fixed', 'seconds'}
+    assert printed_metrics(here / 'rank.py') == {m['name'] for m in declared if m['role'] != 'primary'} == {'seconds'}
     assert task.metric in printed_metrics(here / 'repo' / 'evaluate.py') == {'passed', 'failed', 'seconds'}
 
 

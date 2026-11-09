@@ -29,7 +29,8 @@ class Task(Frozen):
     """The metric of the dev evaluator that the task improves."""
     direction: Literal['lower', 'higher']
     dev: list[str]
-    """The dev evaluator: the command that agents run in the repo, which prints ``{"metrics": {...}}``."""
+    """The dev evaluator: the command that agents run in the repo, which prints a piloop result line whose ``score`` is
+    ``metric``: ``{"status": "ok", "score": ..., "direction": ..., "metrics": {...}}``."""
     dev_base: float
     """The dev metric of the starting repo: normalised score 0."""
     dev_ref: float

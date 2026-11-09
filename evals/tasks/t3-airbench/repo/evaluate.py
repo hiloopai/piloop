@@ -203,7 +203,7 @@ def report(metrics: dict[str, float], floor: float | None) -> int:
         return 1
     if floor is None and metrics['accuracy'] < FLOOR:
         print(f'accuracy {metrics["accuracy"]:.4f}: the 5-seed evaluation fails below {FLOOR:.4f}', file=sys.stderr)
-    line = json.dumps({'metrics': metrics})
+    line = json.dumps({'status': 'ok', 'score': metrics.pop('seconds'), 'direction': 'lower', 'metrics': metrics})
     if result := os.environ.get('PILOOP_RESULT_FILE'):
         with open(result, 'a') as f:
             f.write(line + '\n')

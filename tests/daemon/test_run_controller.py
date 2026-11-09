@@ -379,6 +379,7 @@ def claimed_id(run: Run) -> IdeaId:
     return run.idea_id
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_successful_run_scores_the_commit(
     db: Database,
@@ -490,6 +491,7 @@ HARNESS_WRITES_THE_WORKSPACE = (
 )
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaigns_after_its_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -510,6 +512,7 @@ def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaign
     assert c.summary == 'add a line', 'what it wrote in the workspace is not in its commit'
 
 
+@pytest.mark.run_end
 def test_every_commit_is_scored_and_descends_from_the_one_before(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -529,6 +532,7 @@ def test_every_commit_is_scored_and_descends_from_the_one_before(
     )
 
 
+@pytest.mark.run_end
 def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -602,6 +606,7 @@ def test_a_run_counts_toward_max_runs_from_its_close_to_its_score(
         assert s.scalar(select(Run.id).where(runs_stop.unsettled())) is None, f'run#{run_id} settled'
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_worse_commit_is_scored_below_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -616,6 +621,7 @@ def test_a_worse_commit_is_scored_below_the_best(
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED
 
 
+@pytest.mark.run_end
 def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -658,6 +664,7 @@ def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
         host.close()
 
 
+@pytest.mark.run_end
 def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_is_open_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -689,6 +696,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
     )
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as_made(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -797,6 +805,7 @@ def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
     assert [run_row(db, r).error for r in (first, second)] == ['agent timeout after 0.5s', 'agent timeout after 0.7s']
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_an_evaluate_failure_is_a_crash(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -817,6 +826,7 @@ def test_an_evaluate_failure_is_a_crash(
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'the implementer did its job; the candidate crashed'
 
 
+@pytest.mark.run_end
 def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -863,6 +873,7 @@ def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_score
         )
 
 
+@pytest.mark.run_end
 def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_timeout_is_raised(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -1100,6 +1111,7 @@ def test_a_new_evaluator_measures_the_baseline_and_the_old_best_then_what_someon
         assert [c.tree_sha for c in due(s, proj)] == ['b', 'fresh'], 'measured: no longer due'
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_transcript_failure_is_only_an_event(
     db: Database,
@@ -1129,6 +1141,7 @@ def test_a_rejection_during_the_run_is_not_undone(
         assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
 
 
+@pytest.mark.run_end
 def test_implementer_env_points_at_the_daemon_home(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1155,6 +1168,7 @@ def test_implementer_env_points_at_the_daemon_home(
     assert {name: env.get(name) for name in cleared} == dict.fromkeys(cleared, '')
 
 
+@pytest.mark.run_end
 def test_lineage_follows_the_actual_predecessor(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -1421,6 +1435,7 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
         assert s.scalars(select(Event).where(Event.kind == 'run.relaunched')).all() == []
 
 
+@pytest.mark.run_end
 def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancelled(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -1436,6 +1451,7 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
         assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_commit_counts(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
@@ -1463,6 +1479,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
         assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize(
     ('work', 'ended'), [('commit', RunEnd.FINISHED), ('note', RunEnd.GAVE_UP), ('end', RunEnd.FINISHED)]
@@ -1504,6 +1521,7 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
         assert not s.scalars(select(Event).where(has(RunRelaunched) | has(StartupAnomaly))).all()
 
 
+@pytest.mark.run_end
 @pytest.mark.parametrize('edit', ['echo line >> solve.txt', 'echo note > new.txt'])
 def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_recovered(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edit: str
@@ -1545,6 +1563,7 @@ def test_a_startup_death_during_a_stop_leaves_the_run_to_the_stop(
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_run_ended_as_submitted_without_a_commit_is_a_result(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1640,6 +1659,7 @@ def test_a_failed_start_or_a_lost_job_while_the_daemon_stops_leaves_the_run_to_t
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'stop() writes the row, not the run thread'
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize('timed_out', [True, False])
 def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_then_ends(
@@ -1683,6 +1703,7 @@ def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_t
         assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1707,6 +1728,7 @@ def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
         assert s.scalars(select(Comment).where(Comment.author == 'daemon', Comment.target_id == idea_id)).all() == []
 
 
+@pytest.mark.run_end
 def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, no_git_identity: None
 ) -> None:
@@ -1741,6 +1763,7 @@ def test_a_save_that_fails_fails_the_run_and_keeps_the_unsaved_changes_in_the_ca
     assert patch is not None and b'+line' in patch
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_git_identity(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, no_git_identity: None
@@ -1759,6 +1782,7 @@ def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_g
     assert 'user.name' not in repo.git.config('--list')
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_attempt_that_finished(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1877,6 +1901,7 @@ def test_an_evaluator_spawned_after_cancel_is_killed_at_once(
     assert proc.wait(timeout=2) == -9
 
 
+@pytest.mark.run_end
 def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_measured_again(
     db: Database,
     campaign: Campaign,
@@ -1905,6 +1930,7 @@ def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_meas
     assert len([r for r in repo.refs if r.path.startswith('refs/piloop/')]) == 2, 'both commits are still pinned'
 
 
+@pytest.mark.run_end
 def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -1939,6 +1965,7 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         assert best_of(s, proj) == tried, '6 against 4: the old 2 does not count'
 
 
+@pytest.mark.run_end
 def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1965,6 +1992,7 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
         assert added.metrics['score'] == 4.0, 'measured under the doubled evaluator'
 
 
+@pytest.mark.run_end
 def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2002,6 +2030,7 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
         assert best_of(s, s.get_one(Campaign, campaign.id)) == second
 
 
+@pytest.mark.run_end
 def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2056,6 +2085,7 @@ def set_config(db: Database, campaign: Campaign, **overrides: object) -> None:
         s.commit()
 
 
+@pytest.mark.run_end
 def test_per_unit_results_live_outside_the_database(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2071,6 +2101,7 @@ def test_per_unit_results_live_outside_the_database(
     assert sorted(p.name for p in units_dir.iterdir()) == [f'{m.id}.json'], 'no pending file is left behind'
 
 
+@pytest.mark.run_end
 def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2141,6 +2172,7 @@ def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | Non
         ]
 
 
+@pytest.mark.run_end
 def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_that_never_enters_the_pool(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2163,6 +2195,7 @@ def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_that_never_en
         assert [e.target_id for e, _ in in_order(s, CandidateScored)] == [skip_id + 1], 'a skipped commit is not scored'
 
 
+@pytest.mark.run_end
 def test_a_skipped_tree_reached_again_without_the_trailer_is_measured_and_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2194,6 +2227,7 @@ def test_a_skip_commit_on_a_known_tree_leaves_it_unmeasured(
         assert (base.origin, len(base.measurements)) == (Origin.BASELINE, 1)
 
 
+@pytest.mark.run_end
 def test_dirt_after_a_skip_commit_is_committed_on_its_own_and_evaluated(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2208,6 +2242,7 @@ def test_dirt_after_a_skip_commit_is_committed_on_its_own_and_evaluated(
     ], 'the work after a skip commit is recovered on its own: never amended into the commit'
 
 
+@pytest.mark.run_end
 def test_a_commit_that_moves_no_deciding_metric_is_level_with_its_parent(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2290,6 +2325,7 @@ def test_two_sessions_that_register_one_new_tree_share_one_candidate(
         assert s.scalar(select(func.count()).select_from(Candidate).where(Candidate.tree_sha == first.tree_sha)) == 1
 
 
+@pytest.mark.run_end
 def test_a_known_tree_that_another_run_reaches_again_is_not_measured_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2305,6 +2341,7 @@ def test_a_known_tree_that_another_run_reaches_again_is_not_measured_again(
         assert best_of(s, s.get_one(Campaign, campaign.id)) == again
 
 
+@pytest.mark.run_end
 def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2348,6 +2385,7 @@ def cancelling(db: Database, measure: Callable[..., Measuring], cancelled: Candi
     return measured
 
 
+@pytest.mark.run_end
 def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2364,6 +2402,7 @@ def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
         assert status(found, s.get_one(Campaign, campaign.id).evaluator_id).state is Measured.CANCELLED
 
 
+@pytest.mark.run_end
 def test_a_tree_two_runs_reach_is_never_scored_against_itself(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2410,6 +2449,7 @@ HARNESS_NOTED = (
 )
 
 
+@pytest.mark.run_end
 def test_a_piloop_note_is_a_note_on_its_candidate_that_files_no_follow_up_and_moves_no_score(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2429,6 +2469,7 @@ def test_a_piloop_note_is_a_note_on_its_candidate_that_files_no_follow_up_and_mo
         assert follow_ups == [], 'a Piloop-Follow-Up trailer files no seed: an implementer files none'
 
 
+@pytest.mark.run_end
 def test_the_best_of_one_track_must_hold_the_other_track_primaries_and_the_brief_lists_the_tracks(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2475,6 +2516,7 @@ TWO_TRACKS = {
 """Two tracks: accuracy on ``score``, the lines of ``solve.txt``, and cost on ``size``, its bytes."""
 
 
+@pytest.mark.run_end
 def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2497,6 +2539,7 @@ def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
         assert (best_of(s, p, accuracy), best_of(s, p, cost)) == (s.get_one(Candidate, 1), c)
 
 
+@pytest.mark.run_end
 def test_recovered_work_whose_tree_is_already_a_candidate_leaves_that_candidate_as_it_is(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2646,6 +2689,7 @@ def reflinks(tmp_path: Path) -> bool:
     return True
 
 
+@pytest.mark.run_end
 def test_a_resumed_run_scores_the_versions_that_it_received(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

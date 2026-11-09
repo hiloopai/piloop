@@ -1639,3 +1639,89 @@ def test_0085_drops_the_tables_of_research_memory_its_chain_and_its_keys_and_dow
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         for table in ('lessons', 'documents', 'documents_fts', 'journal'):
             assert con.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,), 'back, and empty'
+
+
+def test_0086_drops_the_keys_that_0_6_removed_from_each_stored_config_and_counts_them(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """What the validators of 0.6 take out of a stored config, so that 0.7 loads it without them. A config without
+    such a key is left as it is, and not counted."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0085')
+    sections = ['goal', 'yields', 'judging', 'runs']
+    old = {
+        'metrics': [{'name': 'score', 'repeats': None}, {'name': 'size', 'repeats': 3}],
+        'plugins': {
+            'role': {
+                'implementer': {'timeout': 60.0, 'follow_head': True, 'interval': 0.0, 'sections': sections},
+                'orchestrator': {'runs': False, 'triggers': ['cron']},
+                'research': {'runs': True, 'max_ideas': 2},
+                'watchdog': {'interval': 1800.0},
+                'nightly': {'routine_prompt': 'sweep'},
+                'quick': {'runs': True, 'incident_prompt': 'look', 'sections': ['judging']},
+            },
+            'section': {'use': ['goal', 'idle_queue', 'reported', 'runs'], 'judging': {}, 'yields': {}, 'goal': {}},
+            'trigger': {'cron': {}, 'nightly': {'provider': 'sql', 'query': 'SELECT 1'}},
+            'verdict_rule': {'provider': 'bootstrap'},
+            'stop_rule': {'provider': 'limits', 'max_runs': 20, 'while_held': 'run'},
+            'escalation': {'grace': 'PT10M'},
+        },
+    }
+    clean = {'name': 'q', 'plugins': {'role': {'implementer': {'timeout': 60.0}}}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in (('p', old), ('q', clean)):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    with caplog.at_level('INFO'):
+        command.upgrade(cfg, '0086')
+    assert 'migration 0086 took the keys of the features that are gone out of 1 stored configs' in caplog.messages
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {
+                'metrics': [{'name': 'score'}, {'name': 'size'}],
+                'plugins': {
+                    'role': {
+                        'implementer': {'timeout': 60.0, 'sections': ['goal', 'scoring', 'runs']},
+                        'quick': {'runs': True, 'sections': ['scoring']},
+                    },
+                    'section': {'use': ['goal', 'runs'], 'goal': {}},
+                    'stop_rule': {'provider': 'limits', 'max_runs': 20},
+                    'escalation': {},
+                },
+            },
+            clean,
+        ]
+    command.downgrade(cfg, '0085')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert loads(con.execute(stored).fetchone()[0])['plugins']['role'].keys() == {'implementer', 'quick'}
+
+
+def test_0087_scores_what_is_submitted_where_a_stored_config_scored_at_run_end_and_counts_them(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0086')
+    configs = {
+        'p': {'evaluator': {'scoring': 'run_end', 'noise_runs': 1}},
+        'q': {'evaluator': {'scoring': 'submit'}},
+        'r': {'name': 'r'},
+    }
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in configs.items():
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    with caplog.at_level('INFO'):
+        command.upgrade(cfg, '0087')
+    assert 'migration 0087 set scoring = "submit" on 1 stored configs' in caplog.messages
+    after = [{'evaluator': {'scoring': 'submit', 'noise_runs': 1}}, configs['q'], configs['r']]
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == after, 'the other pins stay'
+    command.downgrade(cfg, '0086')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == after, '0.6 scores submit as 0.7 does'

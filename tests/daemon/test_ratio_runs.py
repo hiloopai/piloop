@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from inline_snapshot import snapshot
 
 from piloop.db.models import Campaign
@@ -38,6 +39,7 @@ METRICS = [
 ]
 
 
+@pytest.mark.run_end
 def test_a_ratio_guardrail_is_computed_from_its_parts_and_keeps_a_costlier_candidate_from_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:

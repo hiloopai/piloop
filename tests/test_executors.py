@@ -146,6 +146,7 @@ def launch_in_thread(
     return agent_session_id, ended
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_run_brings_its_commits_back_and_is_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, provider: str, controller: Controller
@@ -366,6 +367,7 @@ def strings(value: object) -> Iterator[str]:
             pass
 
 
+@pytest.mark.run_end
 def test_a_job_that_the_daemon_queues_names_no_path_under_its_home(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, controller: Controller
 ) -> None:

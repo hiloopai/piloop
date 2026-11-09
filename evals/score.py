@@ -160,7 +160,7 @@ def score_one(
         detail = f'sealed: {verdict["status"]} {verdict["detail"]}'
         if dev is None:
             detail = f'dev: {out["dev_error"].strip()[-300:]}; {detail}'
-        normalised = None if dev is None else task.normalised(dev['metrics'][task.metric])
+        normalised = None if dev is None else task.normalised(dev['score'])
         found = Scoring(
             dev=normalised, sealed=verdict['score'], detail=detail, cpu=out['cpu'], items=verdict.get('items')
         )

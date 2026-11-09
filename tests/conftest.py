@@ -3,6 +3,7 @@ import tests.isolation  # noqa: F401  # first: piloop reads its home from the en
 # isort: split
 import contextlib
 import json
+import os
 import re
 import shutil
 import stat
@@ -90,8 +91,9 @@ pytest_plugins = ['tests.processes']
 
 # Harness stand-ins: any argv that edits the worktree and commits.
 HARNESS_APPEND = '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\n'
-END_RUN = '"$PILOOP_BIN" run end submitted\n'
-"""The last line of a worker that is done: it ends its run, which the API that ``submitting`` serves takes."""
+END_RUN = '"$PILOOP_BIN" submit > /dev/null\n"$PILOOP_BIN" run end submitted\n'
+"""The last lines of a worker that is done: it submits its last commit to be scored and ends its run, through the API
+that ``daemon_api`` serves."""
 HARNESS_TWO_COMMITS = (
     '#!/bin/sh\necho a >> solve.txt\ngit commit -qam "first"\necho b >> solve.txt\ngit commit -qam "second"\n'
 )
@@ -113,19 +115,21 @@ WRITE_PID = 'echo $$ > ../agent.pid.part\nmv ../agent.pid.part ../agent.pid\n'
 EVALUATE = [
     'sh',
     '-c',
-    'printf \'{"metrics": {"score": %d, "size": %d}}\\n\' $(wc -l < solve.txt) $(wc -c < solve.txt)'
-    ' >> "$PILOOP_RESULT_FILE"',
+    'printf \'{"status": "ok", "score": %d, "direction": "higher", "metrics": {"size": %d}}\\n\''
+    ' $(wc -l < solve.txt) $(wc -c < solve.txt) >> "$PILOOP_RESULT_FILE"',
 ]
 
 
-def reports(**metrics: str) -> str:
-    """The shell command that reports ``metrics`` as an evaluate command's result line on ``$PILOOP_RESULT_FILE``.
+def reports(score: str, **metrics: str) -> str:
+    """The shell command that reports ``score``, the primary's value, and ``metrics`` as an evaluate command's result
+    line on ``$PILOOP_RESULT_FILE``.
 
     Each value is a shell word that prints a number, such as ``'$(wc -l < solve.txt)'`` or ``'1'``.
     """
     fields = ', '.join(f'"{name}": %s' for name in metrics)
-    values = ' '.join(f'"{value}"' for value in metrics.values())
-    return f'printf \'{{"metrics": {{{fields}}}}}\\n\' {values} >> "$PILOOP_RESULT_FILE"'
+    values = ' '.join(f'"{value}"' for value in (score, *metrics.values()))
+    line = f'{{"status": "ok", "score": %s, "direction": "higher", "metrics": {{{fields}}}}}'
+    return f'printf \'{line}\\n\' {values} >> "$PILOOP_RESULT_FILE"'
 
 
 def escalation_sql(target_kind: str, target_id: object, author: str) -> str:
@@ -140,12 +144,10 @@ def escalation_sql(target_kind: str, target_id: object, author: str) -> str:
     return sql.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
 
 
-def reports_py(**metrics: float) -> str:
-    """The Python source of an ``evaluate.py`` that reports ``metrics`` as its result line."""
-    return (
-        'import json, os\n'
-        f"open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({{'metrics': {metrics!r}}}) + '\\n')\n"
-    )
+def reports_py(score: float) -> str:
+    """The Python source of an ``evaluate.py`` that reports ``score``, the primary's value, as its result line."""
+    line = {'status': 'ok', 'score': score, 'direction': 'higher'}
+    return f"import json, os\nopen(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({line!r}) + '\\n')\n"
 
 
 TOML = """
@@ -173,10 +175,9 @@ role = "primary"
 name = "size"
 direction = "lower"
 
-[evaluator]  # 0.5's scoring: a test of submissions and of the noise sets its own
-scoring = "run_end"
+[evaluator]  # one evaluation confirms: a test of the noise sets its own
 noise_runs = 1
-
+{scoring}
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"
@@ -213,6 +214,18 @@ def write_script(path: Path, body: str) -> Path:
     return path
 
 
+SCORING = 'PILOOP_TEST_SCORING'
+"""The variable that ``write_toml`` reads ``[evaluator] scoring`` from: ``run_end`` in a test marked ``run_end``."""
+
+
+@pytest.fixture(autouse=True)
+def _run_end_scoring(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test marked ``run_end`` scores every version after its run ends, as 0.5 did: such a test goes, or scores what
+    is submitted, when ``Scoring.RUN_END`` goes. Each other test's campaign scores what its worker submits."""
+    if request.node.get_closest_marker('run_end'):
+        monkeypatch.setenv(SCORING, 'run_end')
+
+
 def write_toml(
     campaign: Path,
     harness_body: str,
@@ -227,6 +240,7 @@ def write_toml(
         implementer_timeout=implementer_timeout,
         max_implementers=max_implementers,
         script=script,
+        scoring=f'scoring = "{scoring}"\n' if (scoring := os.environ.get(SCORING)) else '',
     )
     if AUDITOR in ROLES.providers():
         toml += AUDITOR_TOML.format(timeout=AGENT_TIMEOUT)
@@ -839,7 +853,7 @@ def daemon_api(tmp_path: Path) -> Iterator[None]:
 
 @pytest.fixture
 def submitting(daemon_api: None, campaign_path: Path) -> None:
-    """The campaign's worker adds a line, commits it and ends its run as submitted, through the served API."""
+    """The campaign's worker adds a line, commits it, submits it and ends its run as submitted, through the served API."""
     write_script(campaign_path.parent / 'harness.sh', HARNESS_APPEND + END_RUN)
 
 

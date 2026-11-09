@@ -319,6 +319,7 @@ def test_a_job_submitted_while_the_scheduler_counts_its_slots_still_takes_one(
     scheduler.stop(timeout=5)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_the_workers_of_free_slots_take_the_open_ideas_most_urgent_first(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -429,6 +430,7 @@ def test_no_run_starts_while_the_baseline_waits_for_a_measurement_by_a_new_evalu
     assert (run.idea_id, run.base_candidate_id) == (None, 1)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_run_that_claimed_nothing_ends_and_settles_no_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -523,6 +525,7 @@ def test_a_claim_ends_with_its_run(
         assert s.get_one(Idea, idea).status is after, 'an idea that the run no longer holds stays as it is'
 
 
+@pytest.mark.run_end
 def test_an_agent_without_a_run_checks_out_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -720,6 +723,7 @@ def test_a_run_starts_from_the_best_as_of_its_start_not_as_of_the_idea(
         assert (s.get_one(Run, 1).idea_id, s.get_one(Run, 1).base_candidate_id) == (idea, 2)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_held_idea_waits_for_every_prerequisite_then_starts_from_the_best(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1192,6 +1196,7 @@ def test_a_cut_commit_of_a_known_tree_is_that_candidate(
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize('escalated', [False, True])
 def test_a_stop_after_the_implementer_ended_its_run_scores_it_on_the_next_start_and_never_requeues_its_idea(
@@ -1395,6 +1400,7 @@ def test_stop_waits_for_a_start_in_flight_then_kills_the_implementer(
     assert active(scheduler) == []
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_stop_kills_the_evaluator_and_scores_nothing_more(
     db: Database,
@@ -1444,6 +1450,7 @@ def test_stop_kills_the_evaluator_and_scores_nothing_more(
     assert list((tmp_path / 'runs' / '1' / 'eval-0').glob('eval/lease-*/worktree')) == []
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_its_idea_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1594,6 +1601,7 @@ def test_a_baseline_that_fails_to_evaluate_pauses_its_campaign_and_one_measured_
     assert [error is None for _, _, error in measured_by(db, baseline.id)] == [False, True, False]
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wait_for_them(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1643,6 +1651,7 @@ def test_a_new_evaluator_measures_the_baseline_and_the_carried_best_and_runs_wai
     assert measured_by(db, kept.id) == [(old, 2.0, None), (new, 4.0, None), (new, 4.0, None)], 'measured when asked'
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_after_a_new_evaluator_runs_start_once_the_baseline_and_the_carried_best_alone_are_measured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -1679,6 +1688,7 @@ def test_after_a_new_evaluator_runs_start_once_the_baseline_and_the_carried_best
     sched.stop(timeout=5)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_after_a_new_evaluator_no_run_starts_until_the_best_of_the_old_one_is_measured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -2115,6 +2125,7 @@ def test_a_message_that_cannot_be_delivered_is_settled_as_undelivered_and_never_
     )
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_once_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
@@ -2211,6 +2222,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
     assert revoked(db) == ['implementer-1']
 
 
+@pytest.mark.run_end
 def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the_campaign_stop(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2359,6 +2371,7 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
     scheduler.stop(timeout=5)
 
 
+@pytest.mark.run_end
 def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_and_reopens_its_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -2881,6 +2894,7 @@ def ended_by_its_worker(
         s.commit()
 
 
+@pytest.mark.run_end
 @pytest.mark.parametrize(('how', 'end'), [(RunEnding.SUBMITTED, RunEnd.FINISHED), (RunEnding.GAVE_UP, RunEnd.GAVE_UP)])
 def test_an_implementer_is_ended_a_minute_after_it_ended_its_run(
     db: Database, campaign: Campaign, tmp_path: Path, how: RunEnding, end: RunEnd
@@ -2911,6 +2925,7 @@ def test_an_implementer_is_ended_a_minute_after_it_ended_its_run(
     scheduler.stop(timeout=5)
 
 
+@pytest.mark.run_end
 @pytest.mark.parametrize('closed', [AgentSessionState.EXITED, AgentSessionState.KILLED])
 def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_leaves_it_closed(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, closed: AgentSessionState
@@ -2947,6 +2962,7 @@ def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_
     scheduler.stop(timeout=5)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_an_implementer_that_left_a_job_running_after_it_ended_its_run_succeeds_and_the_job_is_killed(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -145,7 +145,7 @@ def main() -> int:
         'failed': sum(o == 'failed' and n not in SANDBOX_FAILS for n, o in found.items()),
         'seconds': round(time.monotonic() - t0, 1),
     }
-    line = json.dumps({'metrics': metrics})
+    line = json.dumps({'status': 'ok', 'score': metrics.pop('passed'), 'direction': 'higher', 'metrics': metrics})
     if path := os.environ.get('PILOOP_RESULT_FILE'):
         with open(path, 'a') as f:
             f.write(line + '\n')

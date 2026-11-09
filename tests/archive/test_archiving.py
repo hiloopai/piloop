@@ -44,6 +44,7 @@ def scheduled(db: Database, runtime: ScriptRuntime, home: Path, store: DiskCas) 
     return made[0]
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 def test_the_tick_archives_an_idea_once_its_run_is_scored_and_leaves_its_files_for_later(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, campaign_path: Path

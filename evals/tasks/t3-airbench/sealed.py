@@ -40,7 +40,8 @@ def seconds(tree: Path, evaluate: Path, meta: dict, sealed: Path) -> tuple[dict 
     done = subprocess.run([str(LOCK), *argv] if LOCK.exists() else argv, cwd=tree, capture_output=True, text=True)
     if done.returncode != 0:
         return None, done.stderr.strip()[-2000:]
-    return json.loads(done.stdout.strip().splitlines()[-1])['metrics'], ''
+    line = json.loads(done.stdout.strip().splitlines()[-1])
+    return {'seconds': line['score'], **line['metrics']}, ''
 
 
 OOM = 'out of memory'

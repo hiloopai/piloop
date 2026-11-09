@@ -403,7 +403,7 @@ def selftest(box: Shell, task: Task, settings: Settings) -> SelfTest:
             f'cd {REPO} && env -u EVALS_EVAL_LOG {shlex.join(task.dev)}',
             timeout=float(timeout) if isinstance(timeout, int | float) else None,
         )
-        values.append(float(json.loads(out.strip().splitlines()[-1])['metrics'][task.metric]))
+        values.append(float(json.loads(out.strip().splitlines()[-1])['score']))
     return SelfTest(cpu=cpu, values=values)
 
 

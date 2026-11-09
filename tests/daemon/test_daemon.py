@@ -60,6 +60,7 @@ def scored(s: Session, candidate: CandidateId) -> bool:
     return latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate)) is not None
 
 
+@pytest.mark.run_end
 def test_daemon_end_to_end(
     campaign_path: Path, tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -266,6 +267,7 @@ HARNESS_HELD = (
 """An implementer that commits, says it is under way, waits while the test holds it, then commits again."""
 
 
+@pytest.mark.run_end
 def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finishes_their_runs(
     campaign_path: Path, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -330,6 +332,7 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     first.scheduler.wait(SETTLE)
 
 
+@pytest.mark.run_end
 @pytest.mark.parametrize(
     ('ended', 'run_end', 'idea_status', 'is_scored'),
     [

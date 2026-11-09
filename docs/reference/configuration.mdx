@@ -44,7 +44,7 @@ section.
 | `name` | string | required | A short name for the campaign: letters, digits, `.`, `_` and `-`, not all digits. A campaign gets it when it is registered, unless the registration names another, and piloop names its git refs after it. |
 | `metrics` | list\[[Metric](#metric)\] | required | Every metric that the evaluate command reports, each with its `role`. Each track has one `primary`, so a campaign with one track has exactly one. |
 | `tracks` | dict\[string, [TrackConfig](#trackconfig)\] | `{}` | `[tracks.<name>]`: the addendum of each track, where one has one. |
-| `evaluate` | list\[string\] | required | The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line, `{"metrics": {"<name>": <value>}}`, to `$PILOOP_RESULT_FILE`. |
+| `evaluate` | list\[string\] | required | The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line, `{"status": "ok", "score": <primary>, "direction": "higher", "metrics": {"<name>": <value>}}`, to `$PILOOP_RESULT_FILE`. |
 | `evaluate_timeout` | number | `600` | The number of seconds before the evaluate command is stopped. The evaluation is then a crash. |
 | `evaluator` | [EvaluatorConfig](#evaluatorconfig) | `{}` | `[evaluator]`: the commands beside `evaluate`, such as the fast one that implementers run themselves. |
 | `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a confirmation, a reference and a remeasure climb every rung and never stop. |

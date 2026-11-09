@@ -9,6 +9,7 @@ them, one for each structure. Files 5 to 10 of 0073 are those that real homes st
 revisions rewrote them.
 """
 
+import json
 import sqlite3
 from contextlib import closing
 from itertools import groupby
@@ -21,11 +22,15 @@ from sqlalchemy import create_engine
 
 from piloop.config import REMOVED_SECTIONS, CampaignConfig
 from piloop.db.session import migrate
+from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.section.contract import SECTIONS
 from tests.conftest import disk
 from tests.db.test_migrations import alembic
 
 CONFIGS = Path(__file__).parents[1] / 'fixtures' / 'configs'
+SILENT = {'trigger', 'judging', 'repeats'}
+"""The keys that 0.6's validators drop from a stored config without a warning, where they are empty or null: the
+warning that each other key raises fails the test."""
 STORED = TypeAdapter(CampaignConfig)
 BY_REVISION = {
     revision: [path.stem for path in paths]
@@ -34,8 +39,9 @@ BY_REVISION = {
 
 
 @pytest.mark.parametrize('revision', sorted(BY_REVISION))
-@pytest.mark.filterwarnings('ignore::piloop.deprecated.PiloopDeprecationWarning')  # a key that a validator drops
-def test_each_stored_config_of_a_real_home_migrates_and_validates(tmp_path: Path, revision: str) -> None:
+def test_each_stored_config_of_a_real_home_migrates_and_validates_with_no_key_left_for_a_bridge(
+    tmp_path: Path, revision: str
+) -> None:
     path = tmp_path / 'piloop.db'
     command.upgrade(alembic(path), revision)
     names = BY_REVISION[revision]
@@ -50,6 +56,7 @@ def test_each_stored_config_of_a_real_home_migrates_and_validates(tmp_path: Path
     failed, loaded = {}, list[CampaignConfig]()
     with closing(sqlite3.connect(path)) as con:
         for name, config in con.execute('SELECT name, config FROM campaigns ORDER BY id'):
+            assert not SILENT & _keys(json.loads(config)), f'{name}: a validator drops it without a word'
             try:
                 loaded.append(STORED.validate_json(config))
             except ValidationError as e:
@@ -57,5 +64,13 @@ def test_each_stored_config_of_a_real_home_migrates_and_validates(tmp_path: Path
     assert failed == {}, 'an upgrade breaks a config that a real home stored'
     for cfg in loaded:
         assert 'orchestrator' not in cfg.roles.all(), 'the removed role goes'
+        assert cfg.evaluator.scoring is Scoring.SUBMIT, '0.5 scoring goes'
         shown = [*SECTIONS.used(cfg.plugins), *(s for r in cfg.roles.all().values() for s in r.sections or [])]
         assert not REMOVED_SECTIONS.keys() & {*shown, *SECTIONS.instances(cfg.plugins)}, 'and the removed sections'
+
+
+def _keys(value: object) -> set[str]:
+    """Every key of every table in ``value``, at any depth."""
+    if isinstance(value, dict):
+        return {*value, *(k for v in value.values() for k in _keys(v))}
+    return {k for v in value for k in _keys(v)} if isinstance(value, list) else set()

@@ -374,6 +374,7 @@ def test_a_partitioned_worker_stops_its_job_before_its_lease_expires_and_its_rep
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.WORKER_LOST)
 
 
+@pytest.mark.run_end
 def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finishes_the_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, hold: Path
 ) -> None:
@@ -411,6 +412,7 @@ def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finish
         )
 
 
+@pytest.mark.run_end
 def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_on_the_same_lease(
     campaign_path: Path, tmp_path: Path, schema: Path
 ) -> None:

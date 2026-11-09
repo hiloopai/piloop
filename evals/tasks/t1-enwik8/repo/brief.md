@@ -15,7 +15,7 @@ bytes.
 
 ## Measure
 
-`uv run python evaluate.py` prints two metrics:
+`uv run python evaluate.py` prints two metrics, `bytes` as its `score`:
 
 - `bytes`: the compressed size plus the size of `compressor.py`. Lower is better. This is the metric to improve.
 - `seconds`: the CPU time to compress and decompress. It must stay below 120 s.

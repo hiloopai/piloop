@@ -77,7 +77,7 @@ def main() -> int:
     except RuntimeError as e:
         print(e, file=sys.stderr)
         return 1
-    line = json.dumps({'metrics': metrics})
+    line = json.dumps({'status': 'ok', 'score': metrics.pop('sum_radii'), 'direction': 'higher', 'metrics': metrics})
     if path := os.environ.get('PILOOP_RESULT_FILE'):
         with open(path, 'a') as f:
             f.write(line + '\n')

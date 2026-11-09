@@ -134,6 +134,7 @@ def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], s
         return [m.error for m in c.measurements], found[1].told if found is not None else None
 
 
+@pytest.mark.run_end
 def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -157,6 +158,7 @@ def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
     assert rows(db) == [], 'the queue is empty'
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('submitting')
 def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_for_every_request(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
@@ -190,6 +192,7 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
     assert rows(db) == []
 
 
+@pytest.mark.run_end
 def test_an_evaluation_that_the_executor_refuses_leaves_the_queue_as_an_infra_error_and_runs_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -241,6 +244,7 @@ def test_a_cancelled_evaluation_whose_job_is_lost_leaves_the_queue_for_good(db: 
             KIND.lost(s, evaluation.id)
 
 
+@pytest.mark.run_end
 def test_a_cancelled_evaluation_is_no_score_and_its_cancel_stands_at_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -300,6 +304,7 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
     assert cancelled(db, other.id) == [], 'no daemon measures it'
 
 
+@pytest.mark.run_end
 def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -707,6 +712,7 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
         assert retired(s, hidden.id)
 
 
+@pytest.mark.run_end
 @pytest.mark.parametrize('limit', [None, 1, 5])
 def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, limit: int | None

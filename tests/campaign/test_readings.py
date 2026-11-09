@@ -182,6 +182,7 @@ HELD = 'nothing launches until you raise it and run piloop init'
 """How the escalation of ``limits`` at a limit of ``hold_at`` ends."""
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.usefixtures('auditor')
 def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised(

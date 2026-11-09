@@ -118,6 +118,7 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     assert ImplementerRole().shown() == ['context', 'measure', 'idea_comments', 'history'], 'no guides'
 
 
+@pytest.mark.run_end
 def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaign: Campaign) -> None:
     """The dev command, which piloop never runs, and which of its commits are scored."""
     with db.session() as s:

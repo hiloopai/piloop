@@ -762,6 +762,7 @@ def test_the_close_waits_until_the_stopped_campaigns_runs_are_scored_and_comes_o
     restarted.stop(timeout=5)
 
 
+@pytest.mark.run_end
 @pytest.mark.usefixtures('auditor')
 def test_a_stopped_campaign_gets_no_trigger_requests(
     db: Database,
@@ -917,6 +918,7 @@ def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_p
         host.close()
 
 
+@pytest.mark.run_end
 def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

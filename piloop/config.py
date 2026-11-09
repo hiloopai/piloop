@@ -144,7 +144,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     """``[tracks.<name>]``: the addendum of each track, where one has one."""
     evaluate: list[str] = Field(min_length=1)
     """The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line,
-    ``{"metrics": {"<name>": <value>}}``, to ``$PILOOP_RESULT_FILE``."""
+    ``{"status": "ok", "score": <primary>, "direction": "higher", "metrics": {"<name>": <value>}}``, to
+    ``$PILOOP_RESULT_FILE``."""
     evaluate_timeout: float = 600
     """The number of seconds before the evaluate command is stopped. The evaluation is then a crash."""
     evaluator: EvaluatorConfig = EvaluatorConfig()

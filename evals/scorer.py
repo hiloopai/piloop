@@ -3,8 +3,8 @@
 Usage: ``python scorer.py <task dir> <data dir> <work dir>``, where the work dir holds ``tree.tgz``, ``base.tgz`` and
 ``sealed.tgz``. The tree gets the task's own ``evaluate.py`` and dev data (``data/``) over its own. It writes one JSON object to
 ``<work dir>/score.json``:
-``{"dev": {"metrics": ...} | null, "dev_error": str, "sealed": <what sealed.py printed>, "cpu": str}``, ``cpu`` the
-vendor, family and model of the sandbox's CPU and its AVX-512, such as ``AuthenticAMD 25/17 avx512``.
+``{"dev": <the dev line: {"score": ..., "metrics": ...}> | null, "dev_error": str, "sealed": <what sealed.py printed>,
+"cpu": str}``, ``cpu`` the vendor, family and model of the sandbox's CPU and its AVX-512, such as ``AuthenticAMD 25/17 avx512``.
 
 ``sealed.py`` writes ``{"score": float | null, "status": str, "detail": str, "raw": ...}``, and may add ``"items":
 {name: bool}``: whether the tree passed each item of the holdout, such as a hidden test. A task whose scorer reports
