@@ -2,10 +2,16 @@
 
 A clone that has versions names its newest (``MAX_HAVE``), and the server puts what it lacks beyond them into the CAS
 (``Repository.send``), in the request. An empty clone names none, and lacks everything: the repo's first transfer.
-That can take minutes for a large repo, longer than a request lasts, and every new worker asks for it. So the server
-builds it once per repo, in a thread of its own, keeps its address in ``first_transfers``, and answers each empty
-clone with that blob and the versions beyond it. A request that comes while it builds is a long-poll: the commit of
-the row wakes it. A build past its deadline fails each request, so a hang fails jobs instead of holding their slots.
+That can take minutes for a large repo, longer than a request lasts, and every new worker asks for it. So it is built
+once per repo, and its row (``first_transfers``) keeps its address: each empty clone gets that blob and the versions
+beyond it.
+
+Any process that serves the API answers a ``send`` (``FirstTransfers``), and only the daemon builds
+(``FirstTransferBuilds``, a consumer of its loop). A request that finds no row, or a failed build, asks for one: the row
+is ``requested``, and its event wakes the daemon. The build's end, ``built`` or ``failed``, is an event that wakes the
+requests that wait (``settled``), in whichever process they wait. A build past its deadline fails each request, so a hang
+fails jobs instead of holding their slots; none starts another until it ends. A failure is raised to the first request
+that reads it, which asks again: the next build starts.
 
 After git's bundle URIs and Mercurial's clone bundles: a new clone starts from a bundle that the server built once,
 then fetches what is newer.
@@ -13,24 +19,52 @@ then fetches what is newer.
 
 import threading
 from collections.abc import Callable, Sequence
-from concurrent.futures import Future
 from contextlib import closing
-from dataclasses import dataclass, field
-from time import monotonic
+from datetime import datetime, timedelta
+from typing import ClassVar, Literal
 
 from covalence import Cid
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
 
-from piloop.db.session import Database
-from piloop.ids import Revision
+from piloop.actor import System
+from piloop.daemon.loop import Consumer, Phase, Turn
+from piloop.db.events import Topic, emit
+from piloop.db.models import EventModel, ReadBy, utcnow
+from piloop.db.session import Database, write_transaction
+from piloop.ids import Revision, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId
 from piloop.plugins.executor.kit.clones import NotSent
-from piloop.plugins.executor.kit.tables import FirstTransfer
+from piloop.plugins.executor.kit.tables import FirstTransfer, FirstTransferState
 from piloop.plugins.vcs.contract import Repository
 
 type Send = Callable[[RepoId, Sequence[Revision], Sequence[Revision]], list[Cid] | None]
 """What the ``send`` route answers a worker that lacks versions: ``FirstTransfers.send``. None: ask again."""
+
+
+class FirstTransferRequested(EventModel):
+    """On the campaign of the repo of record: a request asks for its first transfer. The daemon builds it."""
+
+    kind: Literal['first_transfer.requested'] = 'first_transfer.requested'
+
+
+class FirstTransferSettled(EventModel):
+    """On the campaign of the repo of record: the build of its first transfer ended, ``built`` or ``failed``."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['first_transfer.built', 'first_transfer.failed']
+    error: str | None = None
+
+
+def settled(repo: RepoId) -> tuple[Topic, ...]:
+    """What a ``send`` of ``repo`` awaits between two reads: the end of its build."""
+    return (Topic(FirstTransferSettled, target=_on(repo)),)
+
+
+def _on(repo: RepoId) -> TargetRef:
+    return TargetRef(TargetKind.CAMPAIGN, repo)
 
 
 def send_of_record(
@@ -49,29 +83,15 @@ def send_of_record(
     return [] if blob is None else [blob]
 
 
-@dataclass(frozen=True)
-class _Build:
-    """A build of a repo's first transfer, in its thread."""
-
-    future: Future[None] = field(default_factory=Future)
-    started: float = field(default_factory=monotonic)
-
-
 class FirstTransfers:
     """What the ``send`` route answers: ``send_of_record``, from the repo's first transfer for an empty clone."""
 
-    def __init__(
-        self, db: Database, cas: Cas, records: Callable[[RepoId], Repository], tracer: Tracer, deadline: float
-    ) -> None:
+    def __init__(self, db: Database, cas: Cas, records: Callable[[RepoId], Repository], deadline: float) -> None:
         self._db = db
         self._cas = cas
         self._records = records
-        self._tracer = tracer
-        self._deadline = deadline
-        """The seconds that a build may take before the requests that wait on it fail (``Workers``)."""
-        self._lock = threading.Lock()
-        self._builds: dict[RepoId, _Build] = {}
-        """The build of each repo's first transfer, from its start until a request sees it done."""
+        self._deadline = timedelta(seconds=deadline)
+        """How long a build may take before the requests that wait on it fail (``Workers``)."""
 
     def send(self, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid] | None:
         """What ``revisions`` have beyond ``have``, as ``Fetch`` answers it. None while the first transfer is built.
@@ -84,57 +104,112 @@ class FirstTransfers:
             return send_of_record(self._cas, self._records, repo, revisions, have)
         if (first := self._first(repo)) is None:
             return None
+        assert first.blob is not None and first.revision is not None  # a built row's
         return [first.blob, *send_of_record(self._cas, self._records, repo, revisions, [first.revision])]
 
     def _first(self, repo: RepoId) -> FirstTransfer | None:
-        """The repo's first transfer, or None while it is built: a request that finds neither starts the build.
-
-        A build leaves ``_builds`` once its row is committed, or when a request raises its failure: a request that
-        finds no build finds the row. One past its deadline stays, so a build that hangs is the only one.
-        """
-        with self._lock:
-            if (build := self._builds.get(repo)) is not None:
-                if not build.future.done():
-                    if monotonic() - build.started > self._deadline:
+        """The repo's built first transfer, or None while it is built: a request that finds none asks for it."""
+        with self._db.session() as s:
+            write_transaction(s)  # of two requests that find none, one asks
+            row = s.get(FirstTransfer, repo)
+            match row:
+                case FirstTransfer(state=FirstTransferState.BUILT) if self._usable(row):
+                    return row
+                case FirstTransfer(state=FirstTransferState.REQUESTED, started_at=started):
+                    s.rollback()
+                    if utcnow() - started > self._deadline:
                         raise NotSent(
                             f'the first transfer of repo {repo} has built for longer than its deadline of'
-                            f' {self._deadline:g} s: the send of the repo of record or its upload to the CAS hangs'
+                            f' {self._deadline.total_seconds():g} s: the send of the repo of record or its upload to'
+                            ' the CAS hangs'
                         )
                     return None
-                del self._builds[repo]
-                error = build.future.exception()
-                raise NotSent(f'the first transfer of repo {repo} failed: {type(error).__name__}: {error}') from error
+                case FirstTransfer(state=FirstTransferState.FAILED, error=error):
+                    _request(s, repo)
+                    s.commit()
+                    raise NotSent(f'the first transfer of repo {repo} failed: {error}')
+                case _:  # none, or one that the CAS lost
+                    _request(s, repo)
+                    s.commit()
+                    return None
+
+    def _usable(self, row: FirstTransfer) -> bool:
+        return row.state is FirstTransferState.BUILT and row.blob is not None and self._cas.has(row.blob)
+
+
+def _request(s: Session, repo: RepoId) -> None:
+    """Ask the daemon for the first transfer of ``repo``, in place of what its row had. The caller commits."""
+    asked = FirstTransfer(
+        campaign_id=repo, state=FirstTransferState.REQUESTED, started_at=utcnow(), revision=None, blob=None, error=None
+    )
+    s.merge(asked)
+    emit(s, FirstTransferRequested(), _on(repo), System.DAEMON)
+
+
+class FirstTransferBuilds:
+    """The daemon's consumer that builds each requested first transfer, each in a thread of its own."""
+
+    def __init__(self, db: Database, cas: Cas, records: Callable[[RepoId], Repository], tracer: Tracer) -> None:
+        self._db = db
+        self._cas = cas
+        self._records = records
+        self._tracer = tracer
+        self._lock = threading.Lock()
+        self._building: set[RepoId] = set()
+        """The repos whose build runs in this process: a turn starts no second one."""
+
+    def consumer(self) -> Consumer:
+        """Its job in the daemon's loop: it wakes on each request, and runs once when the daemon starts."""
+        return Consumer('first_transfers', frozenset({FirstTransferRequested}), self.run, Phase.UPKEEP)
+
+    def run(self, turn: Turn) -> datetime | None:
+        """Start the build of each requested first transfer that no thread of this daemon builds.
+
+        A build's start is its row's ``started_at``: one that an earlier daemon asked for counts from this start.
+        """
+        requested = select(FirstTransfer.campaign_id).where(FirstTransfer.state == FirstTransferState.REQUESTED)
+        with self._db.session() as s:
+            asked = s.scalars(requested).all()
+        with self._lock:
+            new = [RepoId(r) for r in asked if r not in self._building]
+            self._building.update(new)
+        if new:
             with self._db.session() as s:
-                row = s.get(FirstTransfer, repo)
-            if row is not None and self._cas.has(row.blob):
-                return row
-            self._builds[repo] = build = _Build()
-        threading.Thread(
-            target=self._build, args=(repo, build.future), name=f'first-transfer-{repo}', daemon=True
-        ).start()
+                write_transaction(s)
+                s.execute(
+                    update(FirstTransfer)
+                    .where(FirstTransfer.campaign_id.in_(new), FirstTransfer.state == FirstTransferState.REQUESTED)
+                    .values(started_at=utcnow())
+                )
+                s.commit()
+        for repo in new:
+            threading.Thread(target=self._build, args=(repo,), name=f'first-transfer-{repo}', daemon=True).start()
         return None
 
-    def _build(self, repo: RepoId, build: Future[None]) -> None:
-        """Put the repo of record's head and all before it into the CAS, write its row, and wake the polls.
-
-        A failure stays in ``build`` for the next request to raise, with its cause, and wakes the polls too. The row
-        adds no event, so ``notify`` wakes them.
-        """
+    def _build(self, repo: RepoId) -> None:
+        """Put the repo of record's head and all before it into the CAS, and write the row: ``built``, or ``failed``."""
         try:
             with self._tracer.span('piloop.first_transfer', repo=repo):
                 with closing(self._records(repo)) as record:
                     head = record.head().revision
                     blob = record.send(self._cas, [head], [])
                 assert blob is not None  # with nothing had, the head is sent
-            # under the lock: a poll that the notify wakes reads after the build left, so it finds the row. One that
-            # found the build still there would wait for a wake that never comes, until its wait ends.
-            with self._lock, self._db.session() as s:
-                s.merge(FirstTransfer(campaign_id=repo, revision=head, blob=blob))
-                s.commit()
-                del self._builds[repo]
+            self._settle(repo, FirstTransferSettled(kind='first_transfer.built'), revision=head, blob=blob)
         except Exception as e:
-            build.set_exception(e)
-            self._db.notify()
-            return
-        build.set_result(None)
-        self._db.notify()
+            self._settle(repo, FirstTransferSettled(kind='first_transfer.failed', error=f'{type(e).__name__}: {e}'))
+        finally:
+            with self._lock:
+                self._building.discard(repo)
+
+    def _settle(
+        self, repo: RepoId, event: FirstTransferSettled, revision: Revision | None = None, blob: Cid | None = None
+    ) -> None:
+        """Write the end of the build on the row, with its event, which wakes the requests that wait."""
+        with self._db.session() as s:
+            write_transaction(s)
+            if (row := s.get(FirstTransfer, repo)) is None:  # its campaign is gone
+                return
+            row.state = FirstTransferState.BUILT if blob is not None else FirstTransferState.FAILED
+            row.revision, row.blob, row.error = revision, blob, event.error
+            emit(s, event, _on(repo), System.DAEMON)
+            s.commit()

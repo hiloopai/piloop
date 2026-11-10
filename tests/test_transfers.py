@@ -4,15 +4,19 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
 import pytest
 from covalence import Cid
 from git import Repo
+from sqlalchemy import delete
 
 from piloop.api.contract import MAX_POLL_SECONDS
-from piloop.db.models import Campaign
+from piloop.daemon.loop import Turn
+from piloop.db.events import Topic, in_order
+from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
 from piloop.ids import Revision
 from piloop.net.server import Server, app, executor_router
@@ -23,8 +27,13 @@ from piloop.plugins.executor.contract import RepoId
 from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
-from piloop.plugins.executor.kit.tables import FirstTransfer
-from piloop.plugins.executor.kit.transfers import FirstTransfers
+from piloop.plugins.executor.kit.tables import FirstTransfer, FirstTransferState
+from piloop.plugins.executor.kit.transfers import (
+    FirstTransferBuilds,
+    FirstTransferRequested,
+    FirstTransfers,
+    FirstTransferSettled,
+)
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https
 from piloop.plugins.secrets.contract import HomeSecrets
@@ -65,8 +74,22 @@ def store(tmp_path: Path) -> Cas:
     return disk(tmp_path / 'shared')
 
 
-def transfers(db: Database, store: Cas, record: Repository, deadline: float = 60) -> FirstTransfers:
-    return FirstTransfers(db, store, lambda repo: record, Tracer(None), deadline)
+class Transfers:
+    """A server's ``send`` and its daemon's builds: each ``send`` runs the daemon's consumer after it, as a turn does."""
+
+    def __init__(self, db: Database, store: Cas, record: Repository, deadline: float = 60) -> None:
+        self.first = FirstTransfers(db, store, lambda repo: record, deadline)
+        self.builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+
+    def send(self, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid] | None:
+        try:
+            return self.first.send(repo, revisions, have)
+        finally:
+            self.builds.run(Turn(utcnow()))
+
+
+def transfers(db: Database, store: Cas, record: Repository, deadline: float = 60) -> Transfers:
+    return Transfers(db, store, record, deadline)
 
 
 def answered(send: Callable[[], list[Cid] | None]) -> list[Cid]:
@@ -83,14 +106,15 @@ def answered(send: Callable[[], list[Cid] | None]) -> list[Cid]:
     return sent
 
 
-def fetched(first: FirstTransfers, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid]:
+def fetched(first: Transfers, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid]:
     """A worker's ``Fetch`` through ``first``."""
     return answered(partial(first.send, repo, revisions, have))
 
 
 def built(db: Database, repo: RepoId) -> bool:
     with db.session() as s:
-        return s.get(FirstTransfer, repo) is not None
+        row = s.get(FirstTransfer, repo)
+        return row is not None and row.state is FirstTransferState.BUILT
 
 
 def commit(path: Path, name: str) -> Revision:
@@ -135,9 +159,8 @@ def test_a_failed_build_is_raised_once_and_the_next_request_builds_again(
     first = transfers(db, store, record)
     record.fail = OSError('no space left on device')
     assert first.send(repo, [head], []) is None
-    with pytest.raises(NotSent, match='no space left on device') as raised:
+    with pytest.raises(NotSent, match=r'failed: OSError: no space left on device$'):
         answered(partial(first.send, repo, [head], []))
-    assert isinstance(raised.value.__cause__, OSError)
     record.fail = None
     assert answered(partial(first.send, repo, [head], [])) and record.full == 2
 
@@ -181,19 +204,31 @@ def worker(db: Database, store: Cas, record: Counted, dial: Dial) -> Generator[R
     listener = network.listener()
     assert listener is not None
     leases = Leases(db, Recorder(db), store, TIMING, POOLS)
+    first = FirstTransfers(db, store, lambda repo: record, 60)
     server = Server(
-        app(
-            Tokens(db),
-            network,
-            [executor_router(lease_routes(leases, db.watching, store, transfers(db, store, record).send, echoed))],
-        ),
+        app(Tokens(db), network, [executor_router(lease_routes(leases, db.watching, store, first.send, echoed))]),
         listener,
     )
     server.start()
+    stop = threading.Event()
+    daemon = threading.Thread(
+        target=building, args=(db, FirstTransferBuilds(db, store, lambda repo: record, Tracer(None)), stop)
+    )
+    daemon.start()
     http = dial(server.url, secret(db, 'w1'))
     yield Remote(http, threading.Event(), Tracer(None))
     http.close()
     server.close()
+    stop.set()
+    daemon.join()
+
+
+def building(db: Database, builds: FirstTransferBuilds, stop: threading.Event) -> None:
+    """The daemon's loop for its builds alone: a turn on each request, until ``stop``."""
+    with db.watching([Topic(FirstTransferRequested)]) as watch:
+        while not stop.is_set():
+            builds.run(Turn(utcnow()))
+            watch.wait(0.2)
 
 
 def test_a_worker_waits_on_the_route_until_the_first_transfer_is_built(
@@ -211,3 +246,58 @@ def test_a_worker_waits_on_the_route_until_the_first_transfer_is_built(
     threading.Timer(0.5, record.hold.set).start()
     assert len(worker.send(repo, [head], [])) == 1
     assert time.monotonic() - started < MAX_POLL_SECONDS
+
+
+def test_the_sends_of_two_processes_ask_once_and_the_daemon_builds_once(
+    db: Database, campaign: Campaign, store: Cas, record: Counted
+) -> None:
+    """Each process that serves the API has its own ``FirstTransfers``: the row, not a process, says what is asked."""
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    other = Database(str(db.engine.url), actor=db.actor)
+    try:
+        sends = [FirstTransfers(each, store, lambda repo: record, 60) for each in (db, other)]
+        assert [send.send(repo, [head], []) for send in sends] == [None, None]
+        with db.session() as s:
+            assert len(in_order(s, FirstTransferRequested)) == 1, 'the second found the request'
+        builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+        builds.run(Turn(utcnow()))
+        builds.run(Turn(utcnow()))  # a turn while it builds starts no second build
+        wait_until(lambda: built(db, repo))
+        assert [len(answered(partial(send.send, repo, [head], []))) for send in sends] == [1, 1]
+        assert record.full == 1
+    finally:
+        other.close()
+
+
+def test_a_daemon_that_starts_builds_what_an_earlier_one_was_asked_and_its_deadline_counts_from_then(
+    db: Database, campaign: Campaign, store: Cas, record: Counted
+) -> None:
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    send = FirstTransfers(db, store, lambda repo: record, 60)
+    assert send.send(repo, [head], []) is None, 'asked of a daemon that stopped before it built'
+    with db.session() as s:
+        s.get_one(FirstTransfer, repo).started_at = utcnow() - timedelta(hours=1)
+        s.commit()
+    record.hold.clear()
+    FirstTransferBuilds(db, store, lambda repo: record, Tracer(None)).run(Turn(utcnow()))
+    assert send.send(repo, [head], []) is None, 'it builds within its deadline from its start'
+    record.hold.set()
+    assert len(answered(partial(send.send, repo, [head], []))) == 1 and record.full == 1
+
+
+def test_a_build_whose_repo_goes_meanwhile_writes_nothing(
+    db: Database, campaign: Campaign, store: Cas, record: Counted
+) -> None:
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+    record.hold.clear()
+    assert FirstTransfers(db, store, lambda repo: record, 60).send(repo, [head], []) is None
+    builds.run(Turn(utcnow()))
+    wait_until(lambda: record.full == 1, 'the build runs')
+    with db.session() as s:
+        s.execute(delete(FirstTransfer))  # as the deletion of its campaign does
+        s.commit()
+    record.hold.set()
+    wait_until(lambda: not builds._building, 'the build ends')
+    with db.session() as s:
+        assert s.get(FirstTransfer, repo) is None and not in_order(s, FirstTransferSettled)

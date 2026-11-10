@@ -145,8 +145,11 @@ erDiagram
     }
     first_transfers {
         integer campaign_id PK,FK
+        FirstTransferState state
+        datetime started_at
         varchar revision
         varchar blob
+        varchar error
     }
     ideas {
         integer id PK

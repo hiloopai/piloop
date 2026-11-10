@@ -64,7 +64,7 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.relay import LeaseCall, Run
 from piloop.plugins.executor.kit.tables import NoLease
-from piloop.plugins.executor.kit.transfers import Send
+from piloop.plugins.executor.kit.transfers import Send, settled
 from piloop.plugins.vcs.contract import MAX_HAVE
 
 FIRST_BACKOFF = 0.2
@@ -196,8 +196,8 @@ def lease_routes(leases: Leases, watching: Watching, cas: Cas, send: Send, cli: 
     """The routes of the ``LeaseClient`` calls, each made on ``Local`` as the caller, ``send`` and ``cli``.
 
     ``watching`` is ``Database.watching`` of the leases' database: what ``messages`` and ``send`` await between two
-    reads. ``messages`` wakes on the events of its worker (``topics``); ``send`` on ``Database.notify`` alone, which
-    the transfer calls once it is done. ``cas`` is the server's, which ``register`` checks that the worker shares (``WorkerInfo.cas_probe``).
+    reads. ``messages`` wakes on the events of its worker (``topics``); ``send`` on the end of its repo's first
+    transfer (``settled``), whichever process builds it. ``cas`` is the server's, which ``register`` checks that the worker shares (``WorkerInfo.cas_probe``).
     ``send`` puts versions from the repo of record into it (``FirstTransfers.send``). ``cli`` runs a relayed call of an
     agent, on a live lease of the caller (``relay.Runner``).
     """
@@ -213,7 +213,7 @@ def lease_routes(leases: Leases, watching: Watching, cas: Cas, send: Send, cli: 
         ),
         Route('queued', Queued, _as_caller(leases, _queued)),
         Route('secrets', SecretsAsked, _as_caller(leases, _secrets)),
-        Route.long_poll('send', SendAsked, partial(_send, send), watching, lambda _caller, _body: ()),
+        Route.long_poll('send', SendAsked, partial(_send, send), watching, lambda _caller, body: settled(body.repo)),
         Route('cli', LeaseCall, _as_caller(leases, partial(_cli, cli))),
     ]
 

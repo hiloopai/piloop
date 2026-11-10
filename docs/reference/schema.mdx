@@ -273,12 +273,19 @@ CREATE TABLE worker_instances (
 CREATE INDEX ix_worker_instances_state ON worker_instances (state);
 CREATE TABLE first_transfers (
 	campaign_id INTEGER NOT NULL,
-	revision VARCHAR NOT NULL,
-	blob VARCHAR NOT NULL,
+	state VARCHAR(16) NOT NULL,
+	started_at DATETIME NOT NULL,
+	revision VARCHAR,
+	blob VARCHAR,
+	error VARCHAR,
 	PRIMARY KEY (campaign_id),
-	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text')),
-	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
-	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+	CONSTRAINT "first_transfers.a built one names it" CHECK ((state = 'built') = (revision IS NOT NULL AND blob IS NOT NULL)),
+	CONSTRAINT "first_transfers.a failed one says why" CHECK ((state = 'failed') = (error IS NOT NULL)),
+	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text', 'null')),
+	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text', 'null')),
+	CONSTRAINT "first_transfers.error must be a text value" CHECK (typeof(error) IN ('text', 'null')),
+	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
+	CONSTRAINT firsttransferstate CHECK (state IN ('requested', 'built', 'failed'))
 );
 ```
 

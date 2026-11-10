@@ -54,7 +54,7 @@ from piloop.plugins.executor.kit.relay import Relay, Runner
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
 from piloop.plugins.executor.kit.scaling import Scaler
 from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance, WorkerInstanceState
-from piloop.plugins.executor.kit.transfers import FirstTransfers
+from piloop.plugins.executor.kit.transfers import FirstTransferBuilds, FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.settings import RELAY_SOCKET, socket_at
 
@@ -129,8 +129,10 @@ class WorkersExecutor:
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
         self._watching = host.db.watching
         self._cas = host.cas
-        self._send = FirstTransfers(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
+        self._send = FirstTransfers(host.db, host.cas, host.records, config.first_transfer_seconds)
         """What the ``send`` route does: versions from the repo of record, into the CAS."""
+        self._builds = FirstTransferBuilds(host.db, host.cas, host.records, host.tracer)
+        """Builds the first transfers that ``send`` asks for."""
         self._forks = Forks(host.home, config.relayed_calls) if FORKED else None
         self._cli = Runner(host.db, host.home, host.repos, processes if self._forks is None else self._forks)
         """What the ``cli`` route does: an agent's relayed call, run here."""
@@ -205,7 +207,7 @@ class WorkersExecutor:
         return frozenset({LeaseWorkerJoined, LeaseWorkerRelieved})
 
     def contribution(self) -> Contribution:
-        """Its upkeep and its lease routes.
+        """Its upkeep, the builds of first transfers, and its lease routes.
 
         The upkeep wakes on what the scaler of the provisioned pools acts on (``scaling.WAKES``). Workers on other
         machines call the lease routes (``remote.lease_routes``, ``piloop worker``).
@@ -213,7 +215,8 @@ class WorkersExecutor:
         wakes = frozenset(t.model for t in scaling.WAKES)
         routes = lease_routes(self.leases, self._watching, self._cas, self._send.send, self._cli)
         return Contribution(
-            consumers=(Consumer('executor', wakes, self._upkeep, Phase.UPKEEP),), router=executor_router(routes)
+            consumers=(Consumer('executor', wakes, self._upkeep, Phase.UPKEEP), self._builds.consumer()),
+            router=executor_router(routes),
         )
 
     def _upkeep(self, turn: Turn) -> datetime | None:

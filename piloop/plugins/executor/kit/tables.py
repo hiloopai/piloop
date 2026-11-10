@@ -68,9 +68,24 @@ class InstanceEnd(StrEnum):
     """It ended with a lease, or before its worker registered: it crashed, was preempted, or was deleted by hand."""
 
 
+class FirstTransferState(StrEnum):
+    """Where the first transfer of a repo of record is (``piloop.plugins.executor.kit.transfers``)."""
+
+    REQUESTED = 'requested'
+    """A request asked for it: the daemon builds it, from ``started_at``."""
+    BUILT = 'built'
+    FAILED = 'failed'
+    """Its build failed, as ``error`` says: the next request asks again."""
+
+
 # the types of its columns, beside core's in Base.type_annotation_map
 Base.registry.update_type_annotation_map(
-    {NoLease: by_value(NoLease), WorkerInstanceState: by_value(WorkerInstanceState), InstanceEnd: by_value(InstanceEnd)}
+    {
+        NoLease: by_value(NoLease),
+        WorkerInstanceState: by_value(WorkerInstanceState),
+        InstanceEnd: by_value(InstanceEnd),
+        FirstTransferState: by_value(FirstTransferState),
+    }
 )
 
 
@@ -138,17 +153,29 @@ class WorkerInstance(Base):
 class FirstTransfer(Base):
     """What a worker's empty clone of a repo of record starts from: its versions up to ``revision``, as one blob.
 
-    The server builds it once per repo (``piloop.plugins.executor.kit.transfers``).
+    Any process that serves the API asks for it, and the daemon builds it once per repo
+    (``piloop.plugins.executor.kit.transfers``).
     """
 
     __tablename__ = 'first_transfers'
-    __table_args__ = (*text_checks('first_transfers', 'revision', 'blob'),)
+    __table_args__ = (
+        CheckConstraint(
+            "(state = 'built') = (revision IS NOT NULL AND blob IS NOT NULL)",
+            name='first_transfers.a built one names it',
+        ),
+        CheckConstraint("(state = 'failed') = (error IS NOT NULL)", name='first_transfers.a failed one says why'),
+        *text_checks('first_transfers', nullable=('revision', 'blob', 'error')),
+    )
 
     campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'), primary_key=True)
     """The repo of record (``RepoId``)."""
-    revision: Mapped[Revision]
+    state: Mapped[FirstTransferState]
+    started_at: Mapped[datetime]
+    """When it was asked for, or when the daemon began to build it: its deadline counts from here."""
+    revision: Mapped[Revision | None]
     """The head of the repo of record when it was built."""
-    blob: Mapped[Cid] = mapped_column(CidText)
+    blob: Mapped[Cid | None] = mapped_column(CidText)
+    error: Mapped[str | None]
 
 
 TABLES = (LeaseWorker, WorkerInstance, FirstTransfer)
