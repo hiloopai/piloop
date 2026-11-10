@@ -478,7 +478,8 @@ def test_a_relayed_call_that_runs_too_long_is_stopped(
     endless = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c'
     done = runner(job, Call(argv=['sql', endless], token=token))
     assert (done.exit_code, done.stderr) == (124, 'piloop: the call ran for 1 s on the server and was stopped\n')
-    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).exit_code == 0, 'the template serves on'
+    monkeypatch.setattr(relay_module, 'RELAY_SECONDS', 60.0)  # a call of a process of its own takes about 1 s off Linux
+    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).exit_code == 0, 'the next call runs'
 
 
 class Server:

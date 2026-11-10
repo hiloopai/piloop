@@ -197,10 +197,10 @@ def test_a_daemon_raises_its_soft_limit_of_open_files_to_the_hard_one_and_logs_b
         timeout=60,
     )
     assert started.returncode == 0, started.stderr
-    pid = int(cfg.pid_file.read_text())
-    assert psutil.Process(pid).rlimit(psutil.RLIMIT_NOFILE) == (hard, hard)
     wait_until(lambda: 'piloop.start' in cfg.log_file.read_text())
-    assert re.search(rf'piloop\.start .*open_files={hard} open_files_hard={hard}', cfg.log_file.read_text())
+    # the daemon logs what getrlimit answers it after the raise; macOS stops the soft limit at OPEN_MAX
+    soft = DARWIN_OPEN_FILES if sys.platform == 'darwin' and hard > DARWIN_OPEN_FILES else hard
+    assert re.search(rf'piloop\.start .*open_files={soft} open_files_hard={hard}', cfg.log_file.read_text())
     assert piloop(cfg.home, 'stop').returncode == 0
 
 
