@@ -22,7 +22,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Sync main publishes the private mirror's merged commit. The public repository runs the full push CI on that
+  # exact commit; repeating it in the mirror consumes the private Actions allowance without another integration check.
   lint:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main' || !github.event.repository.private
     name: lint and install
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -103,6 +106,7 @@ jobs:
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
   docs:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main' || !github.event.repository.private
     name: docs links
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -117,6 +121,7 @@ jobs:
   # with the trees that the top's run tested. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite;
   # the nightly and manual runs also record which test covers which line, for the test map (scripts/test_map.py).
   select:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main' || !github.event.repository.private
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -308,7 +313,7 @@ jobs:
       - run: make quarantine PYTEST_WORKERS=4
 
   check:
-    if: always()
+    if: always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !github.event.repository.private)
     needs: [lint, docs, select, test, coverage, macos]
     runs-on: ubuntu-latest
     steps:

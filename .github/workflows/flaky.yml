@@ -16,8 +16,9 @@ env:
 
 jobs:
   quarantine:
-    # The quarantine issues live in the private repository.
-    if: github.event.repository.private
+    # The quarantine issues live in the private repository. Its main-push CI runs no tests
+    # and produces no flaky-test artifacts.
+    if: github.event.repository.private && (github.event.workflow_run.event != 'push' || github.event.workflow_run.head_branch != 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

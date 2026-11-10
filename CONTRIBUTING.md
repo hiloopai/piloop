@@ -128,6 +128,10 @@ runs `make test` on macOS.
 A pull request that changes only docs runs no tests. In a stack of pull requests, only the top one runs them, for the
 whole stack.
 
+After a merge in the private mirror, `Sync main` publishes the same commit to the public repository, which runs the
+full push CI. The mirror does not repeat that post-merge run. Pull requests, nightly runs, manual runs and releases
+keep their checks.
+
 ## The end-to-end tests
 
 The tests use fake harnesses. The tests in `tests/e2e/` run small real campaigns with real agents, on the bundled
