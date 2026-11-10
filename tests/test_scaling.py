@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from piloop.api.contract import Access
+from piloop.db import feed
 from piloop.db.models import Campaign, Comment, Lease, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.net.tokens import Caller, Tokens
@@ -105,7 +106,9 @@ class Server:
 def server(db: Database, home: Path, found: Mapping[str, Pool]) -> Server:
     network = Https(url=URL).open(NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets())))
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, found)
-    scaler = Scaler.of(db, lambda: leases.pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone)
+    scaler = Scaler.of(
+        db, lambda: leases.pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone, leases.forget
+    )
     return Server(db, leases, scaler)
 
 
@@ -257,7 +260,11 @@ def test_an_idle_worker_past_min_is_drained_then_stopped_and_its_credential_revo
     assert [m.kind for m in Local(s.leases, drained.name).messages(0, 0)][-1] == 'drain'
     assert [m for m in Local(s.leases, kept.name).messages(0, 0) if isinstance(m, Drain)] == []
     assert len(events(db, WorkerDrained)) == 1
+    with db.session() as session:
+        newest = feed.newest(session)
+    assert Local(s.leases, drained.name).messages(newest, 0) == [] and drained.name in s.leases._quiet
     s.scaler.reconcile(later(62))
+    assert drained.name not in s.leases._quiet, 'its row ended: the leases keep nothing of it'
     assert list(PLATFORMS[platform].machines) == [kept.name]
     assert [(r.name, r.end) for r in s.rows() if r.end is not None] == [(first, InstanceEnd.DRAINED)]
     assert Tokens(db).verify(first_secret) is None

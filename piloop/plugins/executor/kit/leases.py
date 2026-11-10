@@ -35,6 +35,7 @@ expiry never both apply. The ``leases`` table is core's; ``lease_workers`` is th
 """
 
 import contextlib
+import threading
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -64,7 +65,7 @@ from piloop.db.models import (
     ReadBy,
     utcnow,
 )
-from piloop.db.session import Database, read_transaction, write_transaction
+from piloop.db.session import Database, Watch, read_transaction, write_transaction
 from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
@@ -271,6 +272,10 @@ class LeaseWorkerRelieved(EventModel):
     worker: str
     was: NoLease
     """The pressure that it was under."""
+
+
+MESSAGES = (Topic(LeaseQueued), Topic(LeasePrompted), Topic(LeaseRevoked), Topic(LeaseExtended), Topic(WorkerDrained))
+"""The messages of every worker: what ``topics`` admits for any one."""
 
 
 def topics(worker: str) -> tuple[Topic, ...]:
@@ -606,6 +611,14 @@ class Leases:
         self.timing = timing
         self.pools = pools if pools is not None else default_pools()
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
+        self._lock = threading.Lock()
+        self._watching = contextlib.ExitStack()
+        """Holds ``_messages`` open: the watch leaves the database when its block ends."""
+        self._messages: Watch | None = None
+        """The watch of every worker's messages (``MESSAGES``), open from the first read on, for this object's life."""
+        self._quiet: dict[str, tuple[int, int]] = {}
+        """Of each worker whose last read found no message: the cursor of that read, and ``_messages``' generation
+        then."""
 
     def register(
         self, worker: str, pool: str, version: str, runners: Sequence[str], host: HostSample
@@ -1036,6 +1049,11 @@ class Leases:
             with contextlib.suppress(StaleLease):  # it reported or ended meanwhile
                 self.lost(lease_id, worker, reason)
 
+    def forget(self, worker: str) -> None:
+        """Drop what this object keeps of ``worker``, whose row ended: its last read (``messages``)."""
+        with self._lock:
+            self._quiet.pop(worker, None)
+
     def _still_expired(self, s: Session, lease_id: int, now: datetime) -> Lease:
         """Return the lease if it is still live and past its expiry at ``now``, in the transaction that expires it."""
         lease = s.get_one(Lease, lease_id)
@@ -1131,6 +1149,12 @@ class Leases:
         A long-poll, after the GitHub Actions runner: it returns at once when a message waits, and reads again on each
         new event of its ``topics``. A prompt whose comment has its outcome is left out: the worker answered it.
 
+        A read that waits for nothing (``wait`` 0: the server's long-poll, which awaits the wakes itself) is skipped
+        when the worker's last read, after the same cursor, found nothing, and no message of any worker came since:
+        the watch of ``MESSAGES``, which lives across the polls, was not woken (``Watch.generation``). Each worker
+        polls again every heartbeat, and most polls find nothing. A skipped read does not check the worker's row: its
+        next heartbeat does.
+
         Raises:
             UnknownWorker: the worker's row is gone (``scaling`` ended its instance, or drained it), also while it
                 waited.
@@ -1148,7 +1172,18 @@ class Leases:
             found[:] = [_message(e) for e in s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id))]
             return bool(found)
 
+        with self._lock:
+            if self._messages is None:
+                self._messages = self._watching.enter_context(self._db.watching(MESSAGES))
+            generation = self._messages.generation  # before the read: a wake while it reads makes the next poll read
+            if wait <= 0 and self._quiet.get(worker) == (after, generation):
+                return found
         self._db.wait_until(read, on=topics(worker), timeout=wait)
+        with self._lock:
+            if found:
+                self._quiet.pop(worker, None)
+            else:
+                self._quiet[worker] = (after, generation)
         return found
 
     def queued(self, worker: str, message: int, error: str | None) -> None:

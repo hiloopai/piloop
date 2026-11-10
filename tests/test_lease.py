@@ -20,7 +20,7 @@ from piloop.agents.results import PromptOutcome
 from piloop.db import feed
 from piloop.db.events import emit, has, in_order
 from piloop.db.machine import Refused, transition
-from piloop.db.models import PROCESS, AgentSession, Campaign, Event, EventModel, Lease, LeaseState, utcnow
+from piloop.db.models import PROCESS, AgentSession, Campaign, Comment, Event, EventModel, Lease, LeaseState, utcnow
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
@@ -86,7 +86,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.metric import Direction
 from piloop.plugins.runtime.contract import AgentExit, AgentStart, ExitStatus
 from piloop.plugins.vcs.git import Git
-from tests.conftest import baseline, home_cas
+from tests.conftest import baseline, home_cas, wait_until
 
 HANDLE = AgentHandle(runtime='subprocess', data={})
 TIMING = Timing(renew=10, grace=50, toleration=300)
@@ -838,6 +838,38 @@ def test_a_waiting_worker_wakes_on_a_commit_of_this_process(
     began = time.monotonic()
     assert [type(m) for m in Local(leases, 'w1').messages(start, 30)] == [Work]
     assert time.monotonic() - began < 10
+
+
+def test_a_poll_that_waits_for_nothing_reads_again_only_after_a_message_of_some_worker(
+    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
+) -> None:
+    """A worker polls every heartbeat, and most polls find nothing: those read no row until a message comes."""
+    with db.session() as s:  # an event that is no message: a cursor before the newest
+        s.add(Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='human', kind='note', body='hi'))
+        s.commit()
+    start = join(leases, 'w1', []).cursor
+    w1 = Local(leases, 'w1')
+    statements: list[str] = []
+
+    def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        statements.append(statement)
+
+    assert w1.messages(start, 0) == []
+    event.listen(db.engine, 'before_cursor_execute', counted)
+    try:
+        assert w1.messages(start, 0) == []
+        assert statements == [], 'nothing came since its last read after the same cursor'
+        assert w1.messages(start - 1, 0) == [] and statements, 'another cursor reads'
+        statements.clear()
+        assert w1.messages(start - 1, 0) == [] and statements == []
+        assert leases._messages is not None
+        woken = leases._messages.generation
+        queue(db, agent_job(db, campaign, tmp_path))  # a message for every worker
+        wait_until(lambda: leases._messages is not None and leases._messages.generation > woken, 'the wake')
+        assert [type(m) for m in w1.messages(start - 1, 0)] == [Work]
+        assert statements, 'it read'
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', counted)
 
 
 def test_a_prompt_for_an_agent_without_a_live_lease_is_undelivered_at_once(

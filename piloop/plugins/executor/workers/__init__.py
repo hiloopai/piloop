@@ -149,6 +149,7 @@ class WorkersExecutor:
             host.home,
             _worker_argv,
             self.leases.gone,
+            self.leases.forget,
         )
         """Starts and stops the workers of the pools that have a provisioner."""
 

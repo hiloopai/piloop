@@ -184,6 +184,8 @@ class Scaler:
     """What an instance runs, for a server URL, a pool and its policy."""
     gone: Callable[[str, str], None]
     """End the live leases of a worker whose instance is gone, with why (``Leases.gone``)."""
+    forget: Callable[[str], None]
+    """Drop what the leases keep of a worker whose row ended (``Leases.forget``)."""
     _started: dict[str, datetime] = field(default_factory=dict)
     """When this process started each instance, or found it started: a ``starting`` row that is not here is started
     again after a list. Its ``register_seconds`` count from then."""
@@ -206,6 +208,7 @@ class Scaler:
         home: Path,
         argv: Callable[[str, str, Provisioner], list[str]],
         gone: Callable[[str, str], None],
+        forget: Callable[[str], None],
     ) -> Scaler:
         """Open the provisioner of each pool that has one, for this server's owner (``owner``)."""
         host = ProvisionerHost(owner(home), tracer)
@@ -214,7 +217,7 @@ class Scaler:
         }
         with db.session() as s:
             cursor = feed.newest(s)
-        return cls(db, pools, opened, network, tracer, timing, argv, gone, _cursor=cursor)
+        return cls(db, pools, opened, network, tracer, timing, argv, gone, forget, _cursor=cursor)
 
     def upkeep(self, now: datetime) -> datetime | None:
         """Start a pass when the feed has a change that it acts on, or at its deadline, and return the next deadline.
@@ -493,6 +496,7 @@ class Scaler:
                 s.delete(worker)
             emit(s, InstanceEnded(name=row.name, end=end, reason=reason), _on(row), System.DAEMON)
             s.commit()
+        self.forget(row.name)
         row.state = WorkerInstanceState.ENDED
         self._started.pop(row.name, None)
         if end is InstanceEnd.GONE:
