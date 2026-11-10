@@ -1751,3 +1751,25 @@ def test_0088_takes_scoring_out_of_each_stored_config_and_counts_them(
     command.downgrade(cfg, '0087')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert [loads(c) for (c,) in con.execute(stored)] == after, '0.6 reads no scoring as submit'
+
+
+def test_executor_0002_keeps_each_built_first_transfer_and_downgrades_to_the_built_ones(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'executor/workers', disk(tmp_path))
+    command.upgrade(chain, '0001')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for n in (1, 2):
+            con.execute(f"INSERT INTO campaigns (name, path, config) VALUES ('p{n}', '/p{n}', '{{}}')")
+        con.execute("INSERT INTO first_transfers (campaign_id, revision, blob) VALUES (1, 'r1', 'b1')")
+    command.upgrade(chain, '0002')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT campaign_id, state, revision, blob, error FROM first_transfers').fetchall() == [
+            (1, 'built', 'r1', 'b1', None)
+        ]
+        con.execute(
+            "INSERT INTO first_transfers (campaign_id, state, started_at) VALUES (2, 'requested', '2026-11-10')"
+        )
+    command.downgrade(chain, '0001')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT campaign_id, revision, blob FROM first_transfers').fetchall() == [(1, 'r1', 'b1')]

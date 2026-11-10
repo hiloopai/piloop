@@ -622,6 +622,7 @@ class Term(Base):
     """
 
     __tablename__ = 'terms'
+    __table_args__ = (*text_checks('terms', nullable=('listen',)),)
 
     epoch: Mapped[int] = mapped_column(primary_key=True)
     """One more than the term before."""

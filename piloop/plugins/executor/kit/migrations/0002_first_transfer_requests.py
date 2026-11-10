@@ -1,7 +1,6 @@
 """``first_transfers`` holds requests and failed builds too: any process asks for a first transfer, the daemon builds it.
 
-The table only caches blobs that the next request builds again, so it is made anew: each repo's first transfer is
-built once more after the upgrade. The downgrade makes the old table, empty, for the same reason.
+Each built transfer stays, ``built`` from the upgrade on. The downgrade keeps the built ones, and drops the rest.
 
 Revision ID: 0002
 Revises: 0001
@@ -45,10 +44,20 @@ BUILT = """CREATE TABLE first_transfers (
 
 
 def upgrade() -> None:
-    op.execute('DROP TABLE first_transfers')
+    op.execute('ALTER TABLE first_transfers RENAME TO first_transfers_built')
     op.execute(REQUESTS)
+    op.execute(
+        'INSERT INTO first_transfers (campaign_id, state, started_at, revision, blob, error)'
+        " SELECT campaign_id, 'built', CURRENT_TIMESTAMP, revision, blob, NULL FROM first_transfers_built"
+    )
+    op.execute('DROP TABLE first_transfers_built')
 
 
 def downgrade() -> None:
-    op.execute('DROP TABLE first_transfers')
+    op.execute('ALTER TABLE first_transfers RENAME TO first_transfers_requested')
     op.execute(BUILT)
+    op.execute(
+        'INSERT INTO first_transfers (campaign_id, revision, blob)'
+        " SELECT campaign_id, revision, blob FROM first_transfers_requested WHERE state = 'built'"
+    )
+    op.execute('DROP TABLE first_transfers_requested')

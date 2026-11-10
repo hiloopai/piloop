@@ -76,7 +76,8 @@ CREATE TABLE terms (
 	listen VARCHAR,
 	started_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	stopping_at DATETIME,
-	PRIMARY KEY (epoch)
+	PRIMARY KEY (epoch),
+	CONSTRAINT "terms.listen must be a text value" CHECK (typeof(listen) IN ('text', 'null'))
 );
 CREATE TABLE tokens (
 	id INTEGER NOT NULL,
