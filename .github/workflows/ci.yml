@@ -154,10 +154,10 @@ jobs:
           echo "::notice::tests: $mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
-  # The suite is CPU-bound on a runner's two vCPUs, so it is split over eight runners by a hash of each test's id
+  # The suite is CPU-bound on a runner's two vCPUs, so it is split over four runners by a hash of each test's id
   # (tests/shard.py). Each part runs four workers, as the tests also wait on subprocesses. `coverage` adds up their data.
   test:
-    name: test, part ${{ matrix.shard }} of 8
+    name: test, part ${{ matrix.shard }} of 4
     needs: select
     if: needs.select.outputs.mode == 'full' || needs.select.outputs.mode == 'map'
     runs-on: ubuntu-latest
@@ -165,7 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -179,7 +179,7 @@ jobs:
       # Test contexts need coverage's ctrace core; the other runs keep the faster default.
       - env:
           MAP: ${{ needs.select.outputs.mode == 'map' && '--cov-context=test' || '' }}
-          SHARD: ${{ matrix.shard }}/8
+          SHARD: ${{ matrix.shard }}/4
         run: |
           [ -z "$MAP" ] || export COVERAGE_CORE=ctrace
           set -- -n 4 --shard "$SHARD" --cov --cov-report= --cov-fail-under=0 $MAP
