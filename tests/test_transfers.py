@@ -82,7 +82,7 @@ class Transfers:
 
     def __init__(self, db: Database, store: Cas, record: Repository, deadline: float = 60) -> None:
         self.first = FirstTransfers(db, store, lambda repo: record, deadline)
-        self.builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+        self.builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), deadline)
 
     def send(self, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid] | None:
         try:
@@ -215,7 +215,7 @@ def worker(db: Database, store: Cas, record: Counted, dial: Dial) -> Generator[R
     server.start()
     stop = threading.Event()
     daemon = threading.Thread(
-        target=building, args=(db, FirstTransferBuilds(db, store, lambda repo: record, Tracer(None)), stop)
+        target=building, args=(db, FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60), stop)
     )
     daemon.start()
     http = dial(server.url, secret(db, 'w1'))
@@ -262,7 +262,7 @@ def test_the_sends_of_two_processes_ask_once_and_the_daemon_builds_once(
         assert [send.send(repo, [head], []) for send in sends] == [None, None]
         with db.session() as s:
             assert len(in_order(s, FirstTransferRequested)) == 1, 'the second found the request'
-        builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+        builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60)
         builds.run(Turn(utcnow()))
         builds.run(Turn(utcnow()))  # a turn while it builds starts no second build
         wait_until(lambda: built(db, repo))
@@ -282,7 +282,7 @@ def test_a_daemon_that_starts_builds_what_an_earlier_one_was_asked_and_its_deadl
         s.get_one(FirstTransfer, repo).started_at = utcnow() - timedelta(hours=1)
         s.commit()
     record.hold.clear()
-    FirstTransferBuilds(db, store, lambda repo: record, Tracer(None)).run(Turn(utcnow()))
+    FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60).run(Turn(utcnow()))
     assert send.send(repo, [head], []) is None, 'it builds within its deadline from its start'
     record.hold.set()
     assert len(answered(partial(send.send, repo, [head], []))) == 1 and record.full == 1
@@ -292,7 +292,7 @@ def test_a_build_whose_repo_goes_meanwhile_writes_nothing(
     db: Database, campaign: Campaign, store: Cas, record: Counted
 ) -> None:
     repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
-    builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None))
+    builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60)
     record.hold.clear()
     assert FirstTransfers(db, store, lambda repo: record, 60).send(repo, [head], []) is None
     builds.run(Turn(utcnow()))
@@ -350,3 +350,27 @@ def test_of_two_requests_that_find_no_first_transfer_the_second_to_take_the_lock
     assert FirstTransfers(db, store, lambda repo: record, 60).send(repo, [head], []) is None
     with db.session() as s:
         assert len(in_order(s, FirstTransferRequested)) == 1, 'one ask'
+
+
+def test_a_build_whose_end_is_not_written_is_failed_at_its_deadline_and_the_next_request_asks_again(
+    db: Database, campaign: Campaign, store: Cas, record: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    send = FirstTransfers(db, store, lambda repo: record, 60)
+    builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60)
+    real = builds._settle
+
+    def locked(*_: object, **__: object) -> None:
+        raise sqlite3.OperationalError('database is locked')
+
+    monkeypatch.setattr(builds, '_settle', locked)
+    assert send.send(repo, [head], []) is None
+    due = builds.run(Turn(utcnow()))
+    assert due is not None, 'its deadline'
+    wait_until(lambda: not builds._building, 'the build ends, its end unwritten')
+    assert builds.run(Turn(utcnow())) == due, 'a turn before the deadline writes nothing, and starts no other build'
+    monkeypatch.setattr(builds, '_settle', real)
+    assert builds.run(Turn(due)) is None and record.full == 1
+    with pytest.raises(NotSent, match='failed: its end was not written: OperationalError: database is locked'):
+        send.send(repo, [head], [])
+    assert answered(partial(Transfers(db, store, record).send, repo, [head], [])) and record.full == 2

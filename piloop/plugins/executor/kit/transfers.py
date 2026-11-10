@@ -153,44 +153,68 @@ def _request(s: Session, repo: RepoId) -> None:
 
 
 class FirstTransferBuilds:
-    """The daemon's consumer that builds each requested first transfer, each in a thread of its own."""
+    """The daemon's consumer that builds each requested first transfer, each in a thread of its own.
 
-    def __init__(self, db: Database, cas: Cas, records: Callable[[RepoId], Repository], tracer: Tracer) -> None:
+    A build whose end could not be written, the database locked past its busy timeout say, leaves its row
+    ``requested``: at its deadline the consumer writes it ``failed``, so the next request asks again.
+    """
+
+    def __init__(
+        self, db: Database, cas: Cas, records: Callable[[RepoId], Repository], tracer: Tracer, deadline: float
+    ) -> None:
         self._db = db
         self._cas = cas
         self._records = records
         self._tracer = tracer
+        self._deadline = timedelta(seconds=deadline)
         self._lock = threading.Lock()
         self._building: set[RepoId] = set()
         """The repos whose build runs in this process: a turn starts no second one."""
+        self._unsettled: dict[RepoId, str] = {}
+        """The repos whose build ended in this process with no end written, and why."""
 
     def consumer(self) -> Consumer:
         """Its job in the daemon's loop: it wakes on each request, and runs once when the daemon starts."""
         return Consumer('first_transfers', frozenset({FirstTransferRequested}), self.run, Phase.UPKEEP)
 
     def run(self, turn: Turn) -> datetime | None:
-        """Start the build of each requested first transfer that no thread of this daemon builds.
+        """Start the build of each requested first transfer that no thread builds, and return the next deadline.
 
-        A build's start is its row's ``started_at``: one that an earlier daemon asked for counts from this start.
+        A build's start is its row's ``started_at``: one that an earlier daemon asked for counts from this start. One
+        whose build ended unwritten is written ``failed`` once its deadline passed.
         """
-        requested = select(FirstTransfer.campaign_id).where(FirstTransfer.state == FirstTransferState.REQUESTED)
+        requested = select(FirstTransfer.campaign_id, FirstTransfer.started_at).where(
+            FirstTransfer.state == FirstTransferState.REQUESTED
+        )
         with self._db.session() as s:
-            asked = s.scalars(requested).all()
+            asked = {RepoId(repo): started for repo, started in s.execute(requested).all()}
         with self._lock:
-            new = [RepoId(r) for r in asked if r not in self._building]
+            new = [r for r in asked if r not in self._building and r not in self._unsettled]
             self._building.update(new)
+            late = {
+                r: why for r, why in self._unsettled.items() if r in asked and asked[r] + self._deadline <= turn.now
+            }
+        for repo, why in late.items():
+            self._settle(
+                repo, FirstTransferSettled(kind='first_transfer.failed', error=f'its end was not written: {why}')
+            )
+            with self._lock:
+                del self._unsettled[repo]
         if new:
+            now = utcnow()
             with self._db.session() as s:
                 write_transaction(s)
                 s.execute(
                     update(FirstTransfer)
                     .where(FirstTransfer.campaign_id.in_(new), FirstTransfer.state == FirstTransferState.REQUESTED)
-                    .values(started_at=utcnow())
+                    .values(started_at=now)
                 )
                 s.commit()
+            asked |= dict.fromkeys(new, now)
         for repo in new:
             threading.Thread(target=self._build, args=(repo,), name=f'first-transfer-{repo}', daemon=True).start()
-        return None
+        dues = [started + self._deadline for repo, started in asked.items() if repo not in late]
+        return min((due for due in dues if due > turn.now), default=None)
 
     def _build(self, repo: RepoId) -> None:
         """Put the repo of record's head and all before it into the CAS, and write the row: ``built``, or ``failed``."""
@@ -200,9 +224,15 @@ class FirstTransferBuilds:
                     head = record.head().revision
                     blob = record.send(self._cas, [head], [])
                 assert blob is not None  # with nothing had, the head is sent
-            self._settle(repo, FirstTransferSettled(kind='first_transfer.built'), revision=head, blob=blob)
+            ended = FirstTransferSettled(kind='first_transfer.built'), head, blob
         except Exception as e:
-            self._settle(repo, FirstTransferSettled(kind='first_transfer.failed', error=f'{type(e).__name__}: {e}'))
+            ended = FirstTransferSettled(kind='first_transfer.failed', error=f'{type(e).__name__}: {e}'), None, None
+        try:
+            self._settle(repo, *ended)
+        except Exception as e:  # the row stays requested: the consumer writes it failed at its deadline
+            self._tracer.event('first_transfer.unsettled', repo=repo, error=f'{type(e).__name__}: {e}')
+            with self._lock:
+                self._unsettled[repo] = f'{type(e).__name__}: {e}'
         finally:
             with self._lock:
                 self._building.discard(repo)
