@@ -50,7 +50,7 @@ def test_tracer_console_lines(capsys: pytest.CaptureFixture[str], spans: InMemor
 
 def test_tracer_otlp_export_is_optional(monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture) -> None:
     Tracer(None).shutdown()
-    exporter = mocker.patch('piloop.otel.OTLPSpanExporter')
+    exporter = mocker.patch('opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter')
     monkeypatch.setattr(otel, 'settings', Settings(otel_exporter_otlp_endpoint='http://collector:4318'))
     t = otel.tracer()
     with t.span('x', a=1) as span:

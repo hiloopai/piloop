@@ -38,7 +38,7 @@ from pathlib import Path
 from pydantic import Field
 
 import piloop
-from piloop.plugins.executor.kit.relay import RELAY_ARGV
+from piloop.plugins.executor.kit.door import RELAY_ARGV
 from piloop.plugins.runtime.contract import (
     MESSAGES_ENV,
     QUEUE,

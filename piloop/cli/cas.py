@@ -10,8 +10,6 @@ from pydantic import TypeAdapter, ValidationError
 
 from piloop.cli import common, local
 from piloop.db.session import Database
-from piloop.net import cas_server
-from piloop.net.server import Server
 from piloop.net.tokens import Tokens
 from piloop.plugins.cas.contract import BlobAddress
 from piloop.plugins.network.contract import NETWORKS, Address, NetworkHost
@@ -53,6 +51,10 @@ def serve(
     ],
 ) -> None:
     """Serve the CAS of `[plugins.cas]` until Ctrl-C or SIGTERM. Each caller sends a worker's token."""
+    # only now: `piloop cas get`, which an agent's call runs on the server, loads no web server
+    from piloop.net import cas_server
+    from piloop.net.server import Server
+
     try:
         network = NETWORKS.selected(common.settings.providers).listening(Address.model_validate(listen))
     except ValidationError as e:

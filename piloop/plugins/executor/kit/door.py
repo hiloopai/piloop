@@ -17,6 +17,8 @@ from piloop.plugins.runtime.contract import deliver
 from piloop.proc import PILOOP_ARGV
 from piloop.settings import settings
 
+RELAY_ARGV = (sys.executable, '-P', '-m', __name__)
+"""What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Machine.piloop``): this module's ``main``."""
 RELAY_SECONDS = 120.0
 """The longest that a relayed call runs on the server before it is stopped."""
 NEVER_SENT: tuple[type[httpx.TransportError], ...] = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)

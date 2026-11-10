@@ -43,7 +43,8 @@ from piloop.plugins.executor.contract import (
     RepoId,
 )
 from piloop.plugins.executor.kit.clones import Clones, Fetch, of_record, own_replica
-from piloop.plugins.executor.kit.relay import RELAY_ARGV, Shipped
+from piloop.plugins.executor.kit.door import RELAY_ARGV
+from piloop.plugins.executor.kit.relay import Shipped
 from piloop.plugins.executor.kit.sessions import POLL_SECONDS, SessionFile
 from piloop.plugins.executor.kit.transfers import send_of_record
 from piloop.plugins.harness.contract import MCP, McpLaunch, Usage, UsageReader, expand

@@ -16,14 +16,17 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from fastapi import APIRouter
 from pydantic import TypeAdapter, ValidationError
 
 from piloop.daemon.loop import Consumer
 from piloop.plugins.host import PluginError, Plugins, Scope, Slot, declared
 from piloop.settings import AgentSettings, DaemonSettings
 
-if TYPE_CHECKING:  # the run controller and the database import the contracts that import this module
+if TYPE_CHECKING:
+    # a command that reads a contract loads no web framework (``tests/cli/test_imports.py``)
+    from fastapi import APIRouter
+
+    # the run controller and the database import the contracts that import this module
     from piloop.db.session import Database
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.contract import Planner

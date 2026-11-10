@@ -10,8 +10,6 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from piloop.api.contract import defaulted
-from piloop.campaign.campaigns import UnknownCampaign, named, selected
-from piloop.campaign.ops import Refused
 from piloop.cli import common
 from piloop.daemon.serve import running_pid
 from piloop.db.models import Campaign
@@ -60,6 +58,9 @@ def session() -> Generator[Session]:
 
 def campaign(s: Session, ref: str) -> Campaign:
     """Find the campaign that ``ref`` names, or exit with how to register it."""
+    # only now: ``piloop sql`` and ``piloop schema``, which an agent's every call runs, find no campaign
+    from piloop.campaign.campaigns import UnknownCampaign, named
+
     try:
         return named(s, ref)
     except UnknownCampaign as e:
@@ -68,6 +69,8 @@ def campaign(s: Session, ref: str) -> Campaign:
 
 def campaigns(s: Session, ref: str | None) -> list[Campaign]:
     """The campaigns for a command without a ref: the one cwd is in, else the only active one, else every campaign."""
+    from piloop.campaign.campaigns import UnknownCampaign, selected  # only now, as in ``campaign``
+
     try:
         return defaulted(selected(s, ref, Path.cwd()))
     except UnknownCampaign as e:
@@ -102,13 +105,4 @@ def migrate(db: Database) -> Path | None:
         )
     except (OlderDaemon, SchemaMismatch, BackupFailed) as e:
         db.close()
-        raise SystemExit(str(e)) from e
-
-
-@contextmanager
-def refused() -> Generator[None]:
-    """Exit with the message of an operation that refused its input (``piloop.campaign.ops.Refused``)."""
-    try:
-        yield
-    except Refused as e:
         raise SystemExit(str(e)) from e

@@ -24,7 +24,6 @@ Retirement: deleted when agents call typed operations over HTTP, if they ever do
 import fcntl
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 from collections.abc import Callable, Sequence
@@ -46,16 +45,12 @@ from piloop.ids import AgentSessionId, Revision
 from piloop.net import tokens
 from piloop.net.tokens import Caller
 from piloop.plugins.executor.contract import AgentJob, RepoId
-from piloop.plugins.executor.kit import door as agent_end
 from piloop.plugins.executor.kit.client import Dismissed
 from piloop.plugins.executor.kit.door import NEVER_SENT, RELAY_SECONDS, AgentCall, Call, Relayed
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
 from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env, run_group
 from piloop.settings import socket_dir
-
-RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
-"""What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Machine.piloop``): ``door.main``."""
 
 
 class LeaseCall(Call):

@@ -9,7 +9,6 @@ from collections.abc import Generator, Mapping
 from datetime import datetime
 
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
@@ -101,6 +100,9 @@ class Tracer:
         if exporter is not None:
             exported = SimpleSpanProcessor(exporter)
         elif endpoint is not None:
+            # only now: a command that sends no spans, such as an agent's `piloop sql`, loads no OTLP exporter
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
             exported = BatchSpanProcessor(OTLPSpanExporter(endpoint=f'{endpoint}/v1/traces'))
         self._tracer = self._provider.get_tracer('piloop')
         self.measures: Measures | None = None

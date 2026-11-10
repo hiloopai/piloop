@@ -250,12 +250,15 @@ def parent(
     """
     if (parent_ref is None) is not clear:
         raise SystemExit('name the parent or --clear, not both' if clear else 'name the parent, or --clear')
-    with local.refused(), local.session() as s:
-        above = None if parent_ref is None else local.campaign(s, parent_ref)
-        campaign = ops.set_parent(s, local.campaign(s, ref).id, None if above is None else above.id)
-        s.commit()
-        where = 'a root' if above is None else f'under {above.name} #{above.id}'
-        common.console.print(f'{campaign.name} #{campaign.id} is {where}', markup=False)
+    try:
+        with local.session() as s:
+            above = None if parent_ref is None else local.campaign(s, parent_ref)
+            campaign = ops.set_parent(s, local.campaign(s, ref).id, None if above is None else above.id)
+            s.commit()
+    except ops.Refused as e:
+        raise SystemExit(str(e)) from e
+    where = 'a root' if above is None else f'under {above.name} #{above.id}'
+    common.console.print(f'{campaign.name} #{campaign.id} is {where}', markup=False)
 
 
 def tree() -> None:
