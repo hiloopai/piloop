@@ -377,6 +377,7 @@ def migrate(engine: Engine, *, cas: Cas, backups: int, daemon: int | None) -> Pa
             # A plugin installed on a home at its heads moves no chain, and its kinds are written here.
             with engine.begin() as connection:
                 _kinds(connection)
+                _statistics(connection)
             return None
         if backups and (at := revision(path)) is not None:
             copy = _backup(path, at, backups)
@@ -412,6 +413,7 @@ def _upgrade(url: str, cas: Cas) -> None:
                 command.upgrade(cfg, 'head')
                 _record(connection, name, packages.get(name, BUILT_IN))
             _kinds(connection)
+            _statistics(connection)
     finally:
         engine.dispose()
 
@@ -638,6 +640,17 @@ def _kinds(connection: Connection) -> None:
         connection.execute(insert(KnownCommentKind).values(id=comment_kind).on_conflict_do_nothing())
 
 
+def _statistics(connection: Connection) -> None:
+    """Create ``sqlite_stat1``, the table of the query planner's statistics, unless it exists.
+
+    The ``PRAGMA optimize`` of a close (``piloop.db.sql.optimize``) would create it otherwise: a schema change under
+    the connections that write at that moment, whose insert into ``comments`` then fails with ``no such table``.
+    """
+    found = connection.exec_driver_sql("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").first()
+    if found is None:
+        connection.exec_driver_sql('ANALYZE sqlite_schema')  # creates it, and analyzes no table
+
+
 def _record(connection: Connection, name: str, package: str) -> None:
     """Record the ``package`` of the schema ``name`` and the fingerprint of its revision in ``migrations``."""
     at = connection.exec_driver_sql(f'SELECT version_num FROM {version_table(name)}').scalar_one()
@@ -819,10 +832,13 @@ class Watch:
     while the waiter reads is kept for its next wait, which then returns at once: the read after it sees the event.
     """
 
-    def __init__(self, topics: Sequence[Topic], ring: Callable[[], None]) -> None:
+    def __init__(self, topics: Sequence[Topic], ring: Callable[[], None], generation: int) -> None:
         self.topics = tuple(topics)
         self._ring = ring
         """Starts the doorbell, unless it runs: before each wait, as one that got no connection ended."""
+        self.generation = generation
+        """The ``Database.generation`` of its latest wake, until then of its registration: a read that started at this
+        generation or a later one saw every event that woke it (``piloop.db.feed.Shared``)."""
         self._woken = False
         self._closed = False
         self._lock = threading.Condition()  # reentrant: ``notify`` runs in a signal handler (``Scheduler.interrupt``)
@@ -832,10 +848,11 @@ class Watch:
         """Whether one of ``events`` is of one of its topics."""
         return any(topic.admits(e) for e in events for topic in self.topics)
 
-    def wake(self, *, closed: bool = False) -> None:
-        """Wake the waiter, from any thread. ``closed``: and every wait after this one returns at once."""
+    def wake(self, generation: int, *, closed: bool = False) -> None:
+        """Wake the waiter at ``generation``, from any thread. ``closed``: and every wait after this one returns at once."""
         with self._lock:
             self._woken, self._closed = True, self._closed or closed
+            self.generation = max(self.generation, generation)  # two threads that wake it can come in either order
             self._lock.notify_all()
             if self._future is not None:
                 self._future.get_loop().call_soon_threadsafe(_resolve, self._future)
@@ -909,6 +926,8 @@ class Database:
         waits, until ``close``."""
         self._committed_since = False
         """A commit of this process came since the doorbell's last read: it reads again at once."""
+        self._generation = 0
+        """How many wakes came (``generation``)."""
         self._closed = False
         self._reading = 0
         """How many waiters read now: ``close`` lets them end before it closes the connections that they hold."""
@@ -1019,15 +1038,26 @@ class Database:
         if self._closed:
             raise DatabaseClosed('the database is closed')
 
+    @property
+    def generation(self) -> int:
+        """How many times the waiters were woken: by the doorbell after each read of new events, and by ``notify``.
+
+        A read that starts at a generation sees every event that woke a waiter at it or before it.
+        """
+        with self._committed:
+            return self._generation
+
     def notify(self) -> None:
         """Wake every waiter of this process: for a change that no event says, such as what its ``give_up`` reads."""
         self._wake(lambda _: True)
 
     def _wake(self, admitted: Callable[[Watch], bool]) -> None:
         with self._committed:
+            self._generation += 1
+            generation = self._generation
             woken = [w for w in self._watches if admitted(w)]
         for watch in woken:
-            watch.wake()
+            watch.wake(generation)
 
     def _ring_on_events(self) -> None:
         """Start the doorbell, once: the first waiter of the process starts it.
@@ -1083,10 +1113,10 @@ class Database:
         The new events that a topic admits wake it, whichever process commits them, and ``notify`` does. A commit that
         adds none wakes nothing. No topics: only ``notify`` and ``close`` wake it.
         """
-        watch = Watch(on, self._ring_on_events)
         with self._committed:
+            watch = Watch(on, self._ring_on_events, self._generation)
             if self._closed:
-                watch.wake(closed=True)
+                watch.wake(self._generation, closed=True)
             else:
                 self._watches.add(watch)
         self._ring_on_events()  # before the first read: the doorbell's first read wakes the watch
@@ -1142,7 +1172,7 @@ class Database:
             self._committed.notify_all()
             watches = list(self._watches)
         for watch in watches:
-            watch.wake(closed=True)
+            watch.wake(self._generation, closed=True)
         with self._committed:
             self._committed.wait_for(lambda: self._reading == self._checked_out == 0, CLOSE_WAIT_SECONDS)
         # The sessionmaker's class holds its listeners for the life of the process: this one would keep the database.

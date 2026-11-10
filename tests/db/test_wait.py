@@ -7,6 +7,7 @@ import threading
 import time
 import weakref
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -340,9 +341,75 @@ def test_two_wakes_before_the_waiters_loop_runs_resolve_its_wait_once(db: Databa
         with db.watching([]) as watch:
             waiting = asyncio.create_task(watch.changed(30))
             await asyncio.sleep(0)  # it waits on its future now
-            watch.wake()
-            watch.wake()  # its callback finds the future resolved
+            watch.wake(2)
+            watch.wake(1)  # its callback finds the future resolved
+            assert watch.generation == 2, 'the latest wake of the two, in whichever order they came'
             await asyncio.wait_for(waiting, 10)
+
+    asyncio.run(waits())
+
+
+@dataclass(frozen=True)
+class Read:
+    """A read of the feed for ``feed.Shared``: its span."""
+
+    after: int
+    next: int
+    more: bool = False
+
+
+def test_the_waiters_of_one_wake_share_one_read_and_a_later_wake_or_another_span_reads_again(db: Database) -> None:
+    shared = feed.Shared[Read](db)
+    reads: list[int] = []
+    gate = asyncio.Event()
+
+    async def read(after: int) -> Read:
+        reads.append(after)
+        await gate.wait()
+        return Read(after, after + 5, more=after == 2)
+
+    async def waits() -> None:
+        await ringing(db)  # its first wake comes before the reads
+        with db.watching([]) as first, db.watching([]) as second, db.watching([]) as gone:
+            leading = asyncio.create_task(shared.read(3, first, read))
+            following = asyncio.create_task(shared.read(4, second, read))
+            cancelled = asyncio.create_task(shared.read(4, gone, read))
+            await asyncio.sleep(0)  # the first reads, the others wait for its read
+            cancelled.cancel()
+            gate.set()
+            assert await leading is await following and reads == [3], 'one read for both cursors in its span'
+            assert await shared.read(8, first, read) is await leading, 'a cursor at its end, and no more to read'
+            db.notify()  # a wake after that read: it did not see what woke them
+            assert (await shared.read(8, first, read), reads) == (Read(8, 13), [3, 8])
+            assert (await shared.read(2, second, read), reads) == (Read(2, 7, more=True), [3, 8, 2]), 'before it'
+            assert (await shared.read(7, second, read), reads) == (Read(7, 12), [3, 8, 2, 7]), 'its next page'
+        assert cancelled.cancelled()
+
+    asyncio.run(waits())
+
+
+def test_a_read_that_fails_fails_its_reader_and_a_waiter_for_it_reads_again(db: Database) -> None:
+    shared = feed.Shared[Read](db)
+    reads: list[int] = []
+    gate = asyncio.Event()
+
+    async def read(after: int) -> Read:
+        reads.append(after)
+        if len(reads) == 1:
+            await gate.wait()
+            raise sqlite3.OperationalError('disk I/O error')
+        return Read(after, after + 1)
+
+    async def waits() -> None:
+        await ringing(db)  # its first wake comes before the reads
+        with db.watching([]) as first, db.watching([]) as second:
+            leading = asyncio.create_task(shared.read(1, first, read))
+            following = asyncio.create_task(shared.read(1, second, read))
+            await asyncio.sleep(0)
+            gate.set()
+            with pytest.raises(sqlite3.OperationalError, match='disk I/O error'):
+                await leading
+            assert (await following, reads) == (Read(1, 2), [1, 1])
 
     asyncio.run(waits())
 

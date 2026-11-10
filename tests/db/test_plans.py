@@ -34,7 +34,8 @@ HOT_PATHS = {
     'status.sections',
     'history.renderables',
     'search #1',
-    'inbox.news',
+    'inbox.changes',
+    'inbox.escalations',
 }
 
 

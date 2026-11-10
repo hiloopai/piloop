@@ -1,6 +1,7 @@
 """The inbox: comments with a priority, scoped to a campaign through every target, until someone acknowledges them."""
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,7 +14,7 @@ from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import escalations, inbox
 from piloop.campaign.escalations import DecisionWritten
 from piloop.db import feed as db_feed
-from piloop.db.events import emit, in_order
+from piloop.db.events import Topic, emit, in_order
 from piloop.db.models import Ack, AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
@@ -427,7 +428,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
                 )
             )
         s.commit()
-        first = inbox.news(s, start, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+        first = news(s, start, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
         assert [i.text() for i in first.items] == [
             'comment#1 escalation p1 on campaign#1 (demo) by implementer#3: which floor?',
             'comment#2 escalation p1 on campaign#1 (demo) by research#4: which floor?',
@@ -437,7 +438,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
         def score() -> News:
             emit(s, scored('score 2 over 1 eval'), TargetRef(CANDIDATE, 1), System.DAEMON)
             s.commit()
-            return inbox.news(s, db_feed.newest(s) - 1, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+            return news(s, db_feed.newest(s) - 1, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
 
         s.add(Comment(target=TargetRef(TargetKind.COMMENT, 1), author='implementer#3', body='still stuck'))
         assert score().reminder(now) == '2 escalations wait unacknowledged: comment#1 (2h old), comment#2 (5m old)', (
@@ -445,7 +446,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
         )
         inbox.ack(s, [CommentId(1)], System.ORCHESTRATOR)
         s.commit()
-        quiet = inbox.news(s, db_feed.newest(s), campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+        quiet = news(s, db_feed.newest(s), campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
         assert (quiet.items, quiet.reminder(now)) == ([], '1 escalation waits unacknowledged: comment#2 (5m old)'), (
             'a timeout says it too, but it ends no wait'
         )
@@ -458,9 +459,15 @@ def scored(told: str) -> CandidateScored:
     return CandidateScored(track=TrackName('score'), score=2.0, measured=1, best=CandidateId(1), rank=1, told=told)
 
 
+def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party: str) -> News:
+    """The news after ``after``, with the escalations, as ``GET /v1/inbox/news`` answers it without a wait."""
+    found, cursor = inbox.news_after(s, after, campaign_id=campaign_id, party=party)
+    return News(next=cursor, items=found, escalations=inbox.escalations(s, party, campaign_id=campaign_id, shown=found))
+
+
 def news_lines(s: Session, after: int, *, campaign_id: CampaignId | None = None, me: Actor) -> tuple[int, list[str]]:
     """The news after ``after``, as ``piloop inbox wait`` prints it, and the next cursor."""
-    found = inbox.news(s, after, campaign_id=campaign_id, party=me.party)
+    found = news(s, after, campaign_id=campaign_id, party=me.party)
     return found.next, [item.text() for item in found.items]
 
 
@@ -468,13 +475,11 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
     db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each statement of a session reads the latest commit, so the items and the page of events can disagree."""
-    waiting_for = inbox.waiting_for
+    after = db_feed.after
 
-    def then_escalate(
-        s: Session, party: str, *, campaign_id: CampaignId | None = None
-    ) -> list[tuple[Comment, Campaign | None]]:
-        found = waiting_for(s, party, campaign_id=campaign_id)
-        if not found:
+    def then_escalate(s: Session, cursor: int, topics: Sequence[Topic] = (), *, limit: int) -> db_feed.Page:
+        page = after(s, cursor, topics, limit=limit)
+        if not page.ids:
             with elsewhere(db) as second, second.session() as other:
                 other.add(
                     Comment(
@@ -486,9 +491,9 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
                     )
                 )
                 other.commit()
-        return found
+        return page
 
-    monkeypatch.setattr(inbox, 'waiting_for', then_escalate)
+    monkeypatch.setattr(db_feed, 'after', then_escalate)
     with db.session() as s:
         start = db_feed.newest(s)
         cursor, now = news_lines(s, start, campaign_id=campaign.id, me=System.ORCHESTRATOR)
@@ -545,7 +550,7 @@ def test_a_person_s_ack_leaves_the_escalation_waiting_for_the_orchestrator_and_a
             return [c.id for c, _ in inbox.waiting_for(s, party, campaign_id=campaign.id)]
 
         assert (waits(System.HUMAN.party), waits(System.ORCHESTRATOR.party)) == ([], [asked.id])
-        later = inbox.news(s, db_feed.newest(s), campaign_id=campaign.id, party='orchestrator')
+        later = news(s, db_feed.newest(s), campaign_id=campaign.id, party='orchestrator')
         assert [c.id for c in later.escalations] == [asked.id], 'still unanswered: it comes with each wait'
         decision = inbox.reply(s, asked.id, 'the old one', author=System.ORCHESTRATOR, priority=2)
         assert (waits(System.HUMAN.party), waits(System.ORCHESTRATOR.party)) == ([decision.id], []), (

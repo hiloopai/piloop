@@ -20,7 +20,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pytest_mock import MockerFixture
 from rich.console import Console
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from piloop.actor import Agent, Person, System
 from piloop.agents.results import PromptOutcome
@@ -44,7 +44,7 @@ from piloop.api.contract import (
     StopBody,
 )
 from piloop.api.views import CampaignState, Pending, Status, thread_lines
-from piloop.campaign import ops
+from piloop.campaign import inbox, ops
 from piloop.campaign.stop import StopRequested
 from piloop.cli import common, main as cli
 from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
@@ -87,8 +87,8 @@ from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.settings import Settings
-from tests.conftest import EveryClient, disk, serving_api
+from piloop.settings import DaemonSettings, Settings
+from tests.conftest import EveryClient, disk, serving_api, wait_until
 
 
 def token(db: Database, name: str, access: Access) -> str:
@@ -343,6 +343,67 @@ def test_the_news_long_poll_wakes_on_what_someone_else_writes_and_skips_what_the
         with pytest.raises(Refused, match='^no comment#99$') as unknown:
             orchestrator.thread(CommentId(99))
         assert unknown.value.error == Problem.UNKNOWN_COMMENT
+
+
+def test_the_news_long_polls_that_one_comment_wakes_share_one_read_of_what_it_changed(
+    db: Database, campaign: Campaign, cfg: Settings
+) -> None:
+    """Every news long-poll waits for the same events. The comment wakes all of them, and one read serves each."""
+    tokens_ = Tokens(db)
+    served = app(tokens_, Https().open(NetworkHost(tokens_, HomeSecrets(db, LocalSecrets()))), ())
+    api = with_api(served, Handlers(db, cfg, daemon_state('now', None), disk(cfg.home)))
+    pages: list[str] = []
+
+    def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        if statement.startswith('SELECT events.id \nFROM events \nWHERE events.id > '):  # a page (``feed.after``)
+            pages.append(statement)
+
+    answers: list[list[str]] = []
+
+    def poll(after: int) -> None:
+        with Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+            answers.append([item.text() for item in client.news(NewsQuery(after=after, wait=20)).items])
+
+    with closing(Server(api, local_listener(cfg.socket_file))) as running:
+        running.start()
+        with Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+            start = client.news(NewsQuery()).next
+        wait_until(lambda: db.generation > 0, "the doorbell's first read, which wakes every waiter")
+        polls = [threading.Thread(target=poll, args=(start,)) for _ in range(8)]
+        for each in polls:
+            each.start()
+        wait_until(lambda: sum(w._future is not None for w in db._watches) == len(polls), 'every long-poll parked')
+        event.listen(db.engine, 'before_cursor_execute', counted)
+        try:
+            comment(db, 'implementer#2', 'look at this')
+            for each in polls:
+                each.join(30)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', counted)
+    assert answers == [['comment#1 decision p2 on campaign#1 (demo) by implementer#2: look at this']] * len(polls)
+    assert len(pages) == 1, 'one read of the comment for the 8 long-polls, not 8'
+
+
+def test_a_news_long_poll_reads_page_after_page_after_a_wake_until_one_has_news_for_it(
+    db: Database, campaign: Campaign, cfg: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(inbox, 'settings', inbox.settings.model_copy(update={'daemon': DaemonSettings(inbox_page=1)}))
+
+    def own_then_other() -> None:  # one commit: one wake, then two pages of one event
+        with db.session() as s:
+            for author, body in (('orchestrator', 'my own decision'), ('implementer#2', 'look at this')):
+                s.add(
+                    Comment(
+                        target=TargetRef(TargetKind.CAMPAIGN, 1), author=author, kind=DECISION, priority=2, body=body
+                    )
+                )
+            s.commit()
+
+    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as orchestrator:
+        start = orchestrator.news(NewsQuery()).next
+        threading.Timer(0.2, own_then_other).start()
+        [item] = orchestrator.news(NewsQuery(after=start, wait=20)).items
+    assert item.text() == 'comment#2 decision p2 on campaign#1 (demo) by implementer#2: look at this'
 
 
 def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(

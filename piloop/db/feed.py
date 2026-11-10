@@ -7,17 +7,21 @@ id (``piloop.db.triggers.immutable``). Otherwise a reader whose cursor had passe
 miss the event that takes it.
 """
 
+import asyncio
+import concurrent.futures
 import sqlite3
-from collections.abc import Generator, Sequence
+import threading
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
 from piloop.db.events import Topic
 from piloop.db.models import Event
-from piloop.db.session import read_transaction
+from piloop.db.session import Database, Watch, read_transaction
 
 
 @dataclass(frozen=True)
@@ -86,3 +90,67 @@ def after(
         ids = list(s.scalars(query.where(Event.id <= end)))
     last = ids[-1] if len(ids) == limit else end
     return Page(ids=ids, next=last, more=last < end)
+
+
+class Span(Protocol):
+    """A read of the feed: of the events after ``after``, up to ``next``, as ``Page`` says them."""
+
+    @property
+    def after(self) -> int:
+        """The cursor that it read after."""
+        ...
+
+    @property
+    def next(self) -> int:
+        """The cursor for the next read: ``Page.next``."""
+        ...
+
+    @property
+    def more(self) -> bool:
+        """Whether events after ``next`` exist already: ``Page.more``."""
+        ...
+
+
+class Shared[S: Span]:
+    """The latest read of the feed, which each waiter that it serves takes in place of a read of its own.
+
+    The long-polls of a route wait for the same topics, so one new event wakes all of them at once. A read serves a
+    waiter whose cursor is in its span, and that started at the generation of the waiter's latest wake or after it
+    (``Watch.generation``): it saw every event that woke the waiter. A cursor at the end of a span with ``more`` needs
+    the next page. One read runs at a time. A waiter that no read serves reads, and the others wait for that read
+    and look again: K waiters of one wake make one read, not K.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+        self._lock = threading.Lock()
+        self._last: tuple[int, S] | None = None
+        """The latest read, with the generation that it started at."""
+        self._reading: concurrent.futures.Future[None] | None = None
+        """Done when the read that runs ends: the long-polls of every server thread's event loop await it."""
+
+    async def read(self, cursor: int, watch: Watch, read: Callable[[int], Awaitable[S]]) -> S:
+        """A read after ``cursor`` that saw every event that woke ``watch``: the latest one, else ``read``'s."""
+        while True:
+            with self._lock:
+                if self._last is not None and self._serves(*self._last, cursor, watch):
+                    return self._last[1]
+                if (reading := self._reading) is None:
+                    self._reading = done = concurrent.futures.Future[None]()
+                    break
+            await asyncio.wait([asyncio.wrap_future(reading)])  # a cancelled wait leaves the read to its reader
+        generation = self._db.generation
+        try:
+            found = await read(cursor)
+            with self._lock:
+                self._last = generation, found
+            return found
+        finally:
+            with self._lock:
+                self._reading = None
+            done.set_result(None)
+
+    @staticmethod
+    def _serves(generation: int, span: S, cursor: int, watch: Watch) -> bool:
+        within = span.after <= cursor < span.next or (cursor == span.next and not span.more)
+        return within and generation >= watch.generation

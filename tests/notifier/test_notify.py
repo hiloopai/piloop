@@ -16,7 +16,7 @@ from piloop.actor import Actor, Agent, Person, System
 from piloop.api.views import CommentNews
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.inbox import HUMAN, ack, items, news
+from piloop.campaign.inbox import HUMAN, ack, items, news_after
 from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Consumer, Phase, Turn
@@ -895,10 +895,10 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
         assert (edited.body, edited.acks) == ('raise it', []), 'it waits again for every party'
         [(_, change)] = in_order(s, CommentEdited)
         assert (change.old, change.new) == ('aise it', 'raise it')
-        found = news(s, cursor, campaign_id=campaign.id, party='orchestrator')
-    assert [(n.comment.id, n.comment.body) for n in found.items if isinstance(n, CommentNews)] == [
-        (reply.id, 'raise it')
-    ], 'the orchestrator that read the old text gets the new one as news'
+        found, _ = news_after(s, cursor, campaign_id=campaign.id, party='orchestrator')
+    assert [(n.comment.id, n.comment.body) for n in found if isinstance(n, CommentNews)] == [(reply.id, 'raise it')], (
+        'the orchestrator that read the old text gets the new one as news'
+    )
 
 
 TIMEOUT_FORM: JsonValue = {

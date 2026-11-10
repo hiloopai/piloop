@@ -198,6 +198,21 @@ def test_every_client_connection_has_the_same_pragmas_and_optimizes_on_close(db:
     assert traced[:2] == ['PRAGMA busy_timeout=0', sql.OPTIMIZE]
 
 
+def test_a_close_s_optimize_changes_no_schema_under_the_connections_that_write(db: Database, tmp_path: Path) -> None:
+    """Its ANALYZE writes rows to ``sqlite_stat1``, which ``migrate`` created: the table that it would create otherwise
+    changes the schema under a connection that writes at that moment, whose insert into ``comments`` then fails with
+    ``no such table: comments``."""
+    with db.session() as s:
+        version = s.connection().exec_driver_sql('PRAGMA schema_version').scalar_one()
+        s.connection().exec_driver_sql(
+            "SELECT c.id FROM comments c JOIN comments_fts f ON f.rowid = c.id WHERE comments_fts MATCH 'x'"
+        ).all()
+    db.close()  # its PRAGMA optimize
+    con = sqlite3.connect(tmp_path / 'piloop.db')
+    assert con.execute('PRAGMA schema_version').fetchone()[0] == version
+    con.close()
+
+
 @pytest.mark.skipif(
     sys.platform != 'linux', reason='piloop reads the lock holder from /proc/locks, which only Linux has'
 )

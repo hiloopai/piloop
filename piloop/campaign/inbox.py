@@ -15,9 +15,9 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from sqlalchemy import ColumnElement, ScalarSelect, case, exists, literal, select
+from sqlalchemy import ColumnElement, ScalarSelect, Select, case, exists, literal, select
 from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy.orm import Mapped, Session, aliased
+from sqlalchemy.orm import Mapped, Session, aliased, selectinload
 
 from piloop.actor import Actor, System, by_a_person, party_of
 from piloop.api.views import (
@@ -27,7 +27,6 @@ from piloop.api.views import (
     CommentNews,
     CommentView,
     Linked,
-    News,
     NewsItem,
     Relation,
     ScoreNews,
@@ -87,17 +86,9 @@ def items(
     come too. None of a retired campaign comes. ``campaign_id`` and ``kinds`` filter the items. An item whose target has
     no campaign (``campaign_of``) appears only when ``campaign_id`` is None. Items of one priority come oldest first.
     """
-    owner = campaign_of(Comment.target_kind, Comment.target_id)
-    query = (
-        select(Comment, Campaign)
-        .outerjoin(Campaign, Campaign.id == owner)
-        .where(Comment.priority.is_not(None), Campaign.id.is_(None) | NOT_RETIRED)
-        .order_by(Comment.priority, Comment.id)
-    )
+    query = _items(campaign_id)
     if not acked:
         query = query.where(~exists().where(Ack.comment_id == Comment.id, Ack.party == seen_by))
-    if campaign_id is not None:
-        query = query.where(owner == campaign_id)
     if kinds:
         query = query.where(Comment.kind.in_(kinds))
     found: list[tuple[Comment, Campaign | None]] = [(c, p) for c, p in s.execute(query)]
@@ -105,6 +96,18 @@ def items(
         return found
     settled = answers(s, [c for c, _ in found])
     return [(c, p) for c, p in found if c.id not in settled]
+
+
+def _items(campaign_id: CampaignId | None) -> Select[Comment, Campaign]:
+    """Every inbox item, for every party, with its campaign, most urgent first: ``items`` before acks and answers."""
+    owner = campaign_of(Comment.target_kind, Comment.target_id)
+    query = (
+        select(Comment, Campaign)
+        .outerjoin(Campaign, Campaign.id == owner)
+        .where(Comment.priority.is_not(None), Campaign.id.is_(None) | NOT_RETIRED)
+        .order_by(Comment.priority, Comment.id)
+    )
+    return query if campaign_id is None else query.where(owner == campaign_id)
 
 
 def waiting_for(
@@ -148,59 +151,107 @@ WAKES: Final = tuple(Topic(m) for m in (Commented, CommentEdited, CampaignStatus
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 
 
-def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party: str, upto: int | None = None) -> News:
-    """Return the events after event#``after`` that the orchestrator must look at, and the next cursor.
+@dataclass(frozen=True)
+class Line:
+    """A line of a ``Change``, as every party sees it, with what decides whom it is news to (``news_to``)."""
 
-    The news reports:
+    event: int
+    """The newest event of the change that names it."""
+    campaign_id: CampaignId | None
+    item: NewsItem
+    author: str | None = None
+    """The party that it is no news to: of its author, the item's or the event's."""
+    seen_by: frozenset[str] = frozenset()
+    """The parties (``seer``) that acknowledged it."""
 
-    - new or edited unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own
-      decisions are for the human.
-    - campaigns that the daemon stopped.
-    - the daemon's scores of candidates (``CandidateScored``).
+    def news_to(self, party: str, campaign_id: CampaignId | None) -> bool:
+        """Whether it is news to ``party`` in campaign ``campaign_id``, None for every campaign."""
+        return campaign_id in (None, self.campaign_id) and party != self.author and seer(party) not in self.seen_by
 
-    It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.
-    ``campaign_id`` filters all of them. The returned cursor passes every event that it read, so no event is missed.
-    The escalations that still wait for ``party`` come with it, but end no wait: an orchestrator that
-    moved past one sees it again on each wait.
+
+@dataclass(frozen=True)
+class Change:
+    """What one page of the ``WAKES`` events after event#``after`` says to every party (``changes``).
+
+    It is one read, which each reader filters to its party and campaign (``news``): the news long-polls of one wake
+    share it (``piloop.db.feed.Shared``).
     """
-    cursor, found, more, waiting = after, list[NewsItem](), True, []
-    while more and not found:
-        page = db_feed.after(s, cursor, WAKES, limit=settings.daemon.inbox_page)
-        cursor, more = page.next, page.more
-        events = s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id)).all()
-        # Read after the page: each statement sees the latest commit, so an item read before it could miss a comment
-        # whose event the page then passes. Read after, it has every comment of the page.
-        waiting = waiting_for(s, party, campaign_id=campaign_id)
-        found = _news(s, events, waiting, campaign_id, party)
-    shown = {item.comment.id for item in found if isinstance(item, CommentNews)}
-    escalations = [comment_view(c) for c, _ in waiting if c.kind == ESCALATION and c.id not in shown]
-    return News(next=cursor, items=found, escalations=escalations)
+
+    after: int
+    next: int
+    more: bool
+    lines: tuple[Line, ...]
+    """The inbox items that its events name, most urgent first, then the stops and scores, oldest first."""
+
+    def news(self, cursor: int, *, party: str, campaign_id: CampaignId | None) -> list[NewsItem]:
+        """Its lines after event#``cursor`` (at least ``after``) that are news to ``party`` in ``campaign_id``."""
+        return [line.item for line in self.lines if line.event > cursor and line.news_to(party, campaign_id)]
 
 
-def _news(
-    s: Session,
-    events: Sequence[Event],
-    waiting: Sequence[tuple[Comment, Campaign | None]],
-    campaign_id: CampaignId | None,
-    party: str,
-) -> list[NewsItem]:
-    fresh = {e.target_id for e in events if isinstance(e.payload, (Commented, CommentEdited))}
-    found: list[NewsItem] = [
-        CommentNews(comment=comment_view(c), campaign_name=campaign.name if campaign else None)
-        for c, campaign in waiting
-        if c.id in fresh
+def changes(s: Session, after: int) -> Change:
+    """Read the page of the ``WAKES`` events after event#``after`` (``piloop.db.feed``), and what they say to anyone.
+
+    That is:
+
+    - the new or edited inbox items that no answer settled (``answers``). Who acknowledged each, and who wrote it,
+      decide whom it waits for (``waiting_for``).
+    - campaigns that the daemon stopped.
+    - the daemon's scores of candidates (``CandidateScored``), news to every party but the scorer's.
+    """
+    page = db_feed.after(s, after, WAKES, limit=settings.daemon.inbox_page)
+    events = s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id)).all()
+    named = {e.target_id: e.id for e in events if isinstance(e.payload, (Commented, CommentEdited))}
+    # Read after the page: each statement sees the latest commit, so an item read before it could miss a comment
+    # whose event the page then passes. Read after, it has every comment of the page.
+    query = _items(None).where(Comment.id.in_(named)).options(selectinload(Comment.acks))
+    found: list[tuple[Comment, Campaign | None]] = [(c, p) for c, p in s.execute(query)]
+    settled = answers(s, [c for c, _ in found])
+    lines = [
+        Line(
+            event=named[c.id],
+            campaign_id=None if campaign is None else campaign.id,
+            item=CommentNews(comment=comment_view(c), campaign_name=None if campaign is None else campaign.name),
+            author=party_of(c.author),
+            seen_by=frozenset(a.party for a in c.acks),
+        )
+        for c, campaign in found
+        if c.id not in settled
     ]
     for e in events:
         match e.payload:
-            case CampaignStatusChanged(new=CampaignStatus.STOPPED, stopped_reason=why):
-                campaign = s.get(Campaign, e.target_id)
-                if campaign is not None and campaign_id in (None, campaign.id):
-                    found.append(StoppedNews(campaign_name=campaign.name, reason=why))
-            case CandidateScored(told=told) if party_of(e.actor) != party:
-                candidate = s.get(Candidate, e.target_id)
-                if candidate is not None and campaign_id in (None, candidate.campaign_id):
-                    found.append(ScoreNews(candidate=candidate.id, told=told))
-    return found
+            case CampaignStatusChanged(new=CampaignStatus.STOPPED, stopped_reason=why) if (
+                campaign := s.get(Campaign, e.target_id)
+            ) is not None:
+                lines.append(Line(e.id, campaign.id, StoppedNews(campaign_name=campaign.name, reason=why)))
+            case CandidateScored(told=told) if (candidate := s.get(Candidate, e.target_id)) is not None:
+                item = ScoreNews(candidate=candidate.id, told=told)
+                lines.append(Line(e.id, candidate.campaign_id, item, author=party_of(e.actor)))
+    return Change(after=after, next=page.next, more=page.more, lines=tuple(lines))
+
+
+def news_after(s: Session, after: int, *, campaign_id: CampaignId | None, party: str) -> tuple[list[NewsItem], int]:
+    """The news to ``party`` in ``campaign_id`` (None: every campaign) after event#``after``, and the next cursor.
+
+    It reads the pages of ``changes`` one at a time until a page gives a line. The orchestrator's own decisions are for
+    the human. The cursor passes every event that it read, so no event is missed.
+    """
+    cursor, found, more = after, list[NewsItem](), True
+    while more and not found:
+        change = changes(s, cursor)
+        found, cursor, more = change.news(cursor, party=party, campaign_id=campaign_id), change.next, change.more
+    return found, cursor
+
+
+def escalations(
+    s: Session, party: str, *, campaign_id: CampaignId | None, shown: Sequence[NewsItem]
+) -> list[CommentView]:
+    """The escalations that still wait for ``party`` (``waiting_for``) and that ``shown`` does not show.
+
+    They end no wait: an orchestrator that moved past one sees it again with each news.
+    """
+    ids = {item.comment.id for item in shown if isinstance(item, CommentNews)}
+    waiting = waiting_for(s, party, campaign_id=campaign_id, kinds=(ESCALATION,))
+    return [comment_view(c) for c, _ in waiting if c.id not in ids]
 
 
 def ack(s: Session, ids: Sequence[CommentId], actor: Actor) -> list[AckResult]:

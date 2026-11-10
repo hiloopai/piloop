@@ -347,7 +347,8 @@ class HotPaths:
                     notes=history.campaign_notes(s, p, PACK.campaign_findings),
                 )
             ),
-            'inbox.news': lambda: inbox.news(s, 0, party=System.ORCHESTRATOR.party),
+            'inbox.changes': lambda: inbox.changes(s, 0),
+            'inbox.escalations': lambda: inbox.escalations(s, System.ORCHESTRATOR.party, campaign_id=None, shown=()),
         }
 
     def __exit__(self, *_: object) -> None:

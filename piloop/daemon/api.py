@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Generator, Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path as FilePath
 from typing import Annotated, assert_never
@@ -68,6 +68,7 @@ from piloop.api.views import (
     CampaignOverview,
     CampaignSynced,
     Comments,
+    CommentView,
     DaemonState,
     Delivered,
     Delivery,
@@ -78,6 +79,7 @@ from piloop.api.views import (
     LiveKeys,
     Messaged,
     News,
+    NewsItem,
     Overview,
     Pending,
     ProblemDetail,
@@ -154,6 +156,11 @@ class Handlers:
     cfg: Settings
     daemon: DaemonState
     cas: Cas
+    news: db_feed.Shared[inbox_module.Change] = field(init=False)
+    """The reads of the news long-polls, which they share."""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'news', db_feed.Shared(self.db))  # frozen: once, here
 
 
 def handlers(request: Request) -> Handlers:
@@ -373,13 +380,23 @@ async def news(request: Request, api: Api, me: Acting, query: Annotated[NewsQuer
     """What needs the orchestrator after a cursor, but what the caller itself wrote. With wait, a long-poll."""
     deadline = time.monotonic() + query.wait
     campaign = await run_in_threadpool(_narrowed, api.db, query)
+
+    async def read(after: int) -> inbox_module.Change:
+        return await run_in_threadpool(_changes, api.db, after)
+
     with api.db.watching(inbox_module.WAKES) as watch:
-        found = await run_in_threadpool(_news, api.db, campaign, me, query.after)
-        while not found.items and (left := deadline - time.monotonic()) > 0:
-            if not await changed(request, watch, left):
+        # Every news long-poll waits for the same events, so one wakes all of them: they share each read after a wake
+        # (``Handlers.news``), and each keeps what is news to its caller. The first read is its own, so it sees
+        # whatever came before the call.
+        found, cursor = await run_in_threadpool(_news_after, api.db, campaign, me, query.after)
+        more = False
+        while not found:
+            if not more and ((left := deadline - time.monotonic()) <= 0 or not await changed(request, watch, left)):
                 break
-            found = await run_in_threadpool(_news, api.db, campaign, me, found.next)
-    return found
+            change = await api.news.read(cursor, watch, read)
+            found, cursor, more = change.news(cursor, party=me.party, campaign_id=campaign), change.next, change.more
+    escalations = await run_in_threadpool(_escalations, api.db, campaign, me, found)
+    return News(next=cursor, items=found, escalations=escalations)
 
 
 @router.get('/inbox/{comment}', operation_id='thread')
@@ -850,9 +867,20 @@ def _narrowed(db: Database, query: Located) -> CampaignId | None:
         return narrowed_in(s, query)
 
 
-def _news(db: Database, campaign: CampaignId | None, me: Actor, after: int | None) -> News:
+def _news_after(db: Database, campaign: CampaignId | None, me: Actor, after: int | None) -> tuple[list[NewsItem], int]:
     with db.session() as s:
-        return inbox_module.news(s, db_feed.newest(s) if after is None else after, campaign_id=campaign, party=me.party)
+        cursor = db_feed.newest(s) if after is None else after
+        return inbox_module.news_after(s, cursor, campaign_id=campaign, party=me.party)
+
+
+def _changes(db: Database, after: int) -> inbox_module.Change:
+    with db.session() as s:
+        return inbox_module.changes(s, after)
+
+
+def _escalations(db: Database, campaign: CampaignId | None, me: Actor, shown: Sequence[NewsItem]) -> list[CommentView]:
+    with db.session() as s:
+        return inbox_module.escalations(s, me.party, campaign_id=campaign, shown=shown)
 
 
 def _events(db: Database, query: EventsQuery, campaign: CampaignId | None, after: int) -> Batch:
