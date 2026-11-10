@@ -645,6 +645,9 @@ class Leases:
     ) -> tuple[list[Grant], int]:
         """Record a worker that starts, and return its live leases and its cursor: what a restarted worker finds again.
 
+        Each lease that it returns is renewed: the worker counts its silence from its start (``Worker.start``), and
+        stops the jobs that it recovers ``Timing.self_stop`` after it, so a lease must not expire before.
+
         A new worker's cursor is the newest event, and so is one that is past it (a database restored from a backup):
         its leases are the truth then.
 
@@ -665,6 +668,9 @@ class Leases:
             rows = s.scalars(
                 select(Lease).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES)).order_by(Lease.id)
             ).all()
+            now = utcnow()
+            for lease in rows:  # the worker counts its silence from its start: none may expire before it stops them
+                self._renew(lease, now)
             held, cursor = [Grant.of(s, r) for r in rows], row.cursor
             s.commit()
         return held, cursor
@@ -717,7 +723,8 @@ class Leases:
         worker with its runner. Core submits a job only when it has a slot, in its owner's order, so the order of the
         leases is that order. ``host`` is the
         worker's sample now, which the gates read (``capacity.admits``). An acquire sent again with its request id gets
-        the lease that it took, so a lost answer leaves no lease to expire.
+        the lease that it took, so a lost answer leaves no lease to expire. A live one is renewed when due, as a heartbeat
+        renews it: the worker starts its job now, and a lease that came back as it was could expire under that job.
 
         Each worker acquires on every turn, and most acquires take nothing. With a slack (``Timing.slack``), the answer
         is read first: one that grants nothing new, stores the reason that the row has already and changes nothing on
@@ -733,7 +740,8 @@ class Leases:
                     if self._unheard(row, host, now):
                         if isinstance(found, NoLease) and found == row.no_lease:
                             return found
-                        if isinstance(found, Lease) and found.acquire_request == request_id:
+                        resent = isinstance(found, Lease) and found.acquire_request == request_id
+                        if resent and not self._due(found, now):
                             return Grant.of(s, found)  # the lease of this request id, sent again
             write_transaction(s)
             row = _registered(s, worker)
@@ -741,7 +749,10 @@ class Leases:
             found = self._choice(s, row, request_id, host)
             if isinstance(found, NoLease):
                 row.no_lease = found
-            elif found.acquire_request != request_id:  # a queued lease: the lease of the request id is its as it is
+            elif found.acquire_request == request_id:  # sent again: its lease, renewed when due as by a heartbeat
+                if self._due(found, now):
+                    self._renew(found, now)
+            else:  # a queued lease
                 acquired = LeaseAcquired(lease=found.id, worker=worker)
                 transition(
                     s,
@@ -755,11 +766,21 @@ class Leases:
                     acquired_at=now,
                     acquire_request=request_id,
                     renewed_at=now,
-                    expires_at=now + timedelta(seconds=self.timing.toleration),
+                    expires_at=now + timedelta(seconds=self.timing.toleration + self.timing.slack),  # as `_renew`
                 )
                 row.no_lease = None
             s.commit()
             return found if isinstance(found, NoLease) else Grant.of(s, found)
+
+    def _due(self, lease: Lease, now: datetime) -> bool:
+        """Whether ``lease`` is live and expires within ``toleration`` of ``now``: its renewal must be written."""
+        due = lease.expires_at is None or lease.expires_at < now + timedelta(seconds=self.timing.toleration)
+        return lease.state in LIVE_LEASES and due
+
+    def _renew(self, lease: Lease, now: datetime) -> None:
+        """Renew ``lease`` from ``now``: it expires ``toleration + slack`` ahead (``Timing.slack``)."""
+        lease.renewed_at = now
+        lease.expires_at = now + timedelta(seconds=self.timing.toleration + self.timing.slack)
 
     def _choice(self, s: Session, row: LeaseWorker, request_id: str, host: HostSample) -> Lease | NoLease:
         """What an acquire of ``row``'s worker gets: the lease of ``request_id``, the queued lease to take, or why none.
@@ -903,14 +924,13 @@ class Leases:
         answers: dict[int, Answer] = {}
         reported: list[tuple[int, AgentSessionId, HarnessSession]] = []
         now = utcnow()
-        renewed = now + timedelta(seconds=self.timing.toleration)
         with self._db.session() as s:
             due = True  # without a slack, every heartbeat writes
             if self.timing.slack:
                 with read_transaction(s):  # most heartbeats change nothing: those take no write lock
                     live = self._held(s, worker, sessions, answers, reported)
                     due = not self._unheard(_registered(s, worker), host, now) or any(
-                        lease.expires_at is None or lease.expires_at < renewed for lease in live
+                        self._due(lease, now) for lease in live
                     )
             if due:
                 answers.clear()
@@ -918,8 +938,7 @@ class Leases:
                 write_transaction(s)
                 self._heard(s, _registered(s, worker), host)
                 for lease in self._held(s, worker, sessions, answers, reported):
-                    lease.renewed_at = now
-                    lease.expires_at = renewed + timedelta(seconds=self.timing.slack)
+                    self._renew(lease, now)
                 s.commit()
         for lease_id, agent_session, session in reported:
             # a row that closed, or a lease that went, meanwhile: the next heartbeat's answer says so

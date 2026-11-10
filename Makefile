@@ -1,7 +1,6 @@
 .DEFAULT_GOAL := all
 PYTEST_WORKERS ?= 8
 SUITE_MEMORY ?= 24G
-QUINT ?= npx --yes @informalsystems/quint@0.25.1
 
 .PHONY: install
 install:  ## Install deps and pre-commit hooks
@@ -38,12 +37,6 @@ quarantine:  ## Run only the quarantined flaky tests (tests/quarantine.toml); no
 .PHONY: e2e
 e2e:  ## Run the end-to-end scenarios with real agents (about 15 minutes and 1 USD)
 	COLUMNS=150 uv run pytest -m e2e tests/e2e -rA
-
-.PHONY: models
-models:  ## Check the Quint models in tests/models: each bug's pinned trace, then the design against its invariants
-	cd tests/models && $(QUINT) typecheck lease.qnt
-	cd tests/models && $(QUINT) test lease.qnt --main=scenarios && $(QUINT) test lease.qnt --main=giveup_scenario
-	cd tests/models && $(QUINT) run lease.qnt --main=fixed --invariant=inv --max-samples=20000 --max-steps=40
 
 .PHONY: docs
 docs:  ## Regenerate the generated docs and the trigger SQL from code

@@ -11,7 +11,7 @@ import sys
 import threading
 from typing import NoReturn
 
-from piloop.plugins.executor.kit.forks import REQUEST_BYTES, THREADED, Request
+from piloop.plugins.executor.kit.forks import GO, REQUEST_BYTES, THREADED, Request
 
 
 def serve(fd: int) -> None:
@@ -58,7 +58,11 @@ def _preload() -> None:
 
 
 def _child(request: Request, stdin: int, stdout: int, stderr: int, reply: int) -> int:
-    """Run the call as a ``piloop`` process runs it, and return its exit code, which ``reply`` gets too."""
+    """Run the call as a ``piloop`` process runs it, and return its exit code, which ``reply`` gets too.
+
+    It sends its pid, and runs only once the server, which read it, answers ``GO``: a call that the server stopped
+    first, at its deadline, never runs.
+    """
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)  # a command waits for its own children
     os.setsid()
     # No process that the command starts may hold these: the server waits for ``reply`` to close. The copies that
@@ -69,6 +73,12 @@ def _child(request: Request, stdin: int, stdout: int, stderr: int, reply: int) -
         os.dup2(fd, to)
         os.close(fd)
     os.write(reply, str(os.getpid()).encode())
+    try:
+        go = os.read(reply, len(GO))
+    except ConnectionResetError:  # the server stopped the call and closed its end with the pid unread
+        go = b''
+    if go != GO:  # the call never runs: the server answered it already
+        return 1
     os.chdir(request.cwd)
     os.environ.clear()
     os.environ.update(request.env)

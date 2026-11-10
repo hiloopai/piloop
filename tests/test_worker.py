@@ -590,7 +590,8 @@ def test_an_evaluation_whose_lease_expired_before_its_evaluator_started_kills_it
     measuring = threading.Thread(target=ex.remeasure, args=(baseline(db, campaign.id).id,))
     measuring.start()
     assert gate.entered.wait(10)
-    workers_of(ex).leases.expire(utcnow() + timedelta(seconds=workers_of(ex).leases.timing.toleration + 1))
+    timing = workers_of(ex).leases.timing
+    workers_of(ex).leases.expire(utcnow() + timedelta(seconds=timing.toleration + timing.slack + 1))
     gate.release.set()
     measuring.join(30)
     assert not measuring.is_alive(), 'measured on its new lease'
@@ -624,7 +625,8 @@ def test_a_stale_evaluation_never_touches_the_files_of_the_lease_that_replaced_i
     measuring = threading.Thread(target=ex.remeasure, args=(candidate,))
     measuring.start()
     assert entered.wait(10)
-    workers_of(ex).leases.expire(utcnow() + timedelta(seconds=workers_of(ex).leases.timing.toleration + 1))
+    timing = workers_of(ex).leases.timing
+    workers_of(ex).leases.expire(utcnow() + timedelta(seconds=timing.toleration + timing.slack + 1))
     wait_until(lambda: lease_states(db) == [LeaseState.EXPIRED, LeaseState.RUNNING])
     with db.session() as s:
         pgid = s.get_one(Lease, 2).handle['pgid']

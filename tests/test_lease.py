@@ -1004,7 +1004,7 @@ def test_a_heartbeat_that_changes_nothing_writes_nothing_and_the_lease_still_exp
     finally:
         event.remove(db.engine, 'before_cursor_execute', counted)
     writes = sum(s.startswith('BEGIN IMMEDIATE') for s in statements)
-    assert writes == 7, f'one write per slack of 60 s, not one per heartbeat: {writes} in 40'
+    assert writes == 6, f'one write per slack of 60 s, not one per heartbeat: {writes} in 40'
     assert events(db, LeaseUnreachable) == [], 'never silent'
     last = clock.now
     expiry = lease_row(db, lease_id).expires_at

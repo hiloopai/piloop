@@ -121,7 +121,7 @@ Each week, the `Test health` workflow reads main's test times and opens a pull r
 reviewed, that deletes the slowest tests that cover no line that another test does not.
 
 Other targets: `make format`, `make lint`, `make typecheck`, `make test` (no coverage), `make testcov`, `make docs`,
-`make docs-check`, `make e2e` (see below) and `make models`, which checks the Quint models of `tests/models` (it needs Node.js, and CI does not run it). CI runs the pre-commit hooks, the tests with coverage on Linux, split over
+`make docs-check` and `make e2e` (see below). `tests/models` holds TLA+ models of the state machines, each with a `.cfg` per design; TLC checks them (Java 11 or later: `java -cp tla2tools.jar tlc2.TLC -config lease_fixed.cfg lease.tla`), and CI does not run it. The `test_*_model.py` tests replay their state graphs against the code. CI runs the pre-commit hooks, the tests with coverage on Linux, split over
 eight runners (`--shard I/N`), and `install.sh` with the enwik8 example. In `hiloopai/piloop`, not in a fork, CI also
 runs `make test` on macOS.
 

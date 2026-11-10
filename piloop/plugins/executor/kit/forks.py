@@ -45,6 +45,8 @@ THREADED = os.EX_SOFTWARE
 """The template's exit code when it runs more than one thread: it forks no call, and the server starts no other."""
 CLOSE_SECONDS = 5.0
 """How long ``Forks.close`` waits for the template to exit once it closed its end of the socket, before it kills it."""
+GO = b'go'
+"""What the server sends a call's child once it read the child's pid: only then does the child run the command."""
 
 
 class Runs(Protocol):
@@ -145,6 +147,9 @@ class Forks:
                 raise subprocess.TimeoutExpired([*PILOOP_ARGV, *argv], timeout) from None
             if started is None:
                 raise Unforked('the template closed the call before its child started it')
+            # the child runs only once it reads this. One that died meanwhile sends no code: its exit is 1, below
+            with contextlib.suppress(OSError):
+                mine.send(GO)
             try:
                 code = _received(mine, deadline)
                 if code is None:  # it ended with no code, as the interpreter ends on an error: 1
