@@ -108,6 +108,7 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'sqlite_sequence',
             'target_kinds',
             'techniques',
+            'terms',
             'tokens',
             'worker_instances',
         ], 'an external-content FTS5 index has no _content shadow: the text stays in the base table only'

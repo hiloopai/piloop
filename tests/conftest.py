@@ -3,6 +3,7 @@ import tests.isolation  # noqa: F401  # first: piloop reads its home from the en
 # isort: split
 import contextlib
 import json
+import os
 import re
 import shutil
 import stat
@@ -31,12 +32,14 @@ from sqlalchemy.orm import Session
 
 from piloop import settings as settings_module
 from piloop.actor import Agent, SignedAgent, System
+from piloop.api.views import DaemonState
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.stop import left
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
+from piloop.db import terms
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database, migrate
@@ -809,14 +812,26 @@ def role_of[R: RoleConfig](cfg: CampaignConfig, kind: type[R]) -> R:
     return found
 
 
+def answering(db: Database, listen: str | None = None) -> DaemonState:
+    """The daemon state of a new term of this process on ``db``, as the daemon begins it when it serves."""
+    with db.session() as s:
+        term = terms.begin(s, os.getpid(), listen)
+        s.commit()
+        return daemon_state(term)
+
+
 @contextmanager
 def serving_api(
-    cfg: Settings, listen: str | None = None, network_config: NetworkConfig | None = None, trust: float = 0
+    cfg: Settings,
+    listen: str | None = None,
+    network_config: NetworkConfig | None = None,
+    trust: float = 0,
 ) -> Generator[list[Server]]:
     """Serve the API of ``cfg``'s home, as the daemon does: on its socket, and on the network's ``listen``.
 
     The network is ``https`` on ``listen``, unless ``network_config`` is another. A verified token is trusted for
     ``trust`` seconds (``Tokens``): 0, unlike the daemon, so that a test's revoke on the database stops it at once.
+    This process answers as the daemon, in no term: the database may not be migrated yet.
     """
     db = Database(cfg.database_url, actor=ACTOR)
     tokens = Tokens(db, trust)
@@ -824,7 +839,9 @@ def serving_api(
     network = config.open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
     listener = network.listener()
     listeners = [local_listener(cfg.socket_file), *([] if listener is None else [listener])]
-    api = Handlers(db, cfg, daemon_state(iso(utcnow()), None if listener is None else url(listener)), disk(cfg.home))
+    listening = None if listener is None else url(listener)
+    answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=listening)
+    api = Handlers(db, cfg, answers, disk(cfg.home))
     routers = collect(contributions_of(installed()), ()).routers
     servers = [Server(with_api(app(tokens, network, routers), api), each) for each in listeners]
     for server in servers:

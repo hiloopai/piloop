@@ -5,7 +5,6 @@ lookups as dependencies (``Selected``, ``Narrowed``) over one session per reques
 (``openapi``) is ``docs/reference/openapi.json``.
 """
 
-import os
 import time
 from collections.abc import Generator, Sequence
 from contextlib import closing
@@ -118,7 +117,7 @@ from piloop.campaign.stop import CANCELLABLE, request_cancel
 from piloop.config import ConfigError
 from piloop.db import feed as db_feed
 from piloop.db.events import Topic, has, latest
-from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, utcnow
+from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, Term, utcnow
 from piloop.db.session import Database
 from piloop.ids import (
     AgentSessionId,
@@ -146,6 +145,7 @@ from piloop.plugins.section.contract import Rendering, rendered
 from piloop.plugins.vcs.contract import VCS, VcsError
 from piloop.reports import feed, overview as reports_overview
 from piloop.settings import Settings
+from piloop.text import iso
 
 
 @dataclass(frozen=True)
@@ -929,9 +929,9 @@ def _still_stopping(_request: Request, e: Exception) -> Response:
     return JSONResponse({'error': Problem.STILL_STOPPING, 'detail': str(e)}, status_code=HTTPStatus.CONFLICT)
 
 
-def daemon_state(started: str, listen: str | None) -> DaemonState:
-    """This process, as the daemon that answers."""
-    return DaemonState(pid=os.getpid(), started=started, listen=listen)
+def daemon_state(term: Term) -> DaemonState:
+    """The daemon of ``term``, as the one that answers: whichever process serves the request."""
+    return DaemonState(pid=term.pid, started=iso(term.started_at), listen=term.listen)
 
 
 def openapi() -> dict[str, object]:

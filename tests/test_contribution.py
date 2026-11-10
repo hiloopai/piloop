@@ -20,7 +20,7 @@ from piloop.actor import System
 from piloop.api.client import Client, Refused
 from piloop.api.contract import Access, Problem
 from piloop.cli.main import COMMANDS, add_commands
-from piloop.daemon.api import Handlers, daemon_state, openapi, with_api
+from piloop.daemon.api import Handlers, openapi, with_api
 from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.daemon.main import DECLARED
 from piloop.daemon.scheduler import Scheduler
@@ -53,7 +53,7 @@ from piloop.plugins.runtime.contract import make_runtime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import AgentSettings, DaemonSettings, Settings
-from tests.conftest import bare_config, disk, forget_loaded, install_plugins, serving_api
+from tests.conftest import answering, bare_config, disk, forget_loaded, install_plugins, serving_api
 from tests.fixtures.route_plugin import Greeting
 from tests.net.test_api import token
 
@@ -151,7 +151,7 @@ def test_a_route_that_another_router_or_the_api_has_is_refused(db: Database, tmp
         app(tokens, network, [echo, executor_router([Route('echo', Ask, nothing)])])
     shadow = APIRouter(prefix='/v1')
     shadow.add_api_route('/status', status, methods=['GET'], name='shadow')
-    api = Handlers(db, Settings(home=tmp_path), daemon_state('now', None), disk(tmp_path))
+    api = Handlers(db, Settings(home=tmp_path), answering(db), disk(tmp_path))
     with pytest.raises(PluginError, match='GET /v1/status is both shadow and status'):
         with_api(app(tokens, network, [shadow]), api)
 

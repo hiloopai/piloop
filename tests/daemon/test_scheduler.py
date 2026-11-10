@@ -2029,9 +2029,7 @@ class Prompted:
 def prompted(db: Database, scheduler: Scheduler, mocker: MockerFixture, *, answers: bool = True) -> Prompted:
     """Replace the executor's ``prompt`` of ``scheduler`` with a ``Prompted``."""
     fake = Prompted(
-        CampaignResults(
-            db, Tracer(None), campaigns_of(scheduler)._home, disk(campaigns_of(scheduler)._home), lambda: False
-        ),
+        CampaignResults(db, Tracer(None), campaigns_of(scheduler)._home, disk(campaigns_of(scheduler)._home)),
         answers,
     )
     mocker.patch.object(scheduler._controller.executor, 'prompt', side_effect=fake)

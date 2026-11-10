@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor, Agent, SignedAgent, System
 from piloop.agents.roles import harness_of
 from piloop.config import TRANSCRIPT
+from piloop.db import terms
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.machine import Machine, Refused, transition
 from piloop.db.models import (
@@ -484,7 +485,6 @@ class CampaignResults:
         tracer: Tracer,
         home: Path,
         cas: Cas,
-        stopping: Callable[[], bool],
         *,
         secrets: SecretsProvider | None = None,
         exit_output_chars: int = AgentSettings().exit_output_chars,
@@ -495,9 +495,6 @@ class CampaignResults:
         self._tracer = tracer
         self._home = home
         self._cas = cas
-        self._stopping = stopping
-        """Whether the daemon stops, which a job kind's ``apply`` reads (an evaluation records nothing then). An agent's
-        stop is on its row instead (``stopped_by_daemon``), for the daemon that reads its report after a restart."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
@@ -575,7 +572,7 @@ class CampaignResults:
                     if conflict is not None:
                         emit(s, conflict, TargetRef(TargetKind.AGENT_SESSION, job.agent_session), System.DAEMON)
                 else:
-                    kind_of(job).apply(s, job, report, Applying(self._home, self._stopping()))
+                    kind_of(job).apply(s, job, report, Applying(self._home, terms.stopping(s)))
                 write_files(self._cas, report.files, self._home / job.place)
 
             self._apply(guard, change)

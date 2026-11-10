@@ -32,6 +32,7 @@ from piloop.agents.results import (
     learn,
 )
 from piloop.config import BRIEF_FILE, CampaignConfig
+from piloop.db import terms
 from piloop.db.events import Topic, emit, latest
 from piloop.db.machine import Refused
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
@@ -69,20 +70,25 @@ class Launcher:
         next daemon process waits for them again (``reattach``)."""
 
     def cancel(self) -> None:
-        """Submit no more jobs, and wake the waits that give up on it."""
+        """Submit no more jobs, say on the current term that the daemon stops, and wake the waits that give up on it."""
         with self.lock:
+            with self.db.session() as s:
+                write_transaction(s)
+                terms.stop(s)
+                s.commit()
             self.cancelled.set()
         self.db.notify()
 
     def stop(self) -> None:
         """``cancel``, and end every live agent as stopped by the daemon (``end_agent``), before the executor kills it.
 
-        The stop is on each agent's row, in the commit before its kill: whichever daemon process reads the agent's
-        report, also one after a restart, closes it as stopped (``stopped_by_daemon``).
+        The stop is on the current term and on each agent's row, in the commit before its kill: whichever daemon process
+        reads the agent's report, also one after a restart, closes it as stopped (``stopped_by_daemon``).
         """
         with self.lock:
             with self.db.session() as s:
                 write_transaction(s)
+                terms.stop(s)
                 for w in s.scalars(select(AgentSession).where(AgentSession.state.in_(LIVE))).all():
                     end_agent(s, w, RunEnd.DAEMON_STOPPED, RunEnd.DAEMON_STOPPED, self.tracer)
                 s.commit()

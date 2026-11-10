@@ -18,9 +18,18 @@ from piloop.daemon.serve import (
     running_pid,
     serve_argv,
 )
-from piloop.db.models import TARGET_KINDS, utcnow
+from piloop.db import terms
+from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import schemas
-from piloop.db.session import BackupFailed, Database, OlderDaemon, SchemaMismatch, WriteSpans, migrate
+from piloop.db.session import (
+    BackupFailed,
+    Database,
+    OlderDaemon,
+    SchemaMismatch,
+    WriteSpans,
+    migrate,
+    write_transaction,
+)
 from piloop.db.triggers.changelog import COMMENT_KINDS
 from piloop.net.server import GRACE_SECONDS, Server, app, local_listener, url
 from piloop.net.tokens import Tokens
@@ -36,7 +45,6 @@ from piloop.plugins.runtime.contract import make_runtime, runtimes
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
 from piloop.proc import Inherited
 from piloop.settings import CONFIG_FILE, Settings, settings
-from piloop.text import iso
 from piloop.version import code_digest
 
 DECLARED = (JOB_KINDS, TARGET_KINDS, COMMENT_KINDS, CONTRIBUTORS)
@@ -143,6 +151,12 @@ class Daemon:
             except OlderDaemon, SchemaMismatch, BackupFailed:
                 self.db.close()
                 raise
+            with self.db.session() as s:
+                write_transaction(s)
+                epoch = terms.begin(s, os.getpid(), None).epoch
+                s.commit()
+            self._epoch = epoch
+            """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
             opened = partial(make_runtime, cfg=cfg)
             self.controller = RunController(
                 self.db,
@@ -233,7 +247,11 @@ class Daemon:
             raise SystemExit(f'the daemon does not listen: {e}') from e
         listeners = [local] if listener is None else [local, listener]
         listen = None if listener is None else url(listener)
-        api = Handlers(self.db, self._cfg, daemon_state(iso(utcnow()), listen), self.controller.cas)
+        with self.db.session() as s:
+            write_transaction(s)
+            term = terms.listening(s, self._epoch, listen)
+            s.commit()
+        api = Handlers(self.db, self._cfg, daemon_state(term), self.controller.cas)
         routers = self.scheduler.contributions.routers
         # one app for each server: a server's shutdown ends the long-polls of its own app
         self._servers = [Server(with_api(app(self._tokens, self.network, routers), api), each) for each in listeners]

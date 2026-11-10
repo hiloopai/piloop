@@ -37,7 +37,7 @@ def main() -> None:
     timing = Timing(renew, grace, toleration)
     db = Database(url, actor=System.DAEMON)
     cas = CAS.selected({}).open(home)
-    results = CampaignResults(db, Tracer(None), home, cas, lambda: False)
+    results = CampaignResults(db, Tracer(None), home, cas)
     site = local_site(home, cas, partial(checkout_of, db), partial(record_of, db), reserve=0)
     worker = Worker(
         Local(Leases(db, results, cas, timing), worker_id),

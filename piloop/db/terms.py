@@ -1,0 +1,42 @@
+"""The daemon's terms on its home (``Term``): the processes that serve its API read the current one from the database.
+
+A term begins when the daemon serves, and stops when the daemon begins to stop. The newest term is the current one.
+"""
+
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
+
+from piloop.db.models import Term, utcnow
+
+
+def begin(s: Session, pid: int, listen: str | None) -> Term:
+    """Add the next term, of the daemon ``pid``, which serves other machines on ``listen``. The caller commits."""
+    epoch = (s.scalar(select(func.max(Term.epoch))) or 0) + 1
+    term = Term(epoch=epoch, pid=pid, listen=listen, started_at=utcnow())
+    s.add(term)
+    s.flush()
+    return term
+
+
+def listening(s: Session, epoch: int, listen: str | None) -> Term:
+    """Term ``epoch``, which serves other machines on ``listen`` from now. The caller commits."""
+    term = s.get_one(Term, epoch)
+    term.listen = listen
+    return term
+
+
+def current(s: Session) -> Term | None:
+    """The newest term, or None before any daemon served this home."""
+    return s.scalars(select(Term).order_by(Term.epoch.desc()).limit(1)).first()
+
+
+def stop(s: Session) -> None:
+    """The current term stops from now, unless it stops already. The caller commits."""
+    newest = select(func.max(Term.epoch)).scalar_subquery()
+    s.execute(update(Term).where(Term.epoch == newest, Term.stopping_at.is_(None)).values(stopping_at=utcnow()))
+
+
+def stopping(s: Session) -> bool:
+    """Whether the daemon of the current term stops. False before any term."""
+    term = current(s)
+    return term is not None and term.stopping_at is not None

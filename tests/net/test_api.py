@@ -47,7 +47,7 @@ from piloop.api.views import CampaignState, Pending, Status, thread_lines
 from piloop.campaign import inbox, ops
 from piloop.campaign.stop import StopRequested
 from piloop.cli import common, main as cli
-from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
+from piloop.daemon.api import ROUTERS, Handlers, openapi, with_api
 from piloop.db import session, sql
 from piloop.db.events import emit, has
 from piloop.db.models import (
@@ -88,7 +88,7 @@ from piloop.plugins.network.https import TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import DaemonSettings, Settings
-from tests.conftest import EveryClient, disk, serving_api, wait_until
+from tests.conftest import EveryClient, answering, disk, serving_api, wait_until
 
 
 def token(db: Database, name: str, access: Access) -> str:
@@ -206,7 +206,7 @@ def test_a_route_that_crashes_is_an_answer_that_says_so(db: Database, cfg: Setti
     tokens_ = Tokens(db)
     server = app(tokens_, Https().open(NetworkHost(tokens_, HomeSecrets(db, LocalSecrets()))), ())
     server.add_api_route('/v1/status', crash)
-    api = with_api(server, Handlers(db, cfg, daemon_state('now', None), disk(cfg.home)))
+    api = with_api(server, Handlers(db, cfg, answering(db), disk(cfg.home)))
     with closing(Server(api, local_listener(cfg.socket_file))) as running:
         running.start()
         with (
@@ -351,7 +351,7 @@ def test_the_news_long_polls_that_one_comment_wakes_share_one_read_of_what_it_ch
     """Every news long-poll waits for the same events. The comment wakes all of them, and one read serves each."""
     tokens_ = Tokens(db)
     served = app(tokens_, Https().open(NetworkHost(tokens_, HomeSecrets(db, LocalSecrets()))), ())
-    api = with_api(served, Handlers(db, cfg, daemon_state('now', None), disk(cfg.home)))
+    api = with_api(served, Handlers(db, cfg, answering(db), disk(cfg.home)))
     pages: list[str] = []
 
     def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:

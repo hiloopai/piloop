@@ -10,7 +10,7 @@ import pytest
 from covalence import Cid
 from git import Repo
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.agents import results as results_module
@@ -28,6 +28,7 @@ from piloop.agents.results import (
     explained,
     learn,
 )
+from piloop.db import terms
 from piloop.db.events import in_order
 from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database
@@ -75,7 +76,7 @@ pytestmark = pytest.mark.usefixtures('auditor')
 def test_an_evaluation_that_left_the_queue_or_never_started_is_settled(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     base = baseline(db, campaign.id)
     with db.session() as s:
         evaluation = Evaluation(candidate_id=base.id, evaluator_id=s.get_one(Campaign, campaign.id).evaluator_id)
@@ -107,7 +108,7 @@ def test_a_start_report_moves_a_starting_agent_to_running_and_leaves_an_ending_o
 ) -> None:
     """A start that the executor reports after the daemon ended the agent does not undo the end: its finding stays
     refused. The report still updates the handle and the session id."""
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     with db.session() as s:
         rows = [
             AgentSession(
@@ -142,7 +143,7 @@ def test_the_finished_event_of_an_agent_says_the_state_of_its_closed_row(
     db: Database, campaign: Campaign, tmp_path: Path, state: AgentSessionState, closed: AgentSessionState
 ) -> None:
     """A cancelled agent's process exits once the daemon killed it: its row and its event both say killed."""
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     with db.session() as s:
         w = AgentSession(
             kind=AUDITOR,
@@ -215,7 +216,7 @@ def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_s
     ended: Ended,
 ) -> None:
     """The daemon that reads the report does not stop: only the stop that the earlier one recorded says it was cut."""
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     with db.session() as s:
         w = AgentSession(
             kind=AUDITOR,
@@ -253,7 +254,7 @@ def test_an_end_that_comes_after_the_agents_report_leaves_its_row_closed(
     The end must not set the closed row ``ending`` again: no report would ever come to close it, and it would count as
     live.
     """
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     with db.session() as s:
         w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
         s.add(w)
@@ -282,7 +283,7 @@ def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measur
 ) -> None:
     """A second result comes while the first is between its check and its commit, as two calls of an executor without
     a fence of its own make them: the second waits for the first's commit, then finds the row settled."""
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     base = baseline(db, campaign.id)
     with db.session() as s:
         w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
@@ -415,7 +416,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
     campaign: Campaign, db: Database, tmp_path: Path
 ) -> None:
     """Heartbeats and the final report repeat the id: only an id that is new to the row emits the event."""
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     research = request(db, campaign, AUDITOR, harness='script', state=AgentSessionState.STARTING)
     key = AgentKey(research)
     results.started(key, {}, None)
@@ -443,7 +444,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
 def test_an_id_that_only_the_final_report_carries_is_identified(
     campaign: Campaign, db: Database, tmp_path: Path
 ) -> None:
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     sweeper = request(db, campaign, harness='script', state=AgentSessionState.RUNNING)
     report = AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0), session_id='at-the-end')
     results.finished(agent_job(campaign, sweeper, tmp_path), report)
@@ -474,9 +475,7 @@ def test_the_proposer_is_an_agent_only(
     implementer, _, _ = implementer_of(
         db, campaign, created_by.format(research=research), harness='script', state=AgentSessionState.RUNNING
     )
-    CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False).session(
-        AgentKey(implementer), HarnessSession(id='x')
-    )
+    CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)).session(AgentKey(implementer), HarnessSession(id='x'))
     [event] = identified(db, implementer)
     expected = (
         None if proposed_by is None else {**proposed_by, 'actor': str(proposed_by['actor']).format(research=research)}
@@ -498,7 +497,7 @@ def test_a_report_naming_a_blob_the_cas_lacks_is_refused_until_it_is_there_then_
 ) -> None:
     """REAPI's completeness check: nothing applies while a named blob is missing, and the same report applies after."""
     cas = disk(tmp_path)
-    results = CampaignResults(db, Tracer(None), tmp_path, cas, lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
     base = baseline(db, campaign.id)
     with db.session() as s:
         evaluation = Evaluation(
@@ -552,7 +551,7 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
 ) -> None:
     """A compare-and-swap on the blob that each started from: only a path that both wrote conflicts."""
     cas = disk(tmp_path)
-    results = CampaignResults(db, Tracer(None), tmp_path, cas, lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
     live = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     live.mkdir(parents=True)
     (live / 'NOTES.md').write_text('notes\n')
@@ -599,7 +598,7 @@ def test_a_workspace_merge_holds_no_write_lock(
 ) -> None:
     """A merge of tens of thousands of files held the write lock past every other writer's busy timeout."""
     cas = disk(tmp_path)
-    results = CampaignResults(db, Tracer(None), tmp_path, cas, lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
     live = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     live.mkdir(parents=True)
     workspace = Workspace(
@@ -695,3 +694,50 @@ def test_an_implementer_that_took_more_than_startup_turns_worked_however_soon_it
         settings = AgentSettings()
         never = results_module._never_worked(s, w, report, settings.startup_seconds, settings.startup_turns)
     assert (never, settings.startup_turns) == (not worked, 3)
+
+
+def test_an_evaluation_that_ends_while_the_current_term_stops_records_nothing_whichever_process_applies_it(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """A stop on the term row is the one that counts: each process that serves the API reads it, not its memory."""
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
+    base = baseline(db, campaign.id)
+    with db.session() as s:
+        terms.begin(s, 1, None)
+        s.commit()
+
+    def running() -> int:
+        with db.session() as s:
+            evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+            evaluation = Evaluation(candidate_id=base.id, evaluator_id=evaluator, started_at=utcnow())
+            s.add(evaluation)
+            s.commit()
+            return evaluation.id
+
+    def job(evaluation: int) -> EvaluationJob:
+        return EvaluationJob(
+            evaluation=evaluation,
+            candidate=base.id,
+            runner='process',
+            artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=base.revision),
+            place=f'eval-{evaluation}',
+            command=['true'],
+            timeout=60,
+            score=Score(name='score', direction=Direction.HIGHER),
+            required=['score'],
+            known=['score'],
+            max_evidence_bytes=0,
+        )
+
+    report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1)])
+    recorded = select(func.count()).select_from(Measurement).where(Measurement.candidate_id == base.id)
+    with db.session() as s:
+        before = s.execute(recorded).scalar_one()
+    results.finished(job(running()), report)
+    with db.session() as s:
+        assert s.scalar(recorded) == before + 1, 'the term serves: it records'
+        terms.stop(s)
+        s.commit()
+    results.finished(job(running()), report)
+    with db.session() as s:
+        assert s.scalar(recorded) == before + 1, 'the term stops: the next daemon measures it again'

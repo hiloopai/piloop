@@ -36,7 +36,7 @@ def main() -> None:
     p = Workers.model_validate_json(sys.argv[3])
     db = Database(url, actor=System.DAEMON)
     cas = CAS.selected({}).open(home)
-    results = CampaignResults(db, Tracer(None), home, cas, lambda: False)
+    results = CampaignResults(db, Tracer(None), home, cas)
     leases = Leases(
         db, results, cas, Timing(p.renew_seconds, p.grace_seconds, p.toleration_seconds, slack=p.slack_seconds), p.pools
     )

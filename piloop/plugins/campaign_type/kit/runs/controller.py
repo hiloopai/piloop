@@ -270,7 +270,6 @@ class RunController:
             tracer,
             home,
             self.cas,
-            lambda: self.launcher.cancelled.is_set(),
             secrets=secrets,
             exit_output_chars=self._agents.exit_output_chars,
             startup_seconds=self._agents.startup_seconds,

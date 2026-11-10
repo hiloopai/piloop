@@ -862,7 +862,7 @@ def test_a_worker_killed_between_the_start_and_its_record_leaves_no_worktree(
     with db.session() as s:
         enqueue(s, home_cas(db), job)
         s.commit()
-    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     killed = Leases(db, results, disk(tmp_path))  # the killed worker's lease, which no worker watches
     killed.register(SERVE, SERVE, '0.2.0', [], sample(tmp_path))
     killed.acquire(SERVE, uuid4().hex, sample(tmp_path))
@@ -1339,9 +1339,7 @@ def test_a_dismissed_worker_stops_its_job_keeps_an_unsent_report_in_its_spool_an
     db: Database, campaign: Campaign, tmp_path: Path, refused: tuple[str, ...], spooled: set[int]
 ) -> None:
     """Dismissed at once, by its first refused call: not after the self-stop, as a silent control plane would be."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     hold = tmp_path / 'hold'
     hold.touch()
     job = evaluation_job(db, campaign, tmp_path)
@@ -1371,7 +1369,7 @@ def test_a_worker_elsewhere_short_of_disk_drops_the_input_copies_that_no_worktre
 ) -> None:
     """The eviction of ``make_room``, on a worker that has no archiver: its own home, its own clones, the shared CAS."""
     cas = disk(tmp_path)
-    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, cas, lambda: False), cas, FAST)
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, cas), cas, FAST)
     home = tmp_path / 'worker'
     inputs, worktree = home / INPUTS_DIR, home / 'runs' / '1' / 'worktree'
     inputs.mkdir(parents=True)
@@ -1412,9 +1410,7 @@ class Unanswered(Local):
 def test_a_worker_whose_registration_failed_registers_on_a_later_turn_and_a_stop_ends_it(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     client = Unanswered(leases, SERVE)
     worker = Worker(
         client,
@@ -1450,9 +1446,7 @@ def test_a_long_poll_that_fails_once_its_worker_stopped_is_no_partition(
 ) -> None:
     """A closing server drops a stopped worker's poll, which outlives the stop by up to a heartbeat: else its thread
     says ``worker.unheard`` into whatever runs next."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     client = Cut(leases, SERVE)
     worker = Worker(
         client,
@@ -1473,9 +1467,7 @@ def test_a_long_poll_that_fails_once_its_worker_stopped_is_no_partition(
 def test_a_worker_dismissed_while_it_reports_a_job_it_cannot_find_again_ends(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     leases.submit(evaluation_job(db, campaign, tmp_path))
     client = Refusing(leases, SERVE)
     client.register(WorkerInfo(version='0', pool=SERVE, runners=['process'], sample=sample(tmp_path), cas_probe=PROBE))
@@ -1515,9 +1507,7 @@ def worker_on(leases: Leases, db: Database, tmp_path: Path, *, once: bool = Fals
 def test_a_drained_worker_reports_its_job_takes_no_other_and_ends(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     hold = tmp_path / 'hold'
     hold.touch()
     job = started_evaluation(db, campaign, tmp_path)
@@ -1535,9 +1525,7 @@ def test_a_drained_worker_reports_its_job_takes_no_other_and_ends(
 
 
 def test_a_worker_once_runs_one_job_and_ends(db: Database, campaign: Campaign, tmp_path: Path) -> None:
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     job = started_evaluation(db, campaign, tmp_path)
     leases.submit(job)
     leases.submit(job.model_copy(update={'evaluation': job.evaluation + 1000}))
@@ -1550,9 +1538,7 @@ def test_a_worker_once_runs_one_job_and_ends(db: Database, campaign: Campaign, t
 def test_a_worker_drained_before_it_starts_takes_no_job_and_ends(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     leases.submit(started_evaluation(db, campaign, tmp_path))
     leases.register(SERVE, SERVE, '0.2.0', ['process'], sample(tmp_path))
     on = TargetRef(INSTANCE, 1)
@@ -1581,9 +1567,7 @@ def test_a_worker_with_an_orphan_exit_stays_while_its_server_answers_and_ends_on
     db: Database, tmp_path: Path
 ) -> None:
     """Idle with its server there: only the server's drain ends it, so a warm worker of ``min`` stays."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
     answered = Worker(
         Local(leases, SERVE), Tracer(None), site, runners=('process',), orphan_exit=0.3, relay=quiet_relay(site.home)
@@ -1618,9 +1602,7 @@ class SlowServer(Local):
 
 def test_a_worker_whose_server_answers_slowly_is_no_orphan(db: Database, tmp_path: Path) -> None:
     """The orphan exit counts the silence since the last answer came, not since its heartbeat was sent."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), FAST)
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
     slow = Worker(
         SlowServer(leases, SERVE),
@@ -1702,9 +1684,7 @@ def test_a_report_that_waits_in_the_spool_keeps_its_lease_renewed(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     """The heartbeat named only the jobs that ran, so a spooled report's lease expired as silent (B2)."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), SHORT
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), SHORT)
     leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
     client = Rejecting(leases, lambda _lease, _report: True, SHORT.self_stop)
     worker = rejecting_worker(db, tmp_path, client)
@@ -1723,9 +1703,7 @@ def test_a_report_that_the_control_plane_rejects_does_not_hold_the_heartbeat_bac
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     """Each send of it took ``Remote``'s whole retry, so the worker went silent and stopped every job it ran (B1)."""
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), SHORT
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), SHORT)
     hold = tmp_path / 'hold'
     hold.touch()
     job = started_evaluation(db, campaign, tmp_path)
@@ -1750,9 +1728,7 @@ def test_a_report_that_gets_no_answer_stays_in_the_spool_and_counts_no_rejection
 ) -> None:
     """No answer is a partition, not a refusal of the report: the next turn sends it again, and it applies."""
     timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=1)
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), timing)
     leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
     unanswered: list[int] = []
 
@@ -1786,9 +1762,7 @@ def test_a_crash_report_rejected_as_often_as_the_report_loses_the_job_and_frees_
 ) -> None:
     """The control plane rejects every report: after the crash report's tries, the worker gives the job up as lost."""
     timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=2)
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), timing)
     leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
     client = Rejecting(leases, lambda _lease, _report: True, timing.self_stop)
     worker = rejecting_worker(db, tmp_path, client)
@@ -1815,9 +1789,7 @@ def test_a_report_rejected_report_tries_times_gives_way_to_its_jobs_crash_and_fr
     The crash of an evaluation is no fault of its candidate: an infra error, which records no measurement.
     """
     timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=3)
-    leases = Leases(
-        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
-    )
+    leases = Leases(db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)), disk(tmp_path), timing)
     leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
 
     def rejects(_lease: int, report: Report) -> bool:

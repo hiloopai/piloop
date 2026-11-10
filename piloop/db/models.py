@@ -615,6 +615,25 @@ class Migration(Base):
     fingerprint: Mapped[int]
 
 
+class Term(Base):
+    """A daemon's term on this home, from its start to its end: the newest is the one that runs now (``piloop.db.terms``).
+
+    Every process that serves the daemon's API reads it, not its own memory: which daemon answers, and whether it stops.
+    """
+
+    __tablename__ = 'terms'
+
+    epoch: Mapped[int] = mapped_column(primary_key=True)
+    """One more than the term before."""
+    pid: Mapped[int]
+    """The daemon's process."""
+    listen: Mapped[str | None]
+    """The URL that it serves other machines on (``DaemonState.listen``)."""
+    started_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+    stopping_at: Mapped[datetime | None]
+    """When the daemon began to stop: what a job measured since may be cut short (``Applying.stopping``)."""
+
+
 class Limit(Base):
     """A live limit (``piloop limits set``): a value for one ``Live`` key of a provider's parameters, over ``config.toml``.
 

@@ -26,6 +26,7 @@ from piloop.db.models import (
     Lease,
     Limit,
     Migration,
+    Term,
     Token,
 )
 from piloop.db.triggers import Trigger, on
@@ -67,6 +68,7 @@ CORE_TABLES = (
     Ack,
     Lease,
     Limit,
+    Term,
     Token,
     Migration,
     KnownKind,
@@ -76,8 +78,9 @@ CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
-    internal=(Lease, Limit, Token, Migration),
-    protected=(Token, Migration),  # an agent that could write a token could call the server as a worker
+    internal=(Lease, Limit, Term, Token, Migration),
+    # an agent that could write a token could call the server as a worker; one that wrote a term, stop measurements
+    protected=(Term, Token, Migration),
 )
 
 

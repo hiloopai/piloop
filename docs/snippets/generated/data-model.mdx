@@ -50,6 +50,13 @@ erDiagram
         varchar id PK
         varchar owner
     }
+    terms {
+        integer epoch PK
+        integer pid
+        varchar listen
+        datetime started_at
+        datetime stopping_at
+    }
     tokens {
         integer id PK
         varchar name UK
