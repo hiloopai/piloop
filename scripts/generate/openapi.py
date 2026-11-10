@@ -2,7 +2,7 @@
 
 import json
 
-from piloop.daemon.api import openapi
+from piloop.daemon.served import openapi
 from scripts.generate import ROOT
 
 PATH = ROOT / 'docs' / 'reference' / 'openapi.json'

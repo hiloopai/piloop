@@ -3,7 +3,16 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from piloop.capabilities import REFUSALS_DOCUMENTED, Acting, Addressed, Structured, actor_access, reader
+from piloop.capabilities import (
+    REFUSALS_DOCUMENTED,
+    Acting,
+    Addressed,
+    RouteHost,
+    Routes,
+    Structured,
+    actor_access,
+    reader,
+)
 
 
 class Greeting(BaseModel):
@@ -22,5 +31,5 @@ def greeting(me: Acting, campaign: Addressed) -> Greeting:
 class Greeter(Structured):
     """``structured``, and a route that greets the caller by the actor it signs as."""
 
-    def routes(self) -> APIRouter:
-        return router
+    def routes(self, host: RouteHost) -> Routes:
+        return Routes(router)

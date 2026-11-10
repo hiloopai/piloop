@@ -40,6 +40,8 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.Schema,  # what a package declares its tables in (piloop.schemas)
     capabilities.Parameters,  # what every contract subclasses
     capabilities.Serves,  # what a provider whose routes the API serves implements, as a campaign type
+    capabilities.Routes,  # what it returns
+    capabilities.RouteHost,  # what it is given
     capabilities.MissingProvider,
     capabilities.Live,
     NotSteerable,

@@ -9,4 +9,4 @@
 | `Consumer.wakes_on: Kinds` | The event models whose new events run it in the next turn. |
 | `Consumer.run: Callable[[Turn], datetime \| None]` | Do the job from the tables, and return when it must run again for time alone, or None. |
 | `Consumer.phase: Phase` | When it runs in a turn: after the consumers of the phases before. |
-| `Serves.routes() -> APIRouter` | Its routes. Providers that share one router, the instances of a capability, return the same object. |
+| `Serves.routes(host: RouteHost) -> Routes` | Its routes, built for `host`. |

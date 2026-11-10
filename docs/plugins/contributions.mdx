@@ -120,9 +120,11 @@ It reads the tables, not a queue of its own. Its `Phase` says when it runs in a 
 `IN_FLIGHT`, `OBSERVE` or `PLAN`, in that order. The daemon asks each provider that it opens, such as the archiver,
 once. A consumer name that is taken already stops the daemon.
 
-A provider that implements `routes()` adds a router: routes of the daemon's API, next to piloop's own. A
-[network](/plugins/infrastructure#networks) says who may call them. Each installed provider of a capability that a
-campaign selects serves its routes, built with its defaults. A route reads the database and its request only: every
-process that serves the API builds it. A route that is taken already stops the daemon.
+A provider that implements `routes(host)` adds a router: routes of the daemon's API, next to piloop's own. It returns
+`Routes`, the router and what ends what the routes hold. A [network](/plugins/infrastructure#networks) says who may call
+them. The selected provider of each capability of the home serves its routes, and so does each installed provider of a
+capability that a campaign selects, built with its defaults. A route reads the database and its request only, because
+every process that serves the API builds its own. When a route's method and path are taken already, the daemon does
+not start.
 
 <ContractContribution />

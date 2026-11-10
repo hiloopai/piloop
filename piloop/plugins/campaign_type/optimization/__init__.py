@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 from piloop.plugins.campaign_type.contract import CampaignType, Planner, TypeHost
 
 if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database imports piloop.config
-    from fastapi import APIRouter
     from sqlalchemy.orm import Session
 
     from piloop.db.models import Campaign
     from piloop.ids import Revision
+    from piloop.plugins.contribution import RouteHost, Routes
 
 
 class Optimization(CampaignType):
@@ -27,11 +27,12 @@ class Optimization(CampaignType):
 
         return checkout_candidate(s, source).revision
 
-    def routes(self) -> APIRouter:
+    def routes(self, host: RouteHost) -> Routes:
         """Its routes, and those of the components that it uses (``Serves``)."""
         from piloop.plugins.campaign_type.optimization.api import ROUTES
+        from piloop.plugins.contribution import Routes
 
-        return ROUTES
+        return Routes(ROUTES)
 
     def check_config(self, s: Session, campaign: Campaign) -> None:
         """Every idea's track stays (``check_tracks``)."""

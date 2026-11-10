@@ -7,7 +7,6 @@ shown as all of it.
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from pydantic import Field
 from sqlalchemy.orm import Session
@@ -16,11 +15,9 @@ from piloop.api.views import View
 from piloop.campaign.stop import gather
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
+from piloop.plugins.contribution import RouteHost, Routes
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, NEW_BESTS, SPEND, Fact, FactValue, reading
-
-if TYPE_CHECKING:  # a command that reads a contract loads no web framework (``tests/cli/test_imports.py``)
-    from fastapi import APIRouter
 
 
 class SpendPart(View):
@@ -66,11 +63,11 @@ class SpendFacts(FactSource):
         facts = gather(s, campaign, campaign.config, self.reads(), now)
         return {SPEND: total(facts.get(fact) for fact in self.reads())}
 
-    def routes(self) -> APIRouter:
+    def routes(self, host: RouteHost) -> Routes:
         """The route of the spend, ``GET /v1/campaigns/{campaign}/spend`` (``Serves``)."""
         from piloop.plugins.fact_source.spend.api import router  # here: the API imports the config, which loads this
 
-        return router
+        return Routes(router)
 
 
 def spend_of(s: Session, campaign: Campaign, cfg: CampaignConfig, now: datetime) -> Spend | None:

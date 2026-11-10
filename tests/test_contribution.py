@@ -18,10 +18,11 @@ from piloop.actor import System
 from piloop.api.client import Client, Refused
 from piloop.api.contract import Access, Problem
 from piloop.cli.main import COMMANDS, add_commands
-from piloop.daemon.api import Handlers, openapi, with_api
+from piloop.daemon.api import Handlers, with_api
 from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.daemon.main import DECLARED
 from piloop.daemon.scheduler import Scheduler
+from piloop.daemon.served import openapi
 from piloop.db.events import in_order
 from piloop.db.models import TARGET_KINDS, Campaign, Comment
 from piloop.db.session import Database, migrate
@@ -37,7 +38,7 @@ from piloop.plugins.archive.local import LocalArchive
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.optimization import api as optimization_api
-from piloop.plugins.contribution import Contribution, collect, contributions_of, provided_routers
+from piloop.plugins.contribution import Contribution, RouteHost, Routes, collect, contributions_of, routes_of
 from piloop.plugins.escalation.contract import ESCALATIONS
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.contract import JOB_KINDS, JOBS, Applying, Control, Job, JobKind, Report, Site
@@ -50,7 +51,7 @@ from piloop.plugins.network.https import Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import Settings
-from tests.conftest import answering, bare_config, disk, forget_loaded, install_plugins, serving_api
+from tests.conftest import answering, bare_config, disk, forget_loaded, install_plugins, route_host, serving_api
 from tests.fixtures.route_plugin import Greeting
 from tests.net.test_api import token
 
@@ -134,8 +135,8 @@ def notes() -> list[str]:
 
 
 class Notes(Structured):
-    def routes(self) -> APIRouter:
-        return NOTES
+    def routes(self, host: RouteHost) -> Routes:
+        return Routes(NOTES)
 
 
 class Picky(Notes):
@@ -153,10 +154,14 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_plugins(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', ESCALATIONS.group)])
-    routers = provided_routers()
-    assert routers == (optimization_api.ROUTES, NOTES, spend_api.router, lineage_api.router), (
-        "the campaign types', the escalation policies', the fact sources' and the lineage's, in registry order"
+    served = routes_of(route_host(db, tmp_path), {})
+    routers = [r.router for r in served]
+    assert routers[0].url_path_for('executor register') == '/v1/executor/register', "the home's executor's first"
+    assert routers[1:] == [optimization_api.ROUTES, NOTES, spend_api.router, lineage_api.router], (
+        "then the campaign types', the escalation policies', the fact sources' and the lineage's, in registry order"
     )
+    for each in served:
+        each.close()
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
     assert app(tokens, network, routers).url_path_for('notes') == '/v1/notes'

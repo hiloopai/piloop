@@ -2,7 +2,7 @@
 
 ``ROUTERS`` are the API, and ``with_api`` puts it on a server with what its routes read with. The routes share their
 lookups as dependencies (``Selected``, ``Narrowed``) over one session per request. The OpenAPI document of the API
-(``openapi``) is ``docs/reference/openapi.json``.
+(``piloop.daemon.served.openapi``) is ``docs/reference/openapi.json``.
 """
 
 import time
@@ -13,7 +13,7 @@ from http import HTTPStatus
 from pathlib import Path as FilePath
 from typing import Annotated, assert_never
 
-from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
@@ -137,7 +137,6 @@ from piloop.plugins import limits as limits_module
 from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.contribution import provided_routers
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.limits import live_keys
 from piloop.plugins.secrets import contract as secrets
@@ -932,17 +931,6 @@ def _still_stopping(_request: Request, e: Exception) -> Response:
 def daemon_state(term: Term) -> DaemonState:
     """The daemon of ``term``, as the one that answers: whichever process serves the request."""
     return DaemonState(pid=term.pid, started=iso(term.started_at), listen=term.listen)
-
-
-def openapi() -> dict[str, object]:
-    """The OpenAPI document of ``ROUTERS`` and of the routes of the installed providers that serve (``provided_routers``).
-
-    It is what ``GET /v1/openapi.json`` answers, and ``docs/reference/openapi.json``.
-    """
-    described = FastAPI(title='piloop', version='1')
-    for routes in (*ROUTERS, *provided_routers()):
-        described.include_router(routes)
-    return described.openapi()
 
 
 def _cwd(query: Located) -> FilePath | None:

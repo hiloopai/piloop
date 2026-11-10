@@ -47,7 +47,8 @@ from piloop.api.views import CampaignState, Pending, Status, thread_lines
 from piloop.campaign import inbox, ops
 from piloop.campaign.stop import StopRequested
 from piloop.cli import common, main as cli
-from piloop.daemon.api import ROUTERS, Handlers, openapi, with_api
+from piloop.daemon.api import ROUTERS, Handlers, with_api
+from piloop.daemon.served import openapi
 from piloop.db import session, sql
 from piloop.db.events import emit, has
 from piloop.db.models import (
@@ -79,7 +80,7 @@ from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
-from piloop.plugins.contribution import provided_routers
+from piloop.plugins.contribution import routes_of
 from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.lineage.wire import LineageClient
@@ -88,7 +89,7 @@ from piloop.plugins.network.https import TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import DaemonSettings, Settings
-from tests.conftest import EveryClient, answering, disk, serving_api, wait_until
+from tests.conftest import EveryClient, answering, disk, route_host, serving_api, wait_until
 
 
 def token(db: Database, name: str, access: Access) -> str:
@@ -193,10 +194,13 @@ def test_the_server_serves_the_openapi_document_of_its_routes(cfg: Settings, db:
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         assert client._http.get(OPENAPI).json() == openapi()
     paths = openapi()['paths']
-    routers = (*ROUTERS, *provided_routers())
+    served = routes_of(route_host(db, cfg.home), {})
+    routers = (*ROUTERS, *(r.router for r in served))
     assert isinstance(paths, dict) and sorted(paths) == sorted(
-        {r.path for routes in routers for r in routes.routes if isinstance(r, APIRoute)}
+        {r.path for routes in routers for r in routes.routes if isinstance(r, APIRoute) and r.include_in_schema}
     )
+    for each in served:
+        each.close()
 
 
 def test_a_route_that_crashes_is_an_answer_that_says_so(db: Database, cfg: Settings) -> None:

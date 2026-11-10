@@ -16,6 +16,7 @@ import weakref
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
+from functools import partial
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Concatenate
@@ -32,8 +33,9 @@ from sqlalchemy.orm import Session
 
 from piloop import settings as settings_module
 from piloop.actor import Agent, SignedAgent, System
+from piloop.agents.results import CampaignResults
 from piloop.api.views import DaemonState
-from piloop.campaign.campaigns import CampaignAdded
+from piloop.campaign.campaigns import CampaignAdded, checkout_of, record_of
 from piloop.campaign.stop import left
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.api import Handlers, daemon_state, with_api
@@ -70,7 +72,7 @@ from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
-from piloop.plugins.contribution import provided_routers
+from piloop.plugins.contribution import RouteHost, routes_of
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.executor.kit.leases import Timing
 from piloop.plugins.executor.kit.relay import Shipped
@@ -812,6 +814,15 @@ def role_of[R: RoleConfig](cfg: CampaignConfig, kind: type[R]) -> R:
     return found
 
 
+def route_host(db: Database, home: Path) -> RouteHost:
+    """What a process that serves the API of ``home`` gives the providers' routes."""
+    cas = disk(home)
+    results = CampaignResults(db, Tracer(None), home, cas)
+    return RouteHost(
+        db, results, Tracer(None), home, cas, partial(checkout_of, db), partial(record_of, db), LocalSecrets()
+    )
+
+
 def live_limit(db: Database, key: str, value: JsonValue) -> None:
     """A live limit of ``key``, as ``piloop limits set`` writes it, without its check against ``config.toml``."""
     with db.session() as s:
@@ -849,7 +860,8 @@ def serving_api(
     listening = None if listener is None else url(listener)
     answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=listening)
     api = Handlers(db, cfg, answers, disk(cfg.home))
-    routers = provided_routers()
+    routes = routes_of(route_host(db, cfg.home), {})
+    routers = [r.router for r in routes]
     servers = [Server(with_api(app(tokens, network, routers), api), each) for each in listeners]
     for server in servers:
         server.start()
@@ -858,6 +870,8 @@ def serving_api(
     finally:
         for server in servers:
             server.close()
+        for each in routes:
+            each.close()
         db.close()
 
 

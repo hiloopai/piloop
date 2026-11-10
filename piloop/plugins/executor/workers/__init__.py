@@ -27,18 +27,16 @@ from piloop.db.models import LIVE_LEASES, EventModel, Lease
 from piloop.net.server import executor_router
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.contribution import Contribution
+from piloop.plugins.contribution import Contribution, RouteHost, Routes
 from piloop.plugins.executor.contract import (
     AgentKey,
     Capacity,
     ExecutorConfig,
-    ExecutorRoutes,
     Host,
     Job,
     Key,
     LeftJob,
     Prompt,
-    RouteHost,
 )
 from piloop.plugins.executor.kit import jobs, scaling
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, counted
@@ -122,8 +120,8 @@ class Workers(ExecutorConfig):
     def open(self, host: Host) -> WorkersExecutor:
         return WorkersExecutor(host, self)
 
-    def routes(self, host: RouteHost) -> ExecutorRoutes:
-        """The lease routes (``remote.lease_routes``) on leases of their own: they share only the database.
+    def routes(self, host: RouteHost) -> Routes:
+        """Its workers' lease routes (``remote.lease_routes``, ``Serves``), on leases of their own over the database.
 
         Its first transfers are asked for there and built by the daemon (``FirstTransferBuilds``), and its relayed
         calls fork from a template of the process (``Forks``), which ``close`` ends.
@@ -133,7 +131,7 @@ class Workers(ExecutorConfig):
         forks = Forks(host.home, self.relayed_calls) if FORKED else None
         cli = Runner(host.db, host.home, host.repos, processes if forks is None else forks)
         router = executor_router(lease_routes(leases, host.db.watching, host.cas, send.send, cli))
-        return ExecutorRoutes(router, lambda: None if forks is None else forks.close())
+        return Routes(router, lambda: None if forks is None else forks.close())
 
 
 class WorkersExecutor:

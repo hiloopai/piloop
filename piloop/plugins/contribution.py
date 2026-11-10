@@ -2,8 +2,8 @@
 
 The daemon asks each provider that it opened once, in the order that it opened them, then each capability that runs
 machinery of its own (``CONTRIBUTORS``). It hands their consumers to its loop (``collect``). A provider's routes are not
-the daemon's: each process that serves the API mounts those of each installed provider that ``Serves``, built with its
-defaults (``provided_routers``). What a package adds before anything opens, it declares in a ``Slot`` (``piloop.plugins.host``).
+the daemon's: each process that serves the API builds those of each provider that ``Serves`` (``routes_of``). What a
+package adds before anything opens, it declares in a ``Slot`` (``piloop.plugins.host``).
 
 Inspiration: Backstage's backend plugins, which register their routers, scheduled tasks and startup and shutdown hooks
 with the core services.
@@ -31,7 +31,11 @@ if TYPE_CHECKING:
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.contract import Planner
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
+    from piloop.plugins.cas.contract import Cas
+    from piloop.plugins.executor.contract import RepoId, Results
     from piloop.plugins.runtime.contract import RuntimeFactory
+    from piloop.plugins.secrets.contract import SecretsProvider
+    from piloop.plugins.vcs.contract import Repository
 
 
 class Leaving(StrEnum):
@@ -104,17 +108,54 @@ class Contributes(Protocol):
         ...
 
 
-@runtime_checkable
-class Serves(Protocol):
-    """A provider whose routes the daemon's API serves, beside core's: a campaign type's, say.
+@dataclass(frozen=True)
+class RouteHost:
+    """What piloop gives a provider's routes (``Serves``), in each process that serves the API.
 
-    Each process that serves the API builds the provider with its defaults and mounts its routes (``provided_routers``), so a
-    route reads only the database and its request, never a daemon's memory. A route of a method and path that is taken
-    is refused. The API's document lists them without a daemon.
+    A route reads and writes the database: it never reads the memory of the daemon or of a provider that it opened.
     """
 
-    def routes(self) -> APIRouter:
-        """Its routes. Providers that share one router, the instances of a capability, return the same object."""
+    db: Database
+    results: Results
+    """The core operations on what the jobs of an executor do, which its workers' routes call."""
+    tracer: Tracer
+    home: Path
+    cas: Cas
+    repos: Callable[[RepoId], Path]
+    """The checkout of a repo of record (``Source.repo``). Raises ``KeyError`` for a campaign that is gone."""
+    records: Callable[[RepoId], Repository]
+    """A repo of record, opened with its campaign's vcs provider."""
+    secrets: SecretsProvider
+
+
+def _nothing() -> None:
+    return None
+
+
+@dataclass(frozen=True)
+class Routes:
+    """A provider's routes, and what ends what they hold once no server serves them."""
+
+    router: APIRouter
+    close: Callable[[], None] = _nothing
+
+
+@runtime_checkable
+class Serves(Protocol):
+    """A provider whose routes the daemon's API serves beside core's: a campaign type's, or an executor's workers'.
+
+    Each process that serves the API builds its routes (``routes_of``): those of the provider of each capability of the
+    home that serves, then those of each installed provider that a campaign may choose, built with its defaults. A
+    route of a method and path that is taken is refused, and the process does not serve. The API's document lists the
+    routes without a daemon.
+    """
+
+    def routes(self, host: RouteHost) -> Routes:
+        """Its routes, built for ``host``.
+
+        Providers that share one router, the instances of a capability, return the same object: a process mounts it
+        once.
+        """
         ...
 
 
@@ -135,17 +176,22 @@ CONTRIBUTORS: Slot[Machinery] = Slot('contributors', TypeAdapter(Machinery), 'co
 by the provider's name: entry points ``piloop.contributors``."""
 
 
-def provided_routers() -> tuple[APIRouter, ...]:
-    """The routes of each installed provider that ``Serves`` (``installed``): each router once, in registry order.
+def routes_of(host: RouteHost, plugins: Plugins) -> tuple[Routes, ...]:
+    """The routes of each provider that ``Serves``: of the home's selected ones in ``plugins``, then of ``installed``.
+
+    A router that several providers share is in it once.
 
     Raises:
-        PluginError: A provider that serves cannot be built with its defaults. The message names it.
+        PluginError: An installed provider that serves cannot be built with its defaults. The message names it.
     """
-    routers: list[APIRouter] = []
-    for provider in installed():
-        if (router := provider.routes()) not in routers:
-            routers.append(router)
-    return tuple(routers)
+    from piloop.plugins.limits import selected  # here: the limits read the views, which import the capabilities
+
+    found: list[Routes] = []
+    for provider in (*(p for p in selected(plugins).values() if isinstance(p, Serves)), *installed()):
+        routes = provider.routes(host)
+        if all(routes.router is not other.router for other in found):
+            found.append(routes)
+    return tuple(found)
 
 
 def installed() -> tuple[Serves, ...]:

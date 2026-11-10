@@ -16,7 +16,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from piloop.daemon.api import openapi
+from piloop.daemon.served import openapi
 from piloop.db.models import AgentSession, Campaign
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.contribution import provided_routers
+from piloop.plugins.contribution import routes_of
 from piloop.plugins.lineage.contract import (
     LINEAGE,
     Graph,
@@ -51,7 +51,7 @@ from piloop.plugins.lineage.contract import (
 )
 from piloop.plugins.metric import Direction
 from piloop.settings import Settings
-from tests.conftest import forget_loaded, install_plugins, reconfigured, serving_api, store_config
+from tests.conftest import forget_loaded, install_plugins, reconfigured, route_host, serving_api, store_config
 
 T0 = datetime(2026, 10, 27, 12, tzinfo=UTC)
 PATH = '/v1/campaigns/{campaign}/lineage'
@@ -205,8 +205,8 @@ def test_the_route_answers_the_graph_of_the_instance_that_the_campaign_uses(
 
 
 @pytest.mark.usefixtures('bracket')
-def test_every_provider_shares_the_route_which_is_mounted_and_documented_once() -> None:
-    routers = provided_routers()
+def test_every_provider_shares_the_route_which_is_mounted_and_documented_once(db: Database, tmp_path: Path) -> None:
+    routers = [r.router for r in routes_of(route_host(db, tmp_path), {})]
     found = [r.path for router in routers for r in router.routes if isinstance(r, APIRoute) and r.path == PATH]
     assert found == [PATH]
     lineage = openapi()['paths']

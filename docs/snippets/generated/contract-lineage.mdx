@@ -4,7 +4,7 @@
 |---|---|
 | `LineageProvider.DEFAULT: ClassVar[bool]` | Whether a campaign that does not set `[plugins.lineage] use` uses this provider. One installed provider is. Only the class that sets it is a default: a subclass is not (`is_default`). |
 | `LineageProvider.graph(s: Session, campaign: Campaign) -> Graph` | The graph of `campaign` now, read with `s` in the transaction of the answer's cursor. It never writes. |
-| `LineageProvider.routes() -> APIRouter` | The capability's route, which every provider shares: the server mounts it once (`Serves`). |
+| `LineageProvider.routes(host: RouteHost) -> Routes` | The capability's route, which every provider shares: the server mounts it once (`Serves`). |
 | `Graph.kinds: list[NodeKind]` | Every kind that a node may have, in the order of a legend. |
 | `Graph.statuses: list[NodeStatus]` | Every status that a node may have, in the order of a legend. |
 | `Graph.tracks: list[ScoreTrack]` | The axes of the scores. Empty when nothing is scored. |

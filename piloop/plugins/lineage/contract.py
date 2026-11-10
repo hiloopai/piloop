@@ -25,10 +25,10 @@ from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 from piloop.plugins.metric import Direction
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with every capability: only the annotations name the rows
-    from fastapi import APIRouter
     from sqlalchemy.orm import Session
 
     from piloop.db.models import Campaign
+    from piloop.plugins.contribution import RouteHost, Routes
 
 NodeId = NewType('NodeId', str)
 """A node's id, unique in its graph, such as ``candidate#12``."""
@@ -261,11 +261,12 @@ class LineageProvider(Parameters, ABC):
         The campaign's config is ``campaign.config``.
         """
 
-    def routes(self) -> APIRouter:
+    def routes(self, host: RouteHost) -> Routes:
         """The capability's route, which every provider shares: the server mounts it once (``Serves``)."""
+        from piloop.plugins.contribution import Routes  # here: the contributions import the daemon's loop
         from piloop.plugins.lineage.api import router  # here: the route imports the API, which imports the config
 
-        return router
+        return Routes(router)
 
 
 LINEAGE = Capability(
