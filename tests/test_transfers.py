@@ -1,5 +1,6 @@
 """An empty clone starts from the repo's first transfer, which the server builds once, out of any request."""
 
+import sqlite3
 import subprocess
 import threading
 import time
@@ -12,6 +13,7 @@ import pytest
 from covalence import Cid
 from git import Repo
 from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from piloop.api.contract import MAX_POLL_SECONDS
 from piloop.daemon.loop import Turn
@@ -24,6 +26,7 @@ from piloop.net.tokens import Tokens
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId
+from piloop.plugins.executor.kit import transfers as transfers_module
 from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
@@ -301,3 +304,49 @@ def test_a_build_whose_repo_goes_meanwhile_writes_nothing(
     wait_until(lambda: not builds._building, 'the build ends')
     with db.session() as s:
         assert s.get(FirstTransfer, repo) is None and not in_order(s, FirstTransferSettled)
+
+
+def test_a_send_asks_the_cas_with_no_write_lock_held(
+    db: Database, campaign: Campaign, store: Cas, record: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote CAS answers ``has`` over the network: another writer must not wait on it."""
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    first = transfers(db, store, record)
+    answered(partial(first.send, repo, [head], []))
+    writable: list[bool] = []
+    real = store.has
+
+    def has(blob: Cid) -> bool:
+        other = sqlite3.connect(str(db.engine.url.database), timeout=0)
+        try:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+            writable.append(True)
+        except sqlite3.OperationalError:
+            writable.append(False)
+        finally:
+            other.close()
+        return real(blob)
+
+    monkeypatch.setattr(store, 'has', has)
+    assert first.send(repo, [head], []) is not None
+    assert writable == [True]
+
+
+def test_of_two_requests_that_find_no_first_transfer_the_second_to_take_the_lock_asks_nothing(
+    db: Database, campaign: Campaign, store: Cas, record: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other request asks between this one's read and its write lock: this one finds the row changed, and waits."""
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    other = transfers(db, store, record).first
+    real = transfers_module.write_transaction
+
+    def first_the_other(s: Session) -> None:
+        monkeypatch.setattr(transfers_module, 'write_transaction', real)
+        assert other.send(repo, [head], []) is None
+        real(s)
+
+    monkeypatch.setattr(transfers_module, 'write_transaction', first_the_other)
+    assert FirstTransfers(db, store, lambda repo: record, 60).send(repo, [head], []) is None
+    with db.session() as s:
+        assert len(in_order(s, FirstTransferRequested)) == 1, 'one ask'

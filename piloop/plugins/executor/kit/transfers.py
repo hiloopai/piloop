@@ -108,33 +108,39 @@ class FirstTransfers:
         return [first.blob, *send_of_record(self._cas, self._records, repo, revisions, [first.revision])]
 
     def _first(self, repo: RepoId) -> FirstTransfer | None:
-        """The repo's built first transfer, or None while it is built: a request that finds none asks for it."""
-        with self._db.session() as s:
-            write_transaction(s)  # of two requests that find none, one asks
-            row = s.get(FirstTransfer, repo)
-            match row:
-                case FirstTransfer(state=FirstTransferState.BUILT) if self._usable(row):
-                    return row
-                case FirstTransfer(state=FirstTransferState.REQUESTED, started_at=started):
-                    s.rollback()
-                    if utcnow() - started > self._deadline:
-                        raise NotSent(
-                            f'the first transfer of repo {repo} has built for longer than its deadline of'
-                            f' {self._deadline.total_seconds():g} s: the send of the repo of record or its upload to'
-                            ' the CAS hangs'
-                        )
-                    return None
-                case FirstTransfer(state=FirstTransferState.FAILED, error=error):
-                    _request(s, repo)
-                    s.commit()
-                    raise NotSent(f'the first transfer of repo {repo} failed: {error}')
-                case _:  # none, or one that the CAS lost
-                    _request(s, repo)
-                    s.commit()
-                    return None
+        """The repo's built first transfer, or None while it is built: a request that finds none asks for it.
 
-    def _usable(self, row: FirstTransfer) -> bool:
-        return row.state is FirstTransferState.BUILT and row.blob is not None and self._cas.has(row.blob)
+        It reads the row, and the CAS, with no transaction: a request that finds none, a failed one or a blob that the
+        CAS lost takes the write lock only to ask, once it read the row again under it and found it as it was. One
+        that changed meanwhile, another request's ask or the daemon's build, is the next read's to see.
+        """
+        with self._db.session() as s:
+            seen = s.get(FirstTransfer, repo)
+        match seen:
+            case FirstTransfer(state=FirstTransferState.BUILT, blob=Cid() as blob) if self._cas.has(blob):
+                return seen
+            case FirstTransfer(state=FirstTransferState.REQUESTED, started_at=started):
+                if utcnow() - started > self._deadline:
+                    raise NotSent(
+                        f'the first transfer of repo {repo} has built for longer than its deadline of'
+                        f' {self._deadline.total_seconds():g} s: the send of the repo of record or its upload to the'
+                        ' CAS hangs'
+                    )
+                return None
+        with self._db.session() as s:
+            write_transaction(s)
+            if _state(s.get(FirstTransfer, repo)) != _state(seen):
+                return None
+            _request(s, repo)
+            s.commit()
+        if seen is not None and seen.state is FirstTransferState.FAILED:
+            raise NotSent(f'the first transfer of repo {repo} failed: {seen.error}')
+        return None
+
+
+def _state(row: FirstTransfer | None) -> tuple[FirstTransferState, datetime, Cid | None] | None:
+    """What a request read of a row: whether another request or the build changed it since."""
+    return None if row is None else (row.state, row.started_at, row.blob)
 
 
 def _request(s: Session, repo: RepoId) -> None:
