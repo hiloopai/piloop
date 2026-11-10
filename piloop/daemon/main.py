@@ -19,6 +19,7 @@ from piloop.daemon.serve import (
     serve_argv,
 )
 from piloop.daemon.served import Served
+from piloop.daemon.tier import ApiProcesses
 from piloop.db import terms
 from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import schemas
@@ -32,7 +33,7 @@ from piloop.db.session import (
     write_transaction,
 )
 from piloop.db.triggers.changelog import COMMENT_KINDS
-from piloop.net.server import GRACE_SECONDS, Server, local_listener, url
+from piloop.net.server import GRACE_SECONDS, Server, listening, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
@@ -143,9 +144,9 @@ class Daemon:
             self.network = served.open(
                 network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
             )
-            self._servers: list[Server] = []
+            self._servers: list[Server | ApiProcesses] = []
             self._served: Served | None = None
-            """What the servers serve the API with, once they serve."""
+            """What the daemon's own servers serve the API with, once they serve. None while API processes serve it."""
             self._cas = cas.CAS.selected(cfg.providers).open(cfg.home)
             try:  # after the CAS opens: a revision may move data into it
                 self._backup = migrate(
@@ -237,6 +238,7 @@ class Daemon:
     def _listen(self, span: Span) -> None:
         """Serve the API on the home's Unix socket, and on the network's listener when it has one.
 
+        The daemon serves it itself, or its API processes do on the sockets that it bound (``[daemon] api_processes``).
         The network's URL goes on the start span. An in-place restart listens on the port that port 0 took, so a worker
         that has the URL keeps its server.
         """
@@ -245,7 +247,7 @@ class Daemon:
         except OSError as e:
             raise SystemExit(f'the daemon does not listen on {self._cfg.socket_file}: {e}') from e
         try:
-            listener = self.network.listener()
+            listener = listening(self.network)
         except OSError as e:
             local.socket.close()
             raise SystemExit(f'the daemon does not listen: {e}') from e
@@ -255,10 +257,14 @@ class Daemon:
             write_transaction(s)
             term = terms.listening(s, self._epoch, listen)
             s.commit()
-        self._served = Served(
-            self.db, self._cfg, self._tokens, self.network, self.tracer, self.controller.cas, daemon_state(term)
-        )
-        self._servers = [Server(self._served.app(), each) for each in listeners]
+        if (count := self._cfg.daemon.api_processes) > 0:
+            remote = None if listener is None else listener.socket
+            self._servers = [ApiProcesses(count, [local.socket, remote], self._cfg.home, self.tracer)]
+        else:
+            self._served = Served(
+                self.db, self._cfg, self._tokens, self.network, self.tracer, self.controller.cas, daemon_state(term)
+            )
+            self._servers = [Server(self._served.app(), each) for each in listeners]
         for server in self._servers:
             server.start()
         if listener is not None:
@@ -287,7 +293,8 @@ class Daemon:
     def shutdown(self, timeout: float = SHUTDOWN_SECONDS) -> None:
         """Stop the scheduler and the servers, and flush traces. A restart hands the agents over. A stop kills them.
 
-        The scheduler's waits share ``timeout``. Then the servers let their requests in flight finish, all together.
+        The scheduler's waits share ``timeout``. Then the servers, or the API processes, let their requests in flight
+        finish, all together.
         """
         with self.tracer.span('piloop.shutdown'):
             (self.scheduler.hand_over if self._restart else self.scheduler.stop)(timeout)

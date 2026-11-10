@@ -5,7 +5,10 @@ The daemon builds it to serve the API itself, and each process that serves the A
 which daemon answers (``piloop.db.terms``).
 """
 
+import socket
 import tempfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
@@ -15,16 +18,17 @@ from piloop.actor import System
 from piloop.agents.results import CampaignResults
 from piloop.api.views import DaemonState
 from piloop.campaign.campaigns import checkout_of, record_of
-from piloop.daemon.api import ROUTERS, Handlers, with_api
-from piloop.db.session import Database
-from piloop.net.server import App, app
+from piloop.daemon.api import ROUTERS, Handlers, daemon_state, with_api
+from piloop.db import terms
+from piloop.db.session import Database, WriteSpans
+from piloop.net.server import App, Server, app
 from piloop.net.tokens import Tokens
-from piloop.otel import Tracer
+from piloop.otel import Tracer, tracer
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.contribution import RouteHost, routes_of
-from piloop.plugins.network.contract import Network
-from piloop.plugins.secrets.contract import SECRETS
-from piloop.settings import Settings
+from piloop.plugins.network.contract import NETWORKS, Listener, Network, NetworkHost
+from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
+from piloop.settings import Settings, settings
 
 
 class Served:
@@ -52,7 +56,17 @@ class Served:
             startup_seconds=cfg.agents.startup_seconds,
             startup_turns=cfg.agents.startup_turns,
         )
-        host = RouteHost(db, results, tracer, cfg.home, cas, partial(checkout_of, db), partial(record_of, db), secrets)
+        host = RouteHost(
+            db,
+            results,
+            tracer,
+            cfg.home,
+            cas,
+            partial(checkout_of, db),
+            partial(record_of, db),
+            secrets,
+            max(1, cfg.daemon.api_processes),
+        )
         self._routes = routes_of(host, cfg.providers)
         self._tokens, self._network = tokens, network
         self._handlers = Handlers(db, cfg, daemon, cas)
@@ -79,7 +93,7 @@ def openapi() -> dict[str, object]:
         tracing, cas, secrets = Tracer(None), CAS.selected({}).open(home), SECRETS.selected({})
         results = CampaignResults(db, tracing, home, cas, secrets=secrets)
         routes = routes_of(
-            RouteHost(db, results, tracing, home, cas, partial(checkout_of, db), partial(record_of, db), secrets), {}
+            RouteHost(db, results, tracing, home, cas, partial(checkout_of, db), partial(record_of, db), secrets, 1), {}
         )
         described = FastAPI(title='piloop', version='1')
         try:
@@ -90,3 +104,48 @@ def openapi() -> dict[str, object]:
             for each in routes:
                 each.close()
             db.close()
+
+
+@contextmanager
+def serving(local: socket.socket, remote: socket.socket | None, cfg: Settings = settings) -> Generator[None]:
+    """Serve the API of ``cfg``'s home for the block, as an API process (``piloop.daemon.tier``).
+
+    ``local`` is the home's Unix socket, and ``remote`` the network's or None: the daemon bound them. The process opens
+    the home as a client does, and the current term says which daemon answers.
+
+    Raises:
+        SystemExit: No daemon began a term on the home: nothing here would answer for it.
+    """
+    tracing = tracer()
+    measures = tracing.measures
+    db = Database(
+        cfg.database_url,
+        actor=System.DAEMON,
+        writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
+        strict=cfg.debug or None,
+    )
+    try:
+        with db.session() as s:
+            term = terms.current(s)
+        if term is None:
+            raise SystemExit(f'no daemon began a term on {cfg.home}: an API process serves only beside one')
+        tokens = Tokens(db, cfg.daemon.token_trust.total_seconds())
+        secrets = SECRETS.selected(cfg.providers)
+        network = NETWORKS.selected(cfg.providers).open(NetworkHost(tokens, HomeSecrets(db, secrets)))
+        cas = CAS.selected(cfg.providers).open(cfg.home)
+        api = Served(db, cfg, tokens, network, tracing, cas, daemon_state(term))
+        listeners = [Listener(local, None), *([] if remote is None else [network.listener(remote)])]
+        servers = [Server(api.app(), each) for each in listeners]
+        for server in servers:
+            server.start()
+        try:
+            yield
+        finally:
+            for server in servers:
+                server.stop()
+            for server in servers:
+                server.close()
+            api.close()
+    finally:
+        db.close()
+        tracing.shutdown()

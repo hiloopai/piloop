@@ -15,7 +15,7 @@ from piloop.actor import System
 from piloop.agents.results import CampaignResults
 from piloop.campaign.campaigns import checkout_of, record_of
 from piloop.db.session import Database
-from piloop.net.server import Server, app, executor_router
+from piloop.net.server import Server, app, executor_router, listening
 from piloop.net.tokens import Tokens
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import CAS
@@ -44,7 +44,7 @@ def main() -> None:
     network = Https.model_validate({'listen': '127.0.0.1:0'}).open(
         NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))
     )
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None
     bundle = partial(send_of_record, cas, partial(record_of, db))
     cli = Runner(

@@ -138,11 +138,14 @@ class ProxyNetwork:
         self.host = host
         self.config = config
 
-    def listener(self) -> Listener | None:
+    def bind(self) -> socket.socket | None:
         if (listen := self.config.listen) is None:
             return None
         family = socket.AF_INET6 if ':' in listen.host else socket.AF_INET
-        return Listener(socket.create_server((listen.host, listen.port), family=family), None)
+        return socket.create_server((listen.host, listen.port), family=family)
+
+    def listener(self, sock: socket.socket) -> Listener:
+        return Listener(sock, None)
 
     def identify(self, headers: Mapping[str, str], peer: Peer) -> Caller | Refused:
         config = self.config

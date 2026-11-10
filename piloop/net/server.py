@@ -333,6 +333,12 @@ class Server:
         self._thread.join()
 
 
+def listening(network: Network) -> Listener | None:
+    """The network's listener in this process: its ``bind``, with its TLS. None when it listens nowhere."""
+    sock = network.bind()
+    return None if sock is None else network.listener(sock)
+
+
 def url(listener: Listener) -> str:
     """The URL that a client on this machine calls on a TCP listener: the scheme, and the address with its port."""
     host, port = listener.socket.getsockname()[:2]

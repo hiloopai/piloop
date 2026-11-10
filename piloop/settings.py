@@ -129,6 +129,10 @@ class DaemonSettings(BaseModel):
     """How long a server (``piloop serve``, ``piloop cas serve``) trusts a token that it verified before it reads the
     token again. A token revoked through the server's own API stops at once; one revoked in another process, or an
     agent's whose session ended, within this time. 0 reads the token on every call."""
+    api_processes: int = Field(default=0, ge=0)
+    """How many processes serve the daemon's API beside it, on the sockets that it binds (``piloop.daemon.tier``). 0:
+    the daemon serves it in its own process. Each one holds its own connections and its relay template, and the
+    relayed calls (``[plugins.executor] relayed_calls``) are shared out among them."""
     agent_reread: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a
     close that adds no event, by ``piloop sql`` say, is seen this late."""

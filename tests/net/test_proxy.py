@@ -9,7 +9,7 @@ from pydantic import SecretStr, ValidationError
 from piloop.actor import CallerKind, System
 from piloop.api.contract import Access
 from piloop.db.session import Database
-from piloop.net.server import Server, app, executor_router
+from piloop.net.server import Server, app, executor_router, listening
 from piloop.net.tokens import Caller, Tokens
 from piloop.plugins.network.contract import NETWORKS, NetworkHost, NoCredential, NotEnrolled, Peer, Refused
 from piloop.plugins.network.proxy import (
@@ -143,7 +143,7 @@ def test_a_worker_client_sends_its_credential_and_name(monkeypatch: pytest.Monke
 
 def test_a_served_request_is_known_by_its_stamps_alone(db: Database) -> None:
     network = opened(db)
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None and listener.tls is None, 'TLS ends at the proxy'
     server = Server(app(Tokens(db), network, [executor_router([ECHO])]), listener)
     server.start()
@@ -162,8 +162,8 @@ def test_the_proxy_network_makes_core_refuse_piloop_tokens(db: Database) -> None
 
 def test_a_network_without_listen_binds_nothing_and_one_on_ipv6_binds_ipv6(db: Database) -> None:
     host = NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))
-    assert Proxy().open(host).listener() is None, 'a worker dials; it listens nowhere'
-    listener = opened(db, listen='[::1]:0').listener()
+    assert listening(Proxy().open(host)) is None, 'a worker dials; it listens nowhere'
+    listener = listening(opened(db, listen='[::1]:0'))
     assert listener is not None
     with listener.socket:
         assert listener.socket.family == socket.AF_INET6

@@ -17,7 +17,7 @@ from piloop.api.client import Client
 from piloop.api.contract import Selection
 from piloop.cli import common
 from piloop.daemon.main import Daemon
-from piloop.net.server import local_listener
+from piloop.net.server import Server, local_listener
 from piloop.plugins.network.contract import Address
 from piloop.settings import Settings
 from tests.cli.test_cli import run_cli
@@ -31,11 +31,11 @@ def test_the_daemon_serves_on_listen_and_its_shutdown_closes_the_port_and_the_so
     daemon = Daemon(cfg, listen=Address(host='127.0.0.1', port=0))
     with daemon.tracer.span('test') as span:
         daemon._listen(span)
-    url = daemon._servers[-1].url
+    with Client.on(cfg.socket_file, System.HUMAN) as client:
+        url = client.status(Selection()).daemon.listen
+    assert url is not None and url.startswith('http://127.0.0.1:')
     assert httpx.post(url + UNROUTED).status_code == 404
     assert cfg.socket_file.stat().st_mode & 0o777 == 0o600, 'only the user of the home calls as its owner'
-    with Client.on(cfg.socket_file, System.HUMAN) as client:
-        assert client.status(Selection()).daemon.listen == url
     daemon.shutdown(timeout=5)
     with pytest.raises(httpx.ConnectError):
         httpx.post(url + UNROUTED)
@@ -50,7 +50,8 @@ def test_a_daemon_on_a_fixed_port_says_where_it_listens_and_restarts_on_that_por
     argv = list(daemon._argv)
     with daemon.tracer.span('test') as span:
         daemon._listen(span)
-    assert (daemon._argv, daemon._servers[-1].url) == (argv, f'http://127.0.0.1:{port}')
+    with Client.on(cfg.socket_file, System.HUMAN) as client:
+        assert (daemon._argv, client.status(Selection()).daemon.listen) == (argv, f'http://127.0.0.1:{port}')
     daemon.shutdown(timeout=5)
 
 
@@ -64,7 +65,7 @@ def test_a_daemon_without_listen_serves_only_its_socket_and_replaces_one_that_a_
     stale.close()
     with daemon.tracer.span('test') as span:
         daemon._listen(span)
-    assert [server.listener.socket.family for server in daemon._servers] == [socket.AF_UNIX]
+    assert [s.listener.socket.family for s in daemon._servers if isinstance(s, Server)] == [socket.AF_UNIX]
     with Client.on(cfg.socket_file, System.HUMAN) as client:
         assert client.status(Selection()).daemon.listen is None
     daemon.shutdown(timeout=5)

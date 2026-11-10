@@ -2,6 +2,7 @@
 
 import threading
 from collections.abc import Generator
+from pathlib import Path
 from typing import Self
 
 import pytest
@@ -13,11 +14,13 @@ from piloop.daemon.served import Served
 from piloop.db import terms
 from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.net.server import Server
+from piloop.net.server import Server, listening
 from piloop.net.tokens import Tokens
 from piloop.otel import Tracer
+from piloop.plugins.executor import workers as workers_module
 from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
 from piloop.plugins.executor.kit.client import WorkerInfo
+from piloop.plugins.executor.kit.forks import Forks
 from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.kit.remote import Remote
 from piloop.plugins.executor.kit.tables import NoLease
@@ -25,7 +28,7 @@ from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.settings import Settings
+from piloop.settings import DaemonSettings, Settings
 from tests.conftest import Dial, disk
 from tests.test_lease import HOST, PROBE
 from tests.test_lease_client import secret
@@ -42,7 +45,7 @@ def served(db: Database, cfg: Settings) -> Generator[Server]:
     cas = disk(cfg.home)
     assert cas.put(b'piloop worker cas probe\n') == PROBE, 'the workers share it'
     api = Served(db, cfg, tokens, network, Tracer(None), cas, daemon_state(term))
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None
     server = Server(api.app(), listener)
     server.start()
@@ -88,3 +91,26 @@ def test_an_executor_without_workers_elsewhere_serves_no_routes(
     assert served.url_path_for('status') == '/v1/status'
     with pytest.raises(NoMatchFound):
         served.url_path_for('executor register')
+
+
+def test_each_process_that_serves_runs_its_share_of_the_relayed_calls(
+    db: Database, cfg: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``relayed_calls`` bounds the home: each of 3 API processes forks at most 3 of the 8 at once."""
+    sizes: list[int] = []
+
+    class Counted(Forks):
+        def __init__(self, home: Path, size: int) -> None:
+            sizes.append(size)
+            super().__init__(home, size)
+
+    monkeypatch.setattr(workers_module, 'Forks', Counted)
+    with db.session() as s:
+        term = terms.begin(s, 4242, None)
+        s.commit()
+    tokens = Tokens(db)
+    network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
+    three = cfg.model_copy(update={'daemon': DaemonSettings(api_processes=3)})
+    for each in (cfg, three):
+        Served(db, each, tokens, network, Tracer(None), disk(cfg.home), daemon_state(term)).close()
+    assert sizes == ([8, 3] if workers_module.FORKED else [])

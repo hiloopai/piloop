@@ -148,8 +148,11 @@ class Recording:
         self.tls = tls
         self.peers: list[Peer] = []
 
-    def listener(self) -> Listener:
-        return Listener(socket.create_server(('127.0.0.1', 0)), self.tls)
+    def bind(self) -> socket.socket:
+        return socket.create_server(('127.0.0.1', 0))
+
+    def listener(self, sock: socket.socket) -> Listener:
+        return Listener(sock, self.tls)
 
     def identify(self, headers: Mapping[str, str], peer: Peer) -> Caller:
         self.peers.append(peer)
@@ -192,7 +195,7 @@ SERVED = {
 
 def _peer_of(served: Served, tokens: Tokens, network: Recording, tmp: Path, client: ssl.SSLContext | None) -> Address:
     """Send ``served``'s request through a server over ``network``, and return the address that it came from."""
-    with closing(Server(served.app(tokens, network, tmp), network.listener())) as server:
+    with closing(Server(served.app(tokens, network, tmp), network.listener(network.bind()))) as server:
         server.start()
         host, port = server.listener.socket.getsockname()[:2]
         connection = (
@@ -415,8 +418,11 @@ class TrustedHeaders:
         self.takes_tokens = takes_tokens
         self.asked: list[str] = []
 
-    def listener(self) -> Listener:
-        return Listener(socket.create_server(('127.0.0.1', 0)), None)
+    def bind(self) -> socket.socket:
+        return socket.create_server(('127.0.0.1', 0))
+
+    def listener(self, sock: socket.socket) -> Listener:
+        return Listener(sock, None)
 
     def identify(self, headers: Mapping[str, str], peer: Peer) -> Caller | Refused:
         self.asked.append(headers.get('authorization', ''))
@@ -436,7 +442,9 @@ class TrustedHeaders:
 
 def test_a_bearer_that_is_not_a_piloop_token_reaches_the_network_which_identifies_the_caller(db: Database) -> None:
     network = TrustedHeaders()
-    with closing(Server(app(Tokens(db), network, [executor_router([ECHO])]), network.listener())) as server:
+    with closing(
+        Server(app(Tokens(db), network, [executor_router([ECHO])]), network.listener(network.bind()))
+    ) as server:
         server.start()
         stamped = {'Authorization': 'Bearer hil_abc', 'x-user': 'gpu7', 'x-access': 'worker'}
         answered = httpx.post(server.url + ECHOED, json=HI, headers=stamped)
@@ -455,7 +463,9 @@ def test_a_bearer_that_is_not_a_piloop_token_reaches_the_network_which_identifie
 def test_a_network_that_authenticates_every_caller_makes_core_refuse_piloop_tokens(db: Database) -> None:
     network = TrustedHeaders(takes_tokens=False)
     token = Tokens(db).mint('gpu1', Access.WORKER)
-    with closing(Server(app(Tokens(db), network, [executor_router([ECHO])]), network.listener())) as server:
+    with closing(
+        Server(app(Tokens(db), network, [executor_router([ECHO])]), network.listener(network.bind()))
+    ) as server:
         server.start()
         stamped = {'x-user': 'gpu7', 'x-access': 'worker'}
         valid = httpx.post(server.url + ECHOED, json=HI, headers={**stamped, 'Authorization': f'Bearer {token}'})

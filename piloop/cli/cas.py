@@ -53,7 +53,7 @@ def serve(
     """Serve the CAS of `[plugins.cas]` until Ctrl-C or SIGTERM. Each caller sends a worker's token."""
     # only now: `piloop cas get`, which an agent's call runs on the server, loads no web server
     from piloop.net import cas_server
-    from piloop.net.server import Server
+    from piloop.net.server import Server, listening
 
     try:
         network = NETWORKS.selected(common.settings.providers).listening(Address.model_validate(listen))
@@ -65,7 +65,7 @@ def serve(
         tokens = Tokens(db, common.settings.daemon.token_trust.total_seconds())
         net = network.open(NetworkHost(tokens, HomeSecrets(db, SECRETS.selected(common.settings.providers))))
         try:
-            listener = net.listener()
+            listener = listening(net)
         except OSError as e:
             raise SystemExit(f'the CAS does not listen: {e}') from e
         assert listener is not None  # `listening` set the address

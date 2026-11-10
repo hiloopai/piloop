@@ -14,7 +14,7 @@ from covalence import Cid, IntegrityError, StoreError
 from piloop.db.session import Database
 from piloop.net import cas_server
 from piloop.net.cas import route
-from piloop.net.server import Server
+from piloop.net.server import Server, listening
 from piloop.net.tokens import Tokens
 from piloop.plugins.cas.cached import CachedCas
 from piloop.plugins.cas.contract import UNBOUNDED, Cas, Writer
@@ -44,7 +44,7 @@ def serving(db: Database, store: Cas, scratch: Path, **keys: object) -> Generato
     network = Https.model_validate({'listen': '127.0.0.1:0', **keys}).open(
         NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))
     )
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None
     server = Server(cas_server.app(Tokens(db), network, store, scratch), listener)
     server.start()

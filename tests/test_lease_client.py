@@ -25,7 +25,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseSta
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId, Revision
 from piloop.net import tokens
-from piloop.net.server import Server, app, executor_router
+from piloop.net.server import Server, app, executor_router, listening
 from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
@@ -108,7 +108,7 @@ def network(db: Database) -> HttpsNetwork:
 
 @pytest.fixture
 def server(network: HttpsNetwork, leases: Leases, db: Database, tmp_path: Path) -> Generator[Server]:
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None
     cas = disk(tmp_path / 'server')
     assert cas.put(b'piloop worker cas probe\n') == PROBE, 'the workers share it'

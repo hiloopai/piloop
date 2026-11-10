@@ -126,6 +126,8 @@ class RouteHost:
     records: Callable[[RepoId], Repository]
     """A repo of record, opened with its campaign's vcs provider."""
     secrets: SecretsProvider
+    processes: int
+    """How many processes serve the API, this one among them: a bound of the home is shared out among them."""
 
 
 def _nothing() -> None:

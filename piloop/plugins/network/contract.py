@@ -127,8 +127,12 @@ class Network(Protocol):
     every caller itself (``identify``), and core refuses a ``plt_`` bearer there, so no token minted in the home opens a
     way around it. The home's Unix socket verifies them whatever this says."""
 
-    def listener(self) -> Listener | None:
-        """Bind ``listen``, or return None when it is None. The daemon calls it once."""
+    def bind(self) -> socket.socket | None:
+        """Bind ``listen`` and listen on it, or return None when it is None. The daemon calls it once."""
+        ...
+
+    def listener(self, sock: socket.socket) -> Listener:
+        """``sock``, which ``bind`` bound, with the TLS that the server ends on it: in each process that serves on it."""
         ...
 
     def identify(self, headers: Mapping[str, str], peer: Peer) -> Caller | Refused:

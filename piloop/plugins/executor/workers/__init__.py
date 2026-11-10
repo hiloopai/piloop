@@ -6,6 +6,7 @@ those of its pool, through the same lease operations over HTTP (``piloop.plugins
 provisioner gets its workers started and stopped on demand (``piloop.plugins.executor.kit.scaling``).
 """
 
+import math
 import sys
 import threading
 import time
@@ -98,7 +99,8 @@ class Workers(ExecutorConfig):
     it, the jobs that wait on the build fail, and no other build starts until it ends."""
     relayed_calls: int = Field(default=8, gt=0)
     """How many ``piloop`` calls of agents on other machines the server runs at once. Each is a process forked from a
-    warm one, which uses about one core while it runs; the calls over it wait for one to end."""
+    warm one, which uses about one core while it runs; the calls over it wait for one to end. With API processes
+    (``[daemon] api_processes``), each runs its share, rounded up."""
 
     @field_validator('pools', mode='after')
     @classmethod
@@ -124,11 +126,12 @@ class Workers(ExecutorConfig):
         """Its workers' lease routes (``remote.lease_routes``, ``Serves``), on leases of their own over the database.
 
         Its first transfers are asked for there and built by the daemon (``FirstTransferBuilds``), and its relayed
-        calls fork from a template of the process (``Forks``), which ``close`` ends.
+        calls fork from a template of the process (``Forks``), which ``close`` ends: ``relayed_calls`` shared out among
+        the processes that serve.
         """
         leases = Leases(host.db, host.results, host.cas, self.timing(), self.pools, host.secrets, host.tracer)
         send = FirstTransfers(host.db, host.cas, host.records, self.first_transfer_seconds)
-        forks = Forks(host.home, self.relayed_calls) if FORKED else None
+        forks = Forks(host.home, math.ceil(self.relayed_calls / host.processes)) if FORKED else None
         cli = Runner(host.db, host.home, host.repos, processes if forks is None else forks)
         router = executor_router(lease_routes(leases, host.db.watching, host.cas, send.send, cli))
         return Routes(router, lambda: None if forks is None else forks.close())

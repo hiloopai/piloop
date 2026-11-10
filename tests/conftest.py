@@ -46,7 +46,7 @@ from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Limit, utcnow
 from piloop.db.session import Database, migrate
 from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName
-from piloop.net.server import Server, app, local_listener, url
+from piloop.net.server import Server, app, listening, local_listener, url
 from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins_module
@@ -819,7 +819,7 @@ def route_host(db: Database, home: Path) -> RouteHost:
     cas = disk(home)
     results = CampaignResults(db, Tracer(None), home, cas)
     return RouteHost(
-        db, results, Tracer(None), home, cas, partial(checkout_of, db), partial(record_of, db), LocalSecrets()
+        db, results, Tracer(None), home, cas, partial(checkout_of, db), partial(record_of, db), LocalSecrets(), 1
     )
 
 
@@ -855,10 +855,10 @@ def serving_api(
     tokens = Tokens(db, trust)
     config = network_config or Https.model_validate({'listen': listen})
     network = config.open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
-    listener = network.listener()
+    listener = listening(network)
     listeners = [local_listener(cfg.socket_file), *([] if listener is None else [listener])]
-    listening = None if listener is None else url(listener)
-    answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=listening)
+    reached = None if listener is None else url(listener)
+    answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=reached)
     api = Handlers(db, cfg, answers, disk(cfg.home))
     routes = routes_of(route_host(db, cfg.home), {})
     routers = [r.router for r in routes]

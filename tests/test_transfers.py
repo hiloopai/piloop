@@ -21,7 +21,7 @@ from piloop.db.events import Topic, in_order
 from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
 from piloop.ids import Revision
-from piloop.net.server import Server, app, executor_router
+from piloop.net.server import Server, app, executor_router, listening
 from piloop.net.tokens import Tokens
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
@@ -204,7 +204,7 @@ def worker(db: Database, store: Cas, record: Counted, dial: Dial) -> Generator[R
     network = Https.model_validate({'listen': '127.0.0.1:0'}).open(
         NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))
     )
-    listener = network.listener()
+    listener = listening(network)
     assert listener is not None
     leases = Leases(db, Recorder(db), store, TIMING, POOLS)
     first = FirstTransfers(db, store, lambda repo: record, 60)

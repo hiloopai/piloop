@@ -98,12 +98,14 @@ class HttpsNetwork:
         self.host = host
         self.config = config
 
-    def listener(self) -> Listener | None:
+    def bind(self) -> socket.socket | None:
         listen = self.config.listen
         if listen is None:
             return None
         family = socket.AF_INET6 if ':' in listen.host else socket.AF_INET
-        sock = socket.create_server((listen.host, listen.port), family=family)
+        return socket.create_server((listen.host, listen.port), family=family)
+
+    def listener(self, sock: socket.socket) -> Listener:
         match self.config.tls:
             case Certificate(cert=cert, key=key):
                 tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
