@@ -173,6 +173,7 @@ class Daemon:
                 runtime_factory=opened,
                 network=self.network,
                 secrets=SECRETS.selected(cfg.providers),
+                wake=self._wake,
             )
             archiver = ARCHIVES.selected(cfg.providers).open(
                 ArchiveHost(self.db, self._cas, cfg.home, cfg.storage.reserve, self.tracer, self._wake_archiver)
@@ -266,6 +267,10 @@ class Daemon:
                 port = listener.socket.getsockname()[1]
                 self._argv = serve_argv(self._address.model_copy(update={'port': port}))
             span.set(listen=listen)
+
+    def _wake(self, consumer: str) -> None:
+        """Run ``consumer`` in the next turn of the loop: a thread of a provider that the daemon opened ended."""
+        self.scheduler.loop.wake(consumer)
 
     def _wake_archiver(self) -> None:
         """The archiver's job ended: the next turn of the loop starts the next one."""

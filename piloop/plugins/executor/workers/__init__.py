@@ -54,7 +54,7 @@ from piloop.plugins.executor.kit.relay import Relay, Runner
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
 from piloop.plugins.executor.kit.scaling import Scaler
 from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance, WorkerInstanceState
-from piloop.plugins.executor.kit.transfers import FirstTransferBuilds, FirstTransfers
+from piloop.plugins.executor.kit.transfers import BUILDS, FirstTransferBuilds, FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.settings import RELAY_SOCKET, socket_at
 
@@ -140,7 +140,9 @@ class WorkersExecutor:
     def __init__(self, host: Host, config: Workers) -> None:
         timing = config.timing()
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets, host.tracer)
-        self._builds = FirstTransferBuilds(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
+        self._builds = FirstTransferBuilds(
+            host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds, partial(host.wake, BUILDS)
+        )
         """Builds the first transfers that ``send`` asks for."""
         self._forks = Forks(host.home, config.relayed_calls) if FORKED else None
         self._cli = Runner(host.db, host.home, host.repos, processes if self._forks is None else self._forks)

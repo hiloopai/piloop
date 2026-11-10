@@ -648,6 +648,9 @@ class Host:
     """The server's network: what gives a machine that the executor starts its credential (``Network.enroll``)."""
     secrets: SecretsProvider
     """The home's secrets: an agent's job gets the values of its ``AgentJob.secrets`` at its start (``values``)."""
+    wake: Callable[[str], None] = lambda _name: None
+    """Runs the consumer of this name of the executor's contribution in the next turn of the daemon's loop: a thread of
+    the executor ended with what no event says (``Loop.wake``). Outside a daemon, it does nothing."""
 
 
 @dataclass(frozen=True, init=False)

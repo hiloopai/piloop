@@ -29,6 +29,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.executor.kit.transfers import BUILDS
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (
@@ -482,3 +483,12 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert console_lines(capsys.readouterr().err) == snapshot(
         ['run.aborted run=1 end=daemon_stopped', 'piloop.shutdown Ns']
     )
+
+
+def test_a_thread_of_a_provider_wakes_its_consumer_in_the_next_turn(tmp_path: Path) -> None:
+    daemon = Daemon(Settings(home=tmp_path / 'home'))
+    try:
+        daemon._wake(BUILDS)
+        assert daemon.scheduler.loop._has_woken()
+    finally:
+        daemon.shutdown(timeout=5)

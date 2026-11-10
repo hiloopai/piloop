@@ -244,7 +244,9 @@ class RunController:
         agents: AgentSettings | None = None,
         network: Network | None = None,
         secrets: SecretsProvider | None = None,
+        wake: Callable[[str], None] = lambda _name: None,
     ) -> None:
+        """``wake`` runs a consumer of the daemon's loop by its name (``Host.wake``)."""
         self._db = db
         self._tracer = tracer
         self._runs_dir = home / RUNS
@@ -282,6 +284,7 @@ class RunController:
             reserve,
             network,
             secrets,
+            wake,
         )
         self.executor: Executor[ExecutorConfig] = self._config.open(host)
         self.launcher = Launcher(db, tracer, home, self.executor)
