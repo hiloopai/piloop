@@ -17,7 +17,7 @@ from piloop.daemon.loop import Consumer
 from piloop.plugins.archive.contract import ArchiveConfig, Archiver
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case, Criterion, Scores
 from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
-from piloop.plugins.contribution import Contributes, Contribution
+from piloop.plugins.contribution import Contributes, Contribution, Serves
 from piloop.plugins.escalation.contract import EscalationPolicy, EscalationView
 from piloop.plugins.executor.contract import Executor, ExecutorConfig
 from piloop.plugins.fact_source import facts
@@ -61,7 +61,7 @@ CONTRACTS: dict[str, Contract] = {
     'launch-policy': Contract((LaunchPolicy, LaunchCase, Share), '`piloop/plugins/launch_policy/contract.py`'),
     'harness-choice': Contract((HarnessChoice, HarnessCase), '`piloop/plugins/harness_choice/contract.py`'),
     'contribution': Contract(
-        (Contributes, Contribution, Consumer), '`piloop/plugins/contribution.py` and `piloop/daemon/loop.py`'
+        (Contributes, Contribution, Consumer, Serves), '`piloop/plugins/contribution.py` and `piloop/daemon/loop.py`'
     ),
     'harness': Contract((Harness,), '`piloop/plugins/harness/contract.py`'),
     'lineage': Contract(

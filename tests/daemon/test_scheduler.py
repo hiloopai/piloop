@@ -1084,6 +1084,7 @@ def test_a_tick_reads_no_entry_points(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installed packages do not change while a process runs: a tick reads each campaign's config without a scan."""
+    plugins.compose(*plugins.declared())  # what the daemon's preflight loads before it serves
     scheduler = make_scheduler(db, runtime, tmp_path)
     run_all(scheduler)
     scans: list[str] = []

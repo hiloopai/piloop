@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.contribution import collect, contributions_of, installed as installed_contributions
+from piloop.plugins.contribution import provided_routers
 from piloop.plugins.lineage.contract import (
     LINEAGE,
     Graph,
@@ -206,7 +206,7 @@ def test_the_route_answers_the_graph_of_the_instance_that_the_campaign_uses(
 
 @pytest.mark.usefixtures('bracket')
 def test_every_provider_shares_the_route_which_is_mounted_and_documented_once() -> None:
-    routers = collect(contributions_of(installed_contributions()), ()).routers
+    routers = provided_routers()
     found = [r.path for router in routers for r in router.routes if isinstance(r, APIRoute) and r.path == PATH]
     assert found == [PATH]
     lineage = openapi()['paths']

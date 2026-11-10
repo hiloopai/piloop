@@ -70,7 +70,7 @@ from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
-from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.contribution import provided_routers
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.executor.kit.leases import Timing
 from piloop.plugins.executor.kit.relay import Shipped
@@ -842,7 +842,7 @@ def serving_api(
     listening = None if listener is None else url(listener)
     answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=listening)
     api = Handlers(db, cfg, answers, disk(cfg.home))
-    routers = collect(contributions_of(installed()), ()).routers
+    routers = provided_routers()
     servers = [Server(with_api(app(tokens, network, routers), api), each) for each in listeners]
     for server in servers:
         server.start()

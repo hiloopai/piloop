@@ -32,11 +32,13 @@ from piloop.plugins.executor.contract import (
     AgentKey,
     Capacity,
     ExecutorConfig,
+    ExecutorRoutes,
     Host,
     Job,
     Key,
     LeftJob,
     Prompt,
+    RouteHost,
 )
 from piloop.plugins.executor.kit import jobs, scaling
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, counted
@@ -111,31 +113,40 @@ class Workers(ExecutorConfig):
             raise ValueError('renew_seconds < grace_seconds < toleration_seconds - 2 * renew_seconds')
         return self
 
+    def timing(self) -> Timing:
+        """Its timings, as the leases keep them."""
+        return Timing(
+            self.renew_seconds, self.grace_seconds, self.toleration_seconds, self.report_tries, self.slack_seconds
+        )
+
     def open(self, host: Host) -> WorkersExecutor:
         return WorkersExecutor(host, self)
+
+    def routes(self, host: RouteHost) -> ExecutorRoutes:
+        """The lease routes (``remote.lease_routes``) on leases of their own: they share only the database.
+
+        Its first transfers are asked for there and built by the daemon (``FirstTransferBuilds``), and its relayed
+        calls fork from a template of the process (``Forks``), which ``close`` ends.
+        """
+        leases = Leases(host.db, host.results, host.cas, self.timing(), self.pools, host.secrets)
+        send = FirstTransfers(host.db, host.cas, host.records, self.first_transfer_seconds)
+        forks = Forks(host.home, self.relayed_calls) if FORKED else None
+        cli = Runner(host.db, host.home, host.repos, processes if forks is None else forks)
+        router = executor_router(lease_routes(leases, host.db.watching, host.cas, send.send, cli))
+        return ExecutorRoutes(router, lambda: None if forks is None else forks.close())
 
 
 class WorkersExecutor:
     """``Executor``: every job on a lease (``piloop.plugins.executor.kit.leases``), run by the worker of this process."""
 
     def __init__(self, host: Host, config: Workers) -> None:
-        timing = Timing(
-            config.renew_seconds,
-            config.grace_seconds,
-            config.toleration_seconds,
-            config.report_tries,
-            config.slack_seconds,
-        )
+        timing = config.timing()
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
-        self._watching = host.db.watching
-        self._cas = host.cas
-        self._send = FirstTransfers(host.db, host.cas, host.records, config.first_transfer_seconds)
-        """What the ``send`` route does: versions from the repo of record, into the CAS."""
         self._builds = FirstTransferBuilds(host.db, host.cas, host.records, host.tracer)
         """Builds the first transfers that ``send`` asks for."""
         self._forks = Forks(host.home, config.relayed_calls) if FORKED else None
         self._cli = Runner(host.db, host.home, host.repos, processes if self._forks is None else self._forks)
-        """What the ``cli`` route does: an agent's relayed call, run here."""
+        """Runs the relayed calls of the agents of this worker whose runtime sees none of this home."""
         local = Local(self.leases, SERVE)
         site = jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve)
         self.worker = Worker(
@@ -203,16 +214,13 @@ class WorkersExecutor:
         return frozenset({LeaseWorkerJoined, LeaseWorkerRelieved})
 
     def contribution(self) -> Contribution:
-        """Its upkeep, the builds of first transfers, and its lease routes.
+        """Its upkeep, and the builds of the first transfers that the lease routes ask for (``Workers.routes``).
 
-        The upkeep wakes on what the scaler of the provisioned pools acts on (``scaling.WAKES``). Workers on other
-        machines call the lease routes (``remote.lease_routes``, ``piloop worker``).
+        The upkeep wakes on what the scaler of the provisioned pools acts on (``scaling.WAKES``).
         """
         wakes = frozenset(t.model for t in scaling.WAKES)
-        routes = lease_routes(self.leases, self._watching, self._cas, self._send.send, self._cli)
         return Contribution(
-            consumers=(Consumer('executor', wakes, self._upkeep, Phase.UPKEEP), self._builds.consumer()),
-            router=executor_router(routes),
+            consumers=(Consumer('executor', wakes, self._upkeep, Phase.UPKEEP), self._builds.consumer())
         )
 
     def _upkeep(self, turn: Turn) -> datetime | None:
@@ -242,7 +250,7 @@ class WorkersExecutor:
         self.scaler.join(self.leases.timing.renew)  # the next daemon process lists the instances again
 
     def close(self) -> None:
-        """End the template of the relayed calls (``Forks``). The worker's threads end with the daemon process."""
+        """End the template of its worker's relayed calls (``Forks``). The worker's threads end with the daemon process."""
         if self._forks is not None:
             self._forks.close()
 

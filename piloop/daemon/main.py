@@ -7,7 +7,7 @@ from functools import partial
 from types import FrameType
 
 from piloop.actor import System
-from piloop.daemon.api import Handlers, daemon_state, with_api
+from piloop.daemon.api import daemon_state
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
@@ -18,6 +18,7 @@ from piloop.daemon.serve import (
     running_pid,
     serve_argv,
 )
+from piloop.daemon.served import Served
 from piloop.db import terms
 from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import schemas
@@ -31,7 +32,7 @@ from piloop.db.session import (
     write_transaction,
 )
 from piloop.db.triggers.changelog import COMMENT_KINDS
-from piloop.net.server import GRACE_SECONDS, Server, app, local_listener, url
+from piloop.net.server import GRACE_SECONDS, Server, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
@@ -143,6 +144,8 @@ class Daemon:
                 network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
             )
             self._servers: list[Server] = []
+            self._served: Served | None = None
+            """What the servers serve the API with, once they serve."""
             self._cas = cas.CAS.selected(cfg.providers).open(cfg.home)
             try:  # after the CAS opens: a revision may move data into it
                 self._backup = migrate(
@@ -251,10 +254,10 @@ class Daemon:
             write_transaction(s)
             term = terms.listening(s, self._epoch, listen)
             s.commit()
-        api = Handlers(self.db, self._cfg, daemon_state(term), self.controller.cas)
-        routers = self.scheduler.contributions.routers
-        # one app for each server: a server's shutdown ends the long-polls of its own app
-        self._servers = [Server(with_api(app(self._tokens, self.network, routers), api), each) for each in listeners]
+        self._served = Served(
+            self.db, self._cfg, self._tokens, self.network, self.tracer, self.controller.cas, daemon_state(term)
+        )
+        self._servers = [Server(self._served.app(), each) for each in listeners]
         for server in self._servers:
             server.start()
         if listener is not None:
@@ -288,6 +291,8 @@ class Daemon:
             for server in self._servers:
                 server.close()
             self._cfg.socket_file.unlink(missing_ok=True)
+            if self._served is not None:
+                self._served.close()
         self.controller.close()
         self.tracer.shutdown()
         self.db.close()

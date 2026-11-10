@@ -23,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, ClassVar, Final, Literal, NewType, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal, NewType, Protocol, Self
 
 from covalence import Cid
 from pydantic import (
@@ -57,6 +57,9 @@ from piloop.plugins.runtime.contract import AgentExit, AgentStart, Handle, Runti
 from piloop.plugins.secrets.contract import SecretsProvider, values
 from piloop.plugins.vcs.contract import VCS, Repository, Transfer, Unsaved, Vcs
 from piloop.store.tree import Materialised
+
+if TYPE_CHECKING:  # a command that reads a contract loads no web framework (``tests/cli/test_imports.py``)
+    from fastapi import APIRouter
 
 
 def _relative(place: str) -> str:
@@ -647,6 +650,33 @@ class Host:
     """The home's secrets: an agent's job gets the values of its ``AgentJob.secrets`` at its start (``values``)."""
 
 
+@dataclass(frozen=True)
+class RouteHost:
+    """What piloop gives an executor's routes (``ExecutorConfig.routes``), in each process that serves the API.
+
+    It is ``Host`` without what only the daemon runs jobs with: a route reads and writes the database, never the memory
+    of the daemon's executor.
+    """
+
+    db: Database
+    results: Results
+    tracer: Tracer
+    home: Path
+    cas: Cas
+    repos: Callable[[RepoId], Path]
+    records: Callable[[RepoId], Repository]
+    secrets: SecretsProvider
+
+
+@dataclass(frozen=True)
+class ExecutorRoutes:
+    """What an executor's workers on other machines call (``piloop.net.server.executor_router``), and what ends them."""
+
+    router: APIRouter
+    close: Callable[[], None]
+    """Releases what the routes hold, once no server serves them."""
+
+
 @dataclass(frozen=True, init=False)
 class Capacity:
     """How many more jobs of each kind an executor can take now: its free slots. None: no bound."""
@@ -667,8 +697,8 @@ class Capacity:
 class Executor[C: ExecutorConfig](Contributes, Protocol):
     """Runs the jobs that piloop submits, and reports their results through ``Host.results``.
 
-    Its housekeeping is a consumer of its ``contribution``, and what its workers on other machines call is its router
-    (``piloop.net.server.executor_router``).
+    Its housekeeping is a consumer of its ``contribution``. What its workers on other machines call is not its own:
+    each process that serves the API builds those routes from the config (``ExecutorConfig.routes``).
 
     The daemon calls it from its threads; an executor makes its methods safe for that.
     """
@@ -738,6 +768,13 @@ class ExecutorConfig(Parameters, ABC):
     @abstractmethod
     def open(self, host: Host) -> Executor[Self]:
         """Make the executor. The daemon calls it once, when it starts."""
+
+    def routes(self, host: RouteHost) -> ExecutorRoutes | None:
+        """Make the routes of its workers on other machines. Each process that serves the API calls it once.
+
+        None, by default: an executor without workers elsewhere serves no routes.
+        """
+        return None
 
 
 EXECUTORS = Capability('executor', ExecutorConfig, table=One(Scope.HOME, default='workers'))

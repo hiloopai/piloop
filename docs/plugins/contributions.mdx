@@ -114,16 +114,15 @@ TRIAGE = SkillPart('piloop-operate', 350, files(__package__) / 'triage.md')
 
 ## Routes and consumers
 
-A provider that implements `contribution()` adds, while the daemon runs:
+A provider that implements `contribution()` adds consumers while the daemon runs: jobs of the daemon's loop. A
+consumer runs in the next turn after a new event of a kind that it wakes on, and when the time that it returned comes.
+It reads the tables, not a queue of its own. Its `Phase` says when it runs in a turn: `CONFIGURE`, `UPKEEP`,
+`IN_FLIGHT`, `OBSERVE` or `PLAN`, in that order. The daemon asks each provider that it opens, such as the archiver,
+once. A consumer name that is taken already stops the daemon.
 
-- **Consumers**: jobs of the daemon's loop. A consumer runs in the next turn after a new event of a kind that it wakes
-  on, and when the time that it returned comes. It reads the tables, not a queue of its own. Its `Phase` says when it
-  runs in a turn: `CONFIGURE`, `UPKEEP`, `IN_FLIGHT`, `OBSERVE` or `PLAN`, in that order.
-- **A router**: routes of the daemon's server, next to the API's. A [network](/plugins/infrastructure#networks) says
-  who may call them.
-
-The daemon asks each provider that it opens, such as the executor, once. Each installed provider of a capability that a
-campaign selects, such as its VCS, contributes once, built with its defaults. A consumer name or a route that is taken already
-stops the daemon.
+A provider that implements `routes()` adds a router: routes of the daemon's API, next to piloop's own. A
+[network](/plugins/infrastructure#networks) says who may call them. Each installed provider of a capability that a
+campaign selects serves its routes, built with its defaults. A route reads the database and its request only: every
+process that serves the API builds it. A route that is taken already stops the daemon.
 
 <ContractContribution />

@@ -19,7 +19,7 @@ from piloop.plugins.host import (
 from piloop.plugins.host import MissingProvider, Provider, PythonSource, ContractBroken
 from piloop.plugins.host import Live
 from piloop.plugins.host import Entry, Ref, Naming
-from piloop.plugins.contribution import Contribution, Contributes, Lifecycle, Leaving
+from piloop.plugins.contribution import Contribution, Contributes, Lifecycle, Leaving, Serves
 from piloop.daemon.loop import Consumer, Phase, Turn
 
 from piloop.plugins.runtime.contract import RUNTIMES
@@ -147,7 +147,7 @@ from piloop.plugins.archive.contract import Restored, Summary, CampaignArchived
 from piloop.ids import TargetKind, TargetRef
 from piloop.store.tree import Materialised, Copy
 from piloop.plugins.archive.local import LocalArchive
-from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
+from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, ExecutorRoutes, Host, RouteHost
 from piloop.plugins.executor.contract import Results, Settled
 from piloop.plugins.executor.contract import Job, AgentJob, LeftJob, Resume
 from piloop.plugins.executor.contract import Report, AgentReport

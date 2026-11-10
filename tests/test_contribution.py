@@ -1,8 +1,7 @@
 """Contributions: what a provider that the daemon opened, or an installed package, adds to the kernel."""
 
 import re
-from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import Future
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from importlib.metadata import EntryPoint
 from pathlib import Path
@@ -13,7 +12,6 @@ import httpx2 as httpx
 import pytest
 from fastapi import APIRouter
 from pydantic import BaseModel
-from pytest_mock import MockerFixture
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
@@ -39,7 +37,7 @@ from piloop.plugins.archive.local import LocalArchive
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.optimization import api as optimization_api
-from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, collect, contributions_of, machinery
+from piloop.plugins.contribution import Contribution, collect, contributions_of, provided_routers
 from piloop.plugins.escalation.contract import ESCALATIONS
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.contract import JOB_KINDS, JOBS, Applying, Control, Job, JobKind, Report, Site
@@ -49,10 +47,9 @@ from piloop.plugins.host import PluginError
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https
-from piloop.plugins.runtime.contract import make_runtime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.settings import AgentSettings, DaemonSettings, Settings
+from piloop.settings import Settings
 from tests.conftest import answering, bare_config, disk, forget_loaded, install_plugins, serving_api
 from tests.fixtures.route_plugin import Greeting
 from tests.net.test_api import token
@@ -101,35 +98,6 @@ def test_a_consumer_name_that_the_daemon_or_another_contribution_has_is_refused(
         collect(contributions_of([Archiver(), Archiver()]), [])
 
 
-def test_the_machinery_of_a_capability_adds_no_routes(db: Database, tmp_path: Path, mocker: MockerFixture) -> None:
-    """The API's document lists the routes of providers without a daemon, so only a provider adds routes."""
-    controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
-    host = DaemonHost(
-        db,
-        Tracer(None),
-        tmp_path,
-        controller,
-        make_runtime,
-        idle_name,
-        DaemonSettings(),
-        AgentSettings(),
-        {},
-        idle_thread,
-        {},
-    )
-    mocker.patch.object(CONTRIBUTORS, 'loaded', return_value={'routed': lambda _: Contribution(router=APIRouter())})
-    with pytest.raises(PluginError, match='the machinery of routed adds routes: only a provider adds routes'):
-        machinery(host)
-
-
-def idle_name(_name: str) -> None:
-    return None
-
-
-def idle_thread(_body: Callable[[], None]) -> Future[None]:
-    raise AssertionError('the machinery starts no thread here')
-
-
 class Ask(BaseModel):
     pass
 
@@ -166,8 +134,8 @@ def notes() -> list[str]:
 
 
 class Notes(Structured):
-    def contribution(self) -> Contribution:
-        return Contribution(router=NOTES)
+    def routes(self) -> APIRouter:
+        return NOTES
 
 
 class Picky(Notes):
@@ -185,11 +153,9 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_plugins(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', ESCALATIONS.group)])
-    controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
-    routers = Scheduler(db, controller, Tracer(None), tmp_path).contributions.routers
-    assert routers[1:] == (optimization_api.ROUTES, NOTES, spend_api.router, lineage_api.router), (
-        "after the executor's: the campaign types', the escalation policies', the fact sources' and the lineage's, in"
-        ' registry order'
+    routers = provided_routers()
+    assert routers == (optimization_api.ROUTES, NOTES, spend_api.router, lineage_api.router), (
+        "the campaign types', the escalation policies', the fact sources' and the lineage's, in registry order"
     )
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
@@ -200,13 +166,13 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
 
 
 @pytest.mark.usefixtures('forgets')
-def test_a_provider_that_contributes_and_cannot_be_built_with_its_defaults_is_refused(
+def test_a_provider_that_serves_and_cannot_be_built_with_its_defaults_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_plugins(monkeypatch, [EntryPoint('picky', f'{__name__}:Picky', ESCALATIONS.group)])
     with pytest.raises(
         PluginError,
-        match="^the escalation policy 'picky' contributes, and cannot be built with its defaults: folder: Field required$",
+        match="^the escalation policy 'picky' serves routes, and cannot be built with its defaults: folder: Field required$",
     ):
         contribution.installed()
 

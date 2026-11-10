@@ -1,9 +1,9 @@
-"""What a provider or a capability adds to core while the daemon runs: its ``Contribution``.
+"""What a provider or a capability adds to core: the daemon's ``Contribution``, and the routes of what ``Serves``.
 
 The daemon asks each provider that it opened once, in the order that it opened them, then each capability that runs
-machinery of its own (``CONTRIBUTORS``), then each installed provider of a capability that a campaign chooses, built
-with its defaults (``installed``). It hands the result to its loop and its server (``collect``). What a package adds
-before anything opens, it declares in a ``Slot`` (``piloop.plugins.host``).
+machinery of its own (``CONTRIBUTORS``). It hands their consumers to its loop (``collect``). A provider's routes are not
+the daemon's: each process that serves the API mounts those of each installed provider that ``Serves``, built with its
+defaults (``provided_routers``). What a package adds before anything opens, it declares in a ``Slot`` (``piloop.plugins.host``).
 
 Inspiration: Backstage's backend plugins, which register their routers, scheduled tasks and startup and shutdown hooks
 with the core services.
@@ -91,9 +91,6 @@ class Contribution:
     consumers: tuple[Consumer, ...] = ()
     """Jobs of the daemon's loop. Each names its ``Phase``: within one, a turn runs them in the order of their
     contributions."""
-    router: APIRouter | None = None
-    """Routes of the daemon's server, beside the API's. A route of a method and path that is taken is refused. Only a
-    provider adds routes: the API's document lists them without a daemon."""
     lifecycle: Lifecycle | None = None
     """What it does when the daemon starts and stops."""
 
@@ -107,17 +104,30 @@ class Contributes(Protocol):
         ...
 
 
+@runtime_checkable
+class Serves(Protocol):
+    """A provider whose routes the daemon's API serves, beside core's: a campaign type's, say.
+
+    Each process that serves the API builds the provider with its defaults and mounts its routes (``provided_routers``), so a
+    route reads only the database and its request, never a daemon's memory. A route of a method and path that is taken
+    is refused. The API's document lists them without a daemon.
+    """
+
+    def routes(self) -> APIRouter:
+        """Its routes. Providers that share one router, the instances of a capability, return the same object."""
+        ...
+
+
 @dataclass(frozen=True)
 class Contributions:
     """Every contribution of a daemon process, in the order that it opened their providers."""
 
     consumers: tuple[Consumer, ...] = ()
-    routers: tuple[APIRouter, ...] = ()
     lifecycles: tuple[Lifecycle, ...] = ()
 
 
 type Machinery = Callable[[DaemonHost], Contribution]
-"""What a capability runs itself, beside its providers: the reader of its providers, say. It adds no routes."""
+"""What a capability runs itself, beside its providers: the reader of its providers, say."""
 
 
 CONTRIBUTORS: Slot[Machinery] = Slot('contributors', TypeAdapter(Machinery), 'contributor')
@@ -125,27 +135,40 @@ CONTRIBUTORS: Slot[Machinery] = Slot('contributors', TypeAdapter(Machinery), 'co
 by the provider's name: entry points ``piloop.contributors``."""
 
 
-def installed() -> tuple[Contributes, ...]:
-    """Each installed provider that ``Contributes`` of a capability that a campaign chooses, or that no table chooses.
+def provided_routers() -> tuple[APIRouter, ...]:
+    """The routes of each installed provider that ``Serves`` (``installed``): each router once, in registry order.
+
+    Raises:
+        PluginError: A provider that serves cannot be built with its defaults. The message names it.
+    """
+    routers: list[APIRouter] = []
+    for provider in installed():
+        if (router := provider.routes()) not in routers:
+            routers.append(router)
+    return tuple(routers)
+
+
+def installed() -> tuple[Serves, ...]:
+    """Each installed provider that ``Serves`` of a capability that a campaign chooses, or that no table chooses.
 
     Each is built with its defaults, in registry order: by capability, then by provider.
 
     Raises:
-        PluginError: A provider that contributes cannot be built with its defaults. The message names it.
+        PluginError: A provider that serves cannot be built with its defaults. The message names it.
     """
-    found: list[Contributes] = []
+    found: list[Serves] = []
     for capability in declared():
         if capability.table is not None and capability.table.scope is not Scope.CAMPAIGN:
             continue
         for name, provider in capability.providers().items():
-            if not issubclass(provider.model, Contributes):
+            if not issubclass(provider.model, Serves):
                 continue
             try:
                 built = provider.model()
             except ValidationError as e:
                 errors = '; '.join(f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors())
                 raise PluginError(
-                    f'the {capability.noun} {name!r} contributes, and cannot be built with its defaults: {errors}'
+                    f'the {capability.noun} {name!r} serves routes, and cannot be built with its defaults: {errors}'
                 ) from e
             found.append(built)
     return tuple(found)
@@ -159,34 +182,22 @@ def contributions_of(providers: Sequence[Contributes]) -> list[tuple[str, Contri
 def collect(contributions: Sequence[tuple[str, Contribution]], taken: Sequence[str]) -> Contributions:
     """Join ``contributions``, by their owners' names, and refuse a consumer name that ``taken`` or another has.
 
-    A router that several contribute, such as a capability's route that its providers share, is joined once.
-
     Raises:
-        PluginError: Two consumers have one name, or a capability's machinery adds routes. The message names both sides.
+        PluginError: Two consumers have one name. The message names both sides.
     """
     owners = dict.fromkeys(taken, 'the daemon')
     consumers: list[Consumer] = []
-    routers: list[APIRouter] = []
     lifecycles: list[Lifecycle] = []
     for owner, contribution in contributions:
-        if (router := contribution.router) is not None and router not in routers:
-            routers.append(router)
         lifecycles += [contribution.lifecycle] if contribution.lifecycle is not None else []
         for consumer in contribution.consumers:
             if (other := owners.get(consumer.name)) is not None:
                 raise PluginError(f'{owner} contributes the consumer {consumer.name!r}, which {other} has already')
             owners[consumer.name] = owner
             consumers.append(consumer)
-    return Contributions(tuple(consumers), tuple(routers), tuple(lifecycles))
+    return Contributions(tuple(consumers), tuple(lifecycles))
 
 
 def machinery(host: DaemonHost) -> list[tuple[str, Contribution]]:
-    """Ask the machinery of each capability (``CONTRIBUTORS``) for its contribution, by the capability's name.
-
-    Raises:
-        PluginError: One adds routes.
-    """
-    found = [(name, make(host)) for name, make in CONTRIBUTORS.loaded().items()]
-    if routed := [name for name, contribution in found if contribution.router is not None]:
-        raise PluginError(f'the machinery of {", ".join(routed)} adds routes: only a provider adds routes')
-    return found
+    """Ask the machinery of each capability (``CONTRIBUTORS``) for its contribution, by the capability's name."""
+    return [(name, make(host)) for name, make in CONTRIBUTORS.loaded().items()]

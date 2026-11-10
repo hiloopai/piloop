@@ -28,7 +28,6 @@ from piloop.plugins.contribution import (
     Leaving,
     collect,
     contributions_of,
-    installed,
     machinery,
 )
 from piloop.plugins.host import Plugins
@@ -93,12 +92,9 @@ class Scheduler:
         opened = (controller.executor,) if archiver is None else (controller.executor, archiver)
         self._home, self._home_check = home, daemon.home_check
         own = Contribution(consumers=(Consumer(HOME_CHECK, frozenset(), self._check_home, Phase.UPKEEP),))
-        self.contributions = collect(
-            [('the daemon', own), *contributions_of(opened), *machinery(host), *contributions_of(installed())], []
-        )
+        self.contributions = collect([('the daemon', own), *contributions_of(opened), *machinery(host)], [])
         """What the daemon, the providers and the capabilities add: the daemon's home check, the executor and the
-        archiver that the daemon opened, then the machinery of each capability, then each installed provider that a
-        campaign may choose."""
+        archiver that the daemon opened, then the machinery of each capability."""
         self.loop = Loop(db, self.consumers(), now, daemon.feed_page)
 
     def consumers(self) -> tuple[Consumer, ...]:

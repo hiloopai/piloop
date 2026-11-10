@@ -79,7 +79,7 @@ from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
-from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.contribution import provided_routers
 from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.lineage.wire import LineageClient
@@ -193,7 +193,7 @@ def test_the_server_serves_the_openapi_document_of_its_routes(cfg: Settings, db:
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         assert client._http.get(OPENAPI).json() == openapi()
     paths = openapi()['paths']
-    routers = (*ROUTERS, *collect(contributions_of(installed()), ()).routers)
+    routers = (*ROUTERS, *provided_routers())
     assert isinstance(paths, dict) and sorted(paths) == sorted(
         {r.path for routes in routers for r in routes.routes if isinstance(r, APIRoute)}
     )

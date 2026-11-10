@@ -1,9 +1,9 @@
-"""An escalation policy that contributes an authenticated route, with ``piloop.capabilities`` alone, as a package would."""
+"""An escalation policy that serves an authenticated route, with ``piloop.capabilities`` alone, as a package would."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from piloop.capabilities import REFUSALS_DOCUMENTED, Acting, Addressed, Contribution, Structured, actor_access, reader
+from piloop.capabilities import REFUSALS_DOCUMENTED, Acting, Addressed, Structured, actor_access, reader
 
 
 class Greeting(BaseModel):
@@ -22,5 +22,5 @@ def greeting(me: Acting, campaign: Addressed) -> Greeting:
 class Greeter(Structured):
     """``structured``, and a route that greets the caller by the actor it signs as."""
 
-    def contribution(self) -> Contribution:
-        return Contribution(router=router)
+    def routes(self) -> APIRouter:
+        return router
