@@ -13,6 +13,7 @@ table: ``piloop inbox wait`` blocks until ``news`` returns something, so the orc
 import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Final
 
 from sqlalchemy import ColumnElement, ScalarSelect, Select, case, exists, literal, select
@@ -445,12 +446,16 @@ def thread(s: Session, root: Comment) -> list[tuple[Comment, Relation]]:
     return [(c, Relation(r)) for c, r in rows]
 
 
+@lru_cache(maxsize=16)
 def campaign_of(target_kind: Column[TargetKind], target_id: Column[int]) -> ColumnElement[int | None]:
     """Return the campaign that the target of a comment or event belongs to.
 
     A ``comment`` target is resolved through that comment's target, and through one more comment. That covers every
     reply, because ``reply`` keeps threads flat: a reply is on its root, and the event of a reply is on the reply.
     Deeper comments have no campaign.
+
+    The expression is built once for each pair of columns: its 21 subqueries took about 3 ms to build, more than the
+    read that uses it. An expression never changes, so statements and threads share it.
     """
     return case(*_owner_branches(target_kind, target_id, comments=2))
 

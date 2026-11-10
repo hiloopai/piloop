@@ -113,6 +113,13 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         ), "each campaign's escalation events and none of the other's (campaign_of serves events too)"
 
 
+def test_the_campaign_of_a_target_is_one_expression_for_each_pair_of_columns_that_every_read_shares() -> None:
+    """Its 21 subqueries took longer to build than the read that uses them."""
+    comments = inbox.campaign_of(Comment.target_kind, Comment.target_id)
+    assert inbox.campaign_of(Comment.target_kind, Comment.target_id) is comments
+    assert inbox.campaign_of(Event.target_kind, Event.target_id) is not comments
+
+
 def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, campaign: Campaign) -> None:
     on_campaign = dict(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='pi')
     with db.session() as s:
