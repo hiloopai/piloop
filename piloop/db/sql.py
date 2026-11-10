@@ -84,12 +84,16 @@ MACHINERY = frozenset({MIGRATION_TABLE, ACTOR_TABLE})
 """Tables of no schema that ``piloop sql`` cannot write. Each schema names its own too (``Schema.protected``)."""
 WRITES = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
 BUSY_TIMEOUT_MS = 5000
+JOURNAL_SIZE_LIMIT = 64 * 2**20
+"""The bytes that the WAL file keeps once a checkpoint reset it: what readers in many processes made it grow to is given
+back to the disk."""
 CONNECTION_PRAGMAS = (
     f'busy_timeout={BUSY_TIMEOUT_MS}',
     'journal_mode=WAL',
     'foreign_keys=ON',
     'synchronous=NORMAL',
     'temp_store=MEMORY',
+    f'journal_size_limit={JOURNAL_SIZE_LIMIT}',
 )
 """The connection settings. Every client uses the same ones (``piloop.db.session``, and ``connect`` here).
 
