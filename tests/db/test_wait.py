@@ -338,6 +338,7 @@ def test_a_wake_while_the_waiter_reads_is_kept_for_its_next_wait(db: Database, c
 
 def test_two_wakes_before_the_waiters_loop_runs_resolve_its_wait_once(db: Database) -> None:
     async def waits() -> None:
+        await ringing(db)  # else the doorbell's first wake can come before the wait, which then never awaits
         with db.watching([]) as watch:
             waiting = asyncio.create_task(watch.changed(30))
             await asyncio.sleep(0)  # it waits on its future now

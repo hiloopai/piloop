@@ -5,9 +5,11 @@ to wrap up and ends it when its campaign stops, someone cancels it, its role tim
 (``wind_down``).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Final
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -31,6 +33,7 @@ from piloop.campaign.stop import (
     cancelled,
 )
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
+from piloop.db import feed
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.requests import pending
@@ -117,6 +120,10 @@ def steer_line(comment: Comment, chars: int) -> str:
     )
 
 
+PUSH_KINDS: Final = (f'comment.{PUSHED}', *AgentSessionRunning.kinds())
+"""The events that may give a running agent a comment to get: a message, and an agent that starts running."""
+
+
 def contribution(host: DaemonHost) -> Contribution:
     """The consumers ``prompts``, ``extensions`` and ``wind_down``, which act on the agents in flight."""
     agents = Agents(host)
@@ -138,6 +145,10 @@ class Agents:
         self._daemon, self._agents = host.daemon, host.agents
         self._prompted: set[int] = set()
         """The comments that this daemon process handed to the executor (``_push_comments``)."""
+        self._cursor: int | None = None
+        """The feed read so far for new messages and running agents (``_to_push``): None before the first push."""
+        self._refused = False
+        """The executor did not take a comment of the last push: the next one looks at every running agent."""
         self._extended: dict[AgentSessionId, float] = {}
         """The extensions in all that this daemon process handed to the executor, by agent (``extensions``)."""
 
@@ -145,10 +156,37 @@ class Agents:
         return self._host.planners[s.get_one(Campaign, campaign_id).type]
 
     def prompts(self, turn: Turn) -> datetime | None:
-        """Push the new comments (``_push_comments``). One that the executor did not take is tried again soon."""
-        return turn.now + self._daemon.prompt_retry if self._push_comments() else None
+        """Push the new comments (``_push_comments``).
 
-    def _push_comments(self) -> list[int]:
+        One that the executor did not take is tried again soon. A feed with more to read is read again at once.
+        """
+        refused, more = self._push_comments()
+        if refused:
+            return turn.now + self._daemon.prompt_retry
+        return turn.now if more else None
+
+    def _to_push(self, s: Session) -> tuple[Sequence[AgentSession], bool]:
+        """The running agents that may have comments to get, and whether the feed has more to read now.
+
+        A comment to push is a message (``PUSHED``): it can be for any running agent, on itself or on what steers it.
+        So a new message makes every running agent look. An agent that starts running looks too. A note, the bulk of
+        the comments, makes none look: the cost of a turn grows with the messages, not with the agents times the
+        comments. The first push of this process, and one after a push that the executor refused, look at every running
+        agent: what an earlier process handed over has no outcome yet, or the executor did not take it.
+        """
+        running = select(AgentSession).where(AgentSession.state == AgentSessionState.RUNNING).order_by(AgentSession.id)
+        if self._cursor is None or self._refused:
+            self._cursor = feed.newest(s)  # before the read of the agents: a later message is read after it
+            return s.scalars(running).all(), False
+        page = feed.after(s, self._cursor, where=[Event.kind.in_(PUSH_KINDS)], limit=self._daemon.feed_page)
+        self._cursor = page.next
+        kinds = s.scalars(select(Event.kind).where(Event.id.in_(page.ids))).all()
+        if f'comment.{PUSHED}' in kinds:
+            return s.scalars(running).all(), page.more
+        started = select(Event.target_id).where(Event.id.in_(page.ids), Event.kind.in_(AgentSessionRunning.kinds()))
+        return s.scalars(running.where(AgentSession.id.in_(started))).all(), page.more
+
+    def _push_comments(self) -> tuple[list[int], bool]:
         """Hand each running agent's executor the comments that the agent has no outcome for (``Executor.prompt``).
 
         The events table records each outcome: ``PromptOutcome`` events on the agent, with the comment id. A
@@ -156,19 +194,19 @@ class Agents:
         again, and the executor answers it as it did the first time. An agent whose row is still ``starting`` (brief
         composed, process not yet up) gets the comments once it runs. A failed delivery is recorded and not retried: the
         comment is in the brief of the idea's next run anyway, and the agent would fail the same way each time.
-        A push that sends something makes one span. Returns the comments that the executor did not take, to try again.
+        A push that sends something makes one span. Returns the comments that the executor did not take, to try again,
+        and whether the feed has more to read now (``_to_push``).
         """
         pending: list[tuple[AgentSessionId, Prompt]] = []
         with self._db.session() as s:
-            running = s.scalars(
-                select(AgentSession).where(AgentSession.state == AgentSessionState.RUNNING).order_by(AgentSession.id)
-            ).all()
-            for w in running:
+            looking, more = self._to_push(s)
+            for w in looking:
                 unseen = [c for c in self._unseen(s, w) if c.id not in self._prompted]
                 pending += [(w.id, Prompt(c.id, steer_line(c, self._agents.steer_line_chars))) for c in unseen]
         refused: list[int] = []
+        self._refused = False
         if not pending:
-            return refused
+            return refused, more
         with self._tracer.span('piloop.push', comments=len(pending)):
             for agent_session_id, prompt in pending:
                 self._prompted.add(prompt.id)
@@ -180,7 +218,8 @@ class Agents:
                     self._tracer.event(
                         'comment.unsent', comment=prompt.id, agent_session=agent_session_id, error=str(e)
                     )
-        return refused
+        self._refused = bool(refused)
+        return refused, more
 
     def extensions(self, turn: Turn) -> datetime | None:
         """Hand each running agent's executor its extensions in all (``Executor.extend``), once per total and process.

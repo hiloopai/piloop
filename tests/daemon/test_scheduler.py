@@ -33,6 +33,7 @@ from piloop.actor import Agent, System
 from piloop.agents.results import (
     AgentEnded,
     AgentSessionFinished,
+    AgentSessionRunning,
     CampaignResults,
     PromptOutcome,
     StartupAnomaly,
@@ -47,7 +48,7 @@ from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Turn
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
-from piloop.db.events import has, in_order, latest, payload_of
+from piloop.db.events import emit, has, in_order, latest, payload_of
 from piloop.db.models import (
     ENDED,
     OPTIMIZATION,
@@ -2090,8 +2091,9 @@ def test_messages_for_a_running_agent_go_to_its_executor_once_each_until_they_ha
     run_all(scheduler)
     assert len(executor.prompts) == 3, 'settled by the events: nothing is sent twice'
 
-    with db.session() as s:
+    with db.session() as s:  # as its executor's start does (``CampaignResults.started``)
         s.get_one(AgentSession, 2).state = AgentSessionState.RUNNING
+        emit(s, AgentSessionRunning(machine=None), TargetRef(TargetKind.AGENT_SESSION, 2), System.DAEMON)
         s.commit()
     run_all(scheduler)
     assert executor.prompts[-1][0] == 2 and executor.prompts[-1][1].id == waiting, (

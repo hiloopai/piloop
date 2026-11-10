@@ -5,16 +5,17 @@ import os
 import re
 import warnings
 from collections.abc import Iterator
+from concurrent.futures import Future
 from datetime import timedelta
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
 from covalence import Cas as Covalence
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from piloop.actor import System
-from piloop.agents.results import PromptOutcome
+from piloop.agents.results import AgentSessionRunning, PromptOutcome
 from piloop.campaign import ops
 from piloop.campaign.stop import CampaignClosed, left
 from piloop.cli import common, main as cli
@@ -40,13 +41,15 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.cas.contract import CAS
+from piloop.plugins.contribution import DaemonHost
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Capability, PluginError, compose
 from piloop.plugins.lineage.contract import LINEAGE
+from piloop.plugins.role.consumers import Agents
 from piloop.plugins.role.contract import ImplementerRole, Quiet, new_role
-from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig, RuntimeFactory
+from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig, RuntimeFactory, make_runtime
 from piloop.plugins.section.contract import SECTIONS
-from piloop.settings import Settings
+from piloop.settings import AgentSettings, DaemonSettings, Settings
 from tests.conftest import (
     AUDITOR,
     END_RUN,
@@ -561,3 +564,62 @@ def test_a_table_of_a_new_name_does_runs() -> None:
     with pytest.raises(ValueError, match=r'a role of your own does runs: set runs = true in \[plugins.role.mine\]'):
         new_role('mine', {})
     assert new_role('mine', {'runs': True}) is ImplementerRole
+
+
+def test_a_note_makes_no_agent_look_for_comments_and_a_message_or_a_start_makes_those_that_it_may_concern(
+    db: Database, tmp_path: Path
+) -> None:
+    """The comments that go to running agents are messages: a note, the bulk of the comments, costs one read of the
+    feed, whatever the number of agents. A message makes every running agent look; an agent that starts, itself."""
+    tracer = Tracer(None)
+    host = DaemonHost(
+        db,
+        tracer,
+        tmp_path,
+        RunController(db, tracer, tmp_path, executor=Workers()),
+        make_runtime,
+        lambda _name: None,
+        DaemonSettings(),
+        AgentSettings(),
+        {},
+        lambda _body: Future(),
+        {},
+    )
+    agents = Agents(host)
+    with db.session() as s:
+        s.add_all(AgentSession(kind=AUDITOR, state=AgentSessionState.RUNNING) for _ in range(4))
+        s.add(AgentSession(kind=AUDITOR, state=AgentSessionState.STARTING))
+        s.commit()
+    looked: list[str] = []
+
+    def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        if statement.startswith('SELECT comments.'):  # an agent's look for its comments (``_unseen``)
+            looked.append(statement)
+
+    def push() -> int:
+        looked.clear()
+        event.listen(db.engine, 'before_cursor_execute', counted)
+        try:
+            agents._push_comments()
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', counted)
+        return len(looked)
+
+    def comment(kind: CommentKind, on: int) -> None:
+        with db.session() as s:
+            s.add(Comment(target=TargetRef(TargetKind.AGENT_SESSION, on), author='human', kind=kind, body='hi'))
+            s.commit()
+
+    assert push() == 4, 'the first push of a process: every running agent'
+    comment(CommentKind.NOTE, 1)
+    assert push() == 0, 'a note: none'
+    comment(CommentKind.MESSAGE, 2)
+    assert push() == 4, 'a message: every running agent'
+    with db.session() as s:
+        [(_, outcome)] = in_order(s, PromptOutcome, Event.target == TargetRef(TargetKind.AGENT_SESSION, 2))
+        assert outcome.comment == 2, 'it went to its agent'
+        s.get_one(AgentSession, 5).state = AgentSessionState.RUNNING  # as its executor's start does
+        emit(s, AgentSessionRunning(machine=None), TargetRef(TargetKind.AGENT_SESSION, 5), System.DAEMON)
+        s.commit()
+    assert push() == 1, 'an agent that starts: itself'
+    assert push() == 0
