@@ -1017,3 +1017,85 @@ def test_a_heartbeat_that_changes_nothing_writes_nothing_and_the_lease_still_exp
     assert lease_row(db, lease_id).state in LIVE_LEASES
     leases.expire(expiry)
     assert lease_row(db, lease_id).state == LeaseState.EXPIRED, 'silent: it expires'
+
+
+def test_an_acquire_that_takes_nothing_new_writes_nothing_and_of_two_that_race_for_a_lease_one_takes_it(
+    db: Database, campaign: Campaign, tmp_path: Path, recorder: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each worker acquires on every turn. With a slack, one that gets no lease, or the lease of its request id again,
+    reads only. One that finds a queued lease takes it under the write lock, after it read everything again."""
+    leases = Leases(db, recorder, home_cas(db), Timing(renew=10, grace=50, toleration=300, slack=60), POOLS)
+    w1, w2 = Local(leases, 'w1'), Local(leases, 'w2')
+    join(leases, 'w1', ['process'])
+    join(leases, 'w2', ['process'])
+    assert w1.acquire(uuid4().hex, HOST) is NoLease.NOTHING, 'its first: the reason goes on its row'
+    statements: list[str] = []
+
+    def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        statements.append(statement)
+
+    def writes() -> int:
+        return sum(s.startswith('BEGIN IMMEDIATE') for s in statements)
+
+    event.listen(db.engine, 'before_cursor_execute', counted)
+    try:
+        assert w1.acquire(uuid4().hex, HOST) is NoLease.NOTHING and writes() == 0, 'nothing new: no write'
+        with db.session() as s:  # its seen_at older than the slack: due a write, whatever the answer
+            s.get_one(LeaseWorker, 'w1').seen_at = utcnow() - timedelta(seconds=61)
+            s.commit()
+        statements.clear()
+        assert w1.acquire(uuid4().hex, HOST) is NoLease.NOTHING and writes() == 1, 'it records the call'
+        assert worker_row(db, 'w1').seen_at > utcnow() - timedelta(seconds=5)
+        lease_id = queue(db, evaluation_job(db, campaign, tmp_path))
+        taken: list[Grant | NoLease] = []
+        raced = threading.Event()
+        write = leases_module.write_transaction
+
+        def racing(s: Session) -> None:  # w1 takes the lease between w2's read and w2's write
+            if not raced.is_set():
+                raced.set()
+                race = threading.Thread(target=lambda: taken.append(w1.acquire(uuid4().hex, HOST)))
+                race.start()
+                race.join()
+            write(s)
+
+        monkeypatch.setattr(leases_module, 'write_transaction', racing)
+        statements.clear()
+        assert w2.acquire(uuid4().hex, HOST) is NoLease.NOTHING, 'the second read it again under the lock'
+        [grant] = taken
+        assert isinstance(grant, Grant) and grant.lease == lease_id and lease_row(db, lease_id).worker == 'w1'
+        monkeypatch.setattr(leases_module, 'write_transaction', write)
+        request = uuid4().hex
+        again = w2.acquire(request, HOST)
+        assert again is NoLease.NOTHING
+        second = queue(db, evaluation_job_for_another_candidate(db, campaign, tmp_path))
+        first = w2.acquire(request, HOST)
+        assert isinstance(first, Grant) and first.lease == second
+        statements.clear()
+        assert w2.acquire(request, HOST) == first and writes() == 0, 'its request id again: the same grant, read'
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', counted)
+
+
+def test_a_request_id_sent_again_after_its_job_was_queued_again_gets_its_own_ended_lease_not_the_new_one(
+    db: Database, campaign: Campaign, tmp_path: Path, recorder: Recorder
+) -> None:
+    """A lease never goes back to ``queued``: a job queued again is a new lease, a new fence. A request id sent again
+    gets the lease that it took, which has ended, and the new one waits for any worker."""
+    leases = Leases(db, recorder, home_cas(db), Timing(renew=10, grace=50, toleration=300, slack=60), POOLS)
+    w1 = Local(leases, 'w1')
+    join(leases, 'w1', ['process'])
+    job = evaluation_job(db, campaign, tmp_path)
+    first = queue(db, job)
+    request = uuid4().hex
+    grant = w1.acquire(request, HOST)
+    assert isinstance(grant, Grant) and grant.lease == first
+    leases.lost(first, 'w1', 'its worker lost the job')
+    again = queue(db, job)  # as core submits a lost job again
+    assert again != first
+    resent = w1.acquire(request, HOST)
+    assert isinstance(resent, Grant) and resent.lease == first, 'its own lease, which ended: the next call says stale'
+    assert lease_row(db, first).state == LeaseState.EXPIRED
+    assert (lease_row(db, again).state, lease_row(db, again).worker) == (LeaseState.QUEUED, None), 'for any worker'
+    taken = w1.acquire(uuid4().hex, HOST)
+    assert isinstance(taken, Grant) and taken.lease == again

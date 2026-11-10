@@ -718,60 +718,82 @@ class Leases:
         leases is that order. ``host`` is the
         worker's sample now, which the gates read (``capacity.admits``). An acquire sent again with its request id gets
         the lease that it took, so a lost answer leaves no lease to expire.
+
+        Each worker acquires on every turn, and most acquires take nothing. With a slack (``Timing.slack``), the answer
+        is read first: one that grants nothing new, stores the reason that the row has already and changes nothing on
+        the worker's row (``_unheard``) takes no write lock. Else the write lock is taken and everything is read again
+        under it: of two workers that read one queued lease, the second finds it taken.
         """
+        now = utcnow()
         with self._db.session() as s:
+            if self.timing.slack:
+                with read_transaction(s):
+                    row = _registered(s, worker)
+                    found = self._choice(s, row, request_id, host)
+                    if self._unheard(row, host, now):
+                        if isinstance(found, NoLease) and found == row.no_lease:
+                            return found
+                        if isinstance(found, Lease) and found.acquire_request == request_id:
+                            return Grant.of(s, found)  # the lease of this request id, sent again
             write_transaction(s)
             row = _registered(s, worker)
             self._heard(s, row, host)
-            taken = select(Lease).where(Lease.worker == worker, Lease.acquire_request == request_id)
-            if (lease := s.scalars(taken).first()) is not None:
-                s.commit()
-                return Grant.of(s, lease)
-            if row.drained_at is not None:
-                row.no_lease = NoLease.DRAINING
-                s.commit()
-                return NoLease.DRAINING
-            pool = self.pools[row.pool]
-            counts = Counter(
-                s.scalars(select(Lease.kind).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES))).all()
-            )
-            running = counted(counts)
-            refused: list[NoLease] = []
-            for kind in kinds():
-                queued = select(Lease).where(Lease.kind == kind, Lease.state == LeaseState.QUEUED)
-                if kind != AGENT:
-                    queued = queued.where(Lease.runner.in_(row.runners))
-                lease = s.scalars(queued.order_by(Lease.id).limit(1)).first()
-                match lease, admits(pool, host, running, kind):
-                    case None, None:
-                        refused.append(NoLease.NOTHING)
-                    case None, NoLease.SLOTS if not _held_back(s, kind, row.runners):
-                        refused.append(NoLease.NOTHING)  # full slots hold back nothing when nothing waits
-                    case _, NoLease() as refusal:
-                        refused.append(refusal)
-                    case _:
-                        assert lease is not None  # the cases above take every other pair
-                        now, acquired = utcnow(), LeaseAcquired(lease=lease.id, worker=worker)
-                        transition(
-                            s,
-                            LEASE_STATES,
-                            lease.id,
-                            LeaseState.ACQUIRED,
-                            acquired,
-                            System.DAEMON,
-                            on=_target(self._cas, lease),
-                            worker=worker,
-                            acquired_at=now,
-                            acquire_request=request_id,
-                            renewed_at=now,
-                            expires_at=now + timedelta(seconds=self.timing.toleration),
-                        )
-                        row.no_lease = None
-                        s.commit()
-                        return Grant.of(s, lease)
-            reason = row.no_lease = min(refused, key=list(NoLease).index)
+            found = self._choice(s, row, request_id, host)
+            if isinstance(found, NoLease):
+                row.no_lease = found
+            elif found.acquire_request != request_id:  # a queued lease: the lease of the request id is its as it is
+                acquired = LeaseAcquired(lease=found.id, worker=worker)
+                transition(
+                    s,
+                    LEASE_STATES,
+                    found.id,
+                    LeaseState.ACQUIRED,
+                    acquired,
+                    System.DAEMON,
+                    on=_target(self._cas, found),
+                    worker=worker,
+                    acquired_at=now,
+                    acquire_request=request_id,
+                    renewed_at=now,
+                    expires_at=now + timedelta(seconds=self.timing.toleration),
+                )
+                row.no_lease = None
             s.commit()
-            return reason
+            return found if isinstance(found, NoLease) else Grant.of(s, found)
+
+    def _choice(self, s: Session, row: LeaseWorker, request_id: str, host: HostSample) -> Lease | NoLease:
+        """What an acquire of ``row``'s worker gets: the lease of ``request_id``, the queued lease to take, or why none.
+
+        It reads only: the caller takes the lease under the write lock. No lease ever goes back to ``queued``: a job
+        queued again is a new lease (``enqueue``), a new fence, which no request id has taken.
+        """
+        taken = select(Lease).where(Lease.worker == row.id, Lease.acquire_request == request_id)
+        if (lease := s.scalars(taken).first()) is not None:
+            return lease
+        if row.drained_at is not None:
+            return NoLease.DRAINING
+        pool = self.pools[row.pool]
+        counts = Counter(
+            s.scalars(select(Lease.kind).where(Lease.worker == row.id, Lease.state.in_(LIVE_LEASES))).all()
+        )
+        running = counted(counts)
+        refused: list[NoLease] = []
+        for kind in kinds():
+            queued = select(Lease).where(Lease.kind == kind, Lease.state == LeaseState.QUEUED)
+            if kind != AGENT:
+                queued = queued.where(Lease.runner.in_(row.runners))
+            lease = s.scalars(queued.order_by(Lease.id).limit(1)).first()
+            match lease, admits(pool, host, running, kind):
+                case None, None:
+                    refused.append(NoLease.NOTHING)
+                case None, NoLease.SLOTS if not _held_back(s, kind, row.runners):
+                    refused.append(NoLease.NOTHING)  # full slots hold back nothing when nothing waits
+                case _, NoLease() as refusal:
+                    refused.append(refusal)
+                case _:
+                    assert lease is not None  # the cases above take every other pair
+                    return lease
+        return min(refused, key=list(NoLease).index)
 
     def capacity(self) -> Capacity:
         """The free slots of the reachable workers that their pools admit now, less the queued leases.
