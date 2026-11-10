@@ -4,21 +4,19 @@ The run closes when its implementer ends, so the implementer slot is free while 
 ``claimed`` until its candidates are scored.
 """
 
-import json
 import math
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import ClassVar, Literal, assert_never
 
 from covalence import Cid
-from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, undefer
 
@@ -58,7 +56,6 @@ from piloop.db.models import (
     Campaign,
     Event,
     EventModel,
-    Limit,
     ReadBy,
     utcnow,
 )
@@ -81,7 +78,6 @@ from piloop.ids import (
 )
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
-from piloop.plugins import limits
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -129,7 +125,6 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
-    EXECUTORS,
     AgentKey,
     Executor,
     ExecutorConfig,
@@ -262,8 +257,6 @@ class RunController:
         """The artifacts of jobs: a campaign's repo of record, and its linked inputs in the CAS."""
         self._config = executor
         """The executor's ``[plugins.executor]``, as ``config.toml`` has it."""
-        self._limits: tuple[tuple[str, str, datetime], ...] = ()
-        """The limits that the executor has, as read: ``configure`` hands it the parameters when they change."""
         secrets = secrets if secrets is not None else SECRETS.selected({})
         results = CampaignResults(
             db,
@@ -292,30 +285,9 @@ class RunController:
         )
         self.executor: Executor[ExecutorConfig] = self._config.open(host)
         self.launcher = Launcher(db, tracer, home, self.executor)
-        self.configure()
         self._jobs: dict[int, EvaluationJob] = {}
         """The job of each evaluation that this daemon asked for, by its queue row, until the row goes: a lost one is
         submitted again. A row without one is another daemon's: a reap drops it, and what needs it asks again."""
-
-    def configure(self) -> None:
-        """Hand the executor its config with the live limits applied (``Executor.configure``), when one changed.
-
-        The daemon calls it on each pass, so a limit holds from the next one. Limits that its parameters refuse (a
-        ``config.toml`` that changed under them) leave the parameters as they were, and the event says why.
-        """
-        with self._db.session() as s:
-            rows = s.scalars(select(Limit).order_by(Limit.key)).all()
-        seen = tuple((r.key, json.dumps(r.value), r.at) for r in rows)
-        if seen == self._limits:
-            return
-        self._limits = seen
-        try:
-            config = limits.applied(self._config, rows, EXECUTORS.name)
-        except ValidationError as e:
-            self._tracer.event('limits.refused', error=str(e))
-            return
-        self.executor.configure(config)
-        self._tracer.event('limits.applied', limits=len(rows))
 
     def _wait(self, evaluation_id: int, candidate_id: CandidateId) -> bool:
         """Wait until the evaluation leaves the queue, and return True; False once the daemon stops.

@@ -35,6 +35,8 @@ expiry never both apply. The ``leases`` table is core's; ``lease_workers`` is th
 """
 
 import contextlib
+import json
+import logging
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -44,7 +46,7 @@ from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, assert_never
 
 from covalence import Cid
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy import ColumnElement, exists, func, select, update
 from sqlalchemy.orm import Session, aliased
 
@@ -62,6 +64,7 @@ from piloop.db.models import (
     EventModel,
     Lease,
     LeaseState,
+    Limit,
     ReadBy,
     utcnow,
 )
@@ -70,6 +73,7 @@ from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
     AGENT,
+    EXECUTORS,
     JOB,
     REPORTS,
     AgentJob,
@@ -104,6 +108,8 @@ from piloop.plugins.executor.kit.capacity import (
     times,
 )
 from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease, WorkerInstance
+from piloop.plugins.host import Parameters
+from piloop.plugins.limits import applied
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider
 
 SERVE = 'serve'
@@ -117,6 +123,20 @@ def default_pools() -> dict[str, Pool]:
     A function: a pool reads the installed job kinds, whose packages may import this module.
     """
     return {SERVE: Pool()}
+
+
+class Pools(Parameters):
+    """The pools of ``[plugins.executor]``, alone: what the live limits of the pools apply over (``Leases.live_pools``).
+
+    The limits' keys are the executor's, ``executor.pools.<pool>.<key>``, and its other keys take none.
+    """
+
+    pools: dict[str, Pool]
+
+
+LIVE_POOLS = f'{EXECUTORS.name}.pools.'
+"""The start of the key of each live limit of a pool."""
+_log = logging.getLogger(__name__)
 
 
 LEASE = TargetKind('lease')
@@ -623,6 +643,7 @@ class Leases:
     ) -> None:
         """``cas`` holds the jobs: ``submit`` puts each one there, and the workers read it from there.
 
+        ``pools`` are ``[plugins.executor.pools]``: each read applies the live limits over them (``live_pools``).
         ``secrets`` holds the values that an agent's job starts with (``secrets``): the default provider when None.
         """
         self._db = db
@@ -630,6 +651,9 @@ class Leases:
         self._cas = cas
         self.timing = timing
         self.pools = pools if pools is not None else default_pools()
+        """The pools of ``config.toml``. What the leases read is these with the live limits applied (``live_pools``)."""
+        self._applied: tuple[tuple[int, tuple[tuple[str, str], ...]], Mapping[str, Pool]] | None = None
+        """The last ``live_pools``: of which ``pools`` and limits, and what they were."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._lock = threading.Lock()
         self._watching = contextlib.ExitStack()
@@ -639,6 +663,33 @@ class Leases:
         self._quiet: dict[str, tuple[int, int]] = {}
         """Of each worker whose last read found no message: the cursor of that read, and ``_messages``' generation
         then."""
+
+    def live_pools(self) -> Mapping[str, Pool]:
+        """``pools`` with the live limits applied (``piloop limits``), as the rows have them now."""
+        with self._db.session() as s:
+            return self._pools_in(s)
+
+    def _pools_in(self, s: Session) -> Mapping[str, Pool]:
+        """``live_pools``, read in ``s``.
+
+        Every process that serves the API reads them so, from the rows: a limit holds in each at its next read. They
+        are validated again only when the rows or ``pools`` changed. Limits that the pools refuse (a ``config.toml``
+        that changed under them) leave ``pools`` as they are, and the log says why.
+        """
+        with s.no_autoflush:  # the caller's changes are not the limits': a row half made stays unflushed
+            rows = s.scalars(select(Limit).where(Limit.key.startswith(LIVE_POOLS)).order_by(Limit.key)).all()
+        seen = (id(self.pools), tuple((r.key, json.dumps(r.value)) for r in rows))
+        with self._lock:
+            if self._applied is not None and self._applied[0] == seen:
+                return self._applied[1]
+        try:
+            found: Mapping[str, Pool] = applied(Pools(pools=dict(self.pools)), rows, EXECUTORS.name).pools
+        except ValidationError as e:
+            _log.warning('the live limits of the pools are refused, and config.toml holds: %s', e)
+            found = self.pools
+        with self._lock:
+            self._applied = seen, found
+        return found
 
     def register(
         self, worker: str, pool: str, version: str, runners: Sequence[str], host: HostSample
@@ -683,7 +734,7 @@ class Leases:
         """
         now = utcnow()
         silent = row.seen_at is not None and row.seen_at <= now - self.timing.silence
-        relieved = self._relieved(row, host)
+        relieved = self._relieved(s, row, host)
         row.sample, row.seen_at = host.model_dump(mode='json'), now
         if row.no_lease == NoLease.UNREACHABLE:
             row.no_lease, silent = None, True
@@ -694,21 +745,21 @@ class Leases:
             emit(s, LeaseWorkerRelieved(worker=row.id, was=relieved), HOME, System.DAEMON)
         return False
 
-    def _relieved(self, row: LeaseWorker, host: HostSample) -> str | None:
+    def _relieved(self, s: Session, row: LeaseWorker, host: HostSample) -> str | None:
         """The pressure that ``row``'s last sample had and ``host`` has not, or None."""
-        pool = self.pools.get(row.pool)
+        pool = self._pools_in(s).get(row.pool)
         if pool is None or not row.sample:
             return None
         was = pressure(pool, HostSample.model_validate(row.sample))
         return was if was is not None and pressure(pool, host) is None else None
 
-    def _unheard(self, row: LeaseWorker, host: HostSample, now: datetime) -> bool:
+    def _unheard(self, s: Session, row: LeaseWorker, host: HostSample, now: datetime) -> bool:
         """Whether a heartbeat of ``row``'s worker changes nothing on its row: no write is due (``Timing.slack``).
 
         Its ``seen_at`` is younger than the slack, it is reachable, and its sample has the pressure of the last one
         written: the gates read that (``capacity``).
         """
-        pool = self.pools.get(row.pool)
+        pool = self._pools_in(s).get(row.pool)
         was = pressure(pool, HostSample.model_validate(row.sample)) if pool is not None and row.sample else None
         return (
             row.seen_at > now - timedelta(seconds=self.timing.slack)
@@ -737,7 +788,7 @@ class Leases:
                 with read_transaction(s):
                     row = _registered(s, worker)
                     found = self._choice(s, row, request_id, host)
-                    if self._unheard(row, host, now):
+                    if self._unheard(s, row, host, now):
                         if isinstance(found, NoLease) and found == row.no_lease:
                             return found
                         resent = isinstance(found, Lease) and found.acquire_request == request_id
@@ -793,7 +844,7 @@ class Leases:
             return lease
         if row.drained_at is not None:
             return NoLease.DRAINING
-        pool = self.pools[row.pool]
+        pool = self._pools_in(s)[row.pool]
         counts = Counter(
             s.scalars(select(Lease.kind).where(Lease.worker == row.id, Lease.state.in_(LIVE_LEASES))).all()
         )
@@ -831,16 +882,17 @@ class Leases:
             leased = s.execute(select(Lease.worker, Lease.kind).where(Lease.state.in_(LIVE_LEASES))).all()
             live = Counter((worker, kind) for worker, kind in leased)
             queued = Counter(s.scalars(select(Lease.kind).where(Lease.state == LeaseState.QUEUED)))
+            pools = self._pools_in(s)
         every = kinds()
         free: dict[str, int | None] = dict.fromkeys(every, 0)
         pool_of = {worker: pool for worker, pool, _, _ in workers}
-        for name, pool in self.pools.items():
+        for name, pool in pools.items():
             if pool.provisioner is not None:
                 for kind in every:
                     taken = sum(n for (worker, k), n in live.items() if k == kind and pool_of.get(worker) == name)
                     free[kind] = add(free[kind], less(times(slots(pool, kind), pool.provisioner.max), taken))
         for worker, pool_name, sample, seen_at in workers:
-            if seen_at <= since or (pool := self.pools.get(pool_name)) is None or pool.provisioner is not None:
+            if seen_at <= since or (pool := pools.get(pool_name)) is None or pool.provisioner is not None:
                 continue
             running = counted({k: n for (w, k), n in live.items() if w == worker})
             host = HostSample.model_validate(sample)
@@ -929,7 +981,7 @@ class Leases:
             if self.timing.slack:
                 with read_transaction(s):  # most heartbeats change nothing: those take no write lock
                     live = self._held(s, worker, sessions, answers, reported)
-                    due = not self._unheard(_registered(s, worker), host, now) or any(
+                    due = not self._unheard(s, _registered(s, worker), host, now) or any(
                         self._due(lease, now) for lease in live
                     )
             if due:

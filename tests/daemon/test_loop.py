@@ -200,8 +200,8 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'lease.unreachable': ['executor'],
             'lease_worker.joined': ['evaluations', 'campaigns'],
             'lease_worker.relieved': ['evaluations', 'campaigns'],
-            'limit.set': ['limits', 'evaluations', 'campaigns'],
-            'limit.unset': ['limits', 'evaluations', 'campaigns'],
+            'limit.set': ['evaluations', 'campaigns'],
+            'limit.unset': ['evaluations', 'campaigns'],
             'measurement.recorded': ['campaigns'],
             'notification.failed': [],
             'notification.received': [],
@@ -400,7 +400,7 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
             ['campaigns'],
             ['campaigns'],
             ['notify', 'prompts'],
-            ['limits', 'evaluations', 'campaigns'],
+            ['evaluations', 'campaigns'],
             ['listeners', 'home_check', 'notify', 'wind_down', 'facts', 'campaigns'],
         ]
     ), 'the consumers that each write ran, in the order of the turn'

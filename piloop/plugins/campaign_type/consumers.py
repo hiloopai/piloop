@@ -62,6 +62,7 @@ from piloop.db.models import (
     count,
 )
 from piloop.db.triggers.changelog import (
+    LIMITS,
     AgentSessionRequested,
     CampaignConfigChanged,
     CampaignPausedChanged,
@@ -92,7 +93,6 @@ from piloop.plugins.campaign_type.kit.runs.stop import settled
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
 from piloop.plugins.escalation.contract import Choice, EscalationView
-from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.host import ContractBroken

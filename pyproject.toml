@@ -118,7 +118,6 @@ harness_choice = "piloop.plugins.harness_choice.contract:HARNESS_CHOICES"
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
 [project.entry-points."piloop.contributors"]
-executor = "piloop.plugins.executor.consumers:contribution"
 fact_source = "piloop.plugins.fact_source.consumers:contribution"
 optimization = "piloop.plugins.campaign_type.optimization.consumers:contribution"
 role = "piloop.plugins.role.consumers:contribution"

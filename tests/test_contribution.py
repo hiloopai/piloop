@@ -71,14 +71,13 @@ class Archiver:
         return Contribution(consumers=(Consumer('archiver', frozenset(), idle, Phase.UPKEEP),))
 
 
-def test_the_executor_s_upkeep_and_the_archiver_run_after_limits_and_before_the_scheduler_s_own(
+def test_the_executor_s_upkeep_and_the_archiver_run_after_the_listeners_and_before_the_scheduler_s_own(
     db: Database, tmp_path: Path
 ) -> None:
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     archiver = LocalArchive().open(ArchiveHost(db, disk(tmp_path), tmp_path, 0, Tracer(None), idle_wake))
     names = [c.name for c in Scheduler(db, controller, Tracer(None), tmp_path, archiver=archiver).consumers()]
     assert names == [
-        'limits',
         'listeners',
         'home_check',
         'executor',

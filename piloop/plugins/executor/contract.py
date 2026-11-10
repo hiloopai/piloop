@@ -689,10 +689,6 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
         """
         ...
 
-    def configure(self, config: C) -> None:
-        """Take ``config``, the one that opened it with the live limits applied. The daemon calls it when one changes."""
-        ...
-
     def submit(self, job: Job) -> None:
         """Run ``job``, now or when a slot is free. Every job ends with ``Results.finished`` or ``Results.lost``."""
         ...

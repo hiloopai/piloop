@@ -287,6 +287,10 @@ class LimitUnset(EventModel):
     key: str
 
 
+LIMITS: frozenset[type[EventModel]] = frozenset({LimitSet, LimitUnset})
+"""A live limit that changes: it can give the executor more slots, which it reads from the rows at once."""
+
+
 def plural(subject: str) -> str:
     """``idea`` → ``ideas``: the table of an event kind's subject."""
     return f'{subject}s'

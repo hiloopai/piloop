@@ -7,6 +7,7 @@ from sqlalchemy import select
 from piloop.daemon.loop import Consumer, Kinds, Phase, Turn
 from piloop.db.models import NOT_RETIRED, OPTIMIZATION, Campaign, EventModel
 from piloop.db.triggers.changelog import (
+    LIMITS,
     CampaignConfigChanged,
     EvaluationCancelled,
     EvaluationDeleted,
@@ -14,7 +15,6 @@ from piloop.db.triggers.changelog import (
 from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_scores
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.contribution import Contribution, DaemonHost
-from piloop.plugins.executor.consumers import LIMITS
 
 for kind in ('slots_idle.seen', 'slots_idle.raised', 'slots_idle.ended'):
     EventModel.retire(kind)  # 0.5 escalated free slots behind proposed ideas; an idea is never proposed now

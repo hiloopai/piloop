@@ -1,9 +1,9 @@
 """Live limits: values for the ``Live`` keys of a provider's parameters, changed while the daemon runs.
 
 A **limit** is a row of ``limits``: a dotted key, the capability then the path in its provider's fields
-(``executor.pools.serve.slots.evaluation``), a value, a reason and who set it. It wins over ``config.toml``. The daemon
-hands the executor its provider with the limits applied (``applied``, then ``Executor.configure``) at once,
-so a busy GPU takes fewer evaluations without a restart.
+(``executor.pools.serve.slots.evaluation``), a value, a reason and who set it. It wins over ``config.toml``. The
+executor reads the rows with its parameters (``applied``) in each process that uses them, so a busy GPU takes fewer
+evaluations at once, without a restart.
 
 Only a key that the provider marks ``Live`` takes a limit, and only a value that its parameters accept.
 """

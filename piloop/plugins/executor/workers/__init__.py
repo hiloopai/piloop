@@ -155,7 +155,7 @@ class WorkersExecutor:
         runtime that sees none of this home, such as ``docker``: they relay their calls, as on a worker elsewhere."""
         self.scaler = Scaler.of(
             host.db,
-            lambda: self.leases.pools,
+            self.leases.live_pools,
             host.network,
             host.tracer,
             timing,
@@ -165,10 +165,6 @@ class WorkersExecutor:
             self.leases.forget,
         )
         """Starts and stops the workers of the pools that have a provisioner."""
-
-    def configure(self, config: Workers) -> None:
-        """Take the pools with the live limits applied: the next ``acquire`` and ``capacity`` read them."""
-        self.leases.pools = config.pools
 
     def capacity(self) -> Capacity:
         """The free slots of the reachable workers that their pools admit now (``Leases.capacity``)."""

@@ -68,23 +68,23 @@ def test_only_a_live_key_that_there_is_takes_a_limit_and_only_a_value_that_its_p
         ] is KeyOrigin.CONFIG
 
 
-def test_the_daemon_applies_a_changed_limit_on_its_next_tick_and_keeps_its_parameters_when_one_is_refused(
+def test_a_changed_limit_holds_at_the_next_read_of_any_process_and_a_refused_one_leaves_config_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
+    """The leases read the limits from the rows, so a process that serves the API sees one as the daemon does."""
     ex = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2})
+    other = Leases(db, Recorder(db), home_cas(db), TIMING, workers_of(ex).leases.pools)
     with db.session() as s:
         limits.set_limit(s, {}, KEY, 1, reason='the GPU is busy', actor='human')
         s.commit()
-    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2}), 'until the next tick'
-    ex.configure()
-    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1})
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1}), 'at once'
+    assert other.live_pools()['serve'] == Pool(slots={EVALUATION: 1}), 'in the leases of another process too'
     with db.session() as s:
         s.get_one(Limit, KEY).value = 'many'  # a limit that the parameters no longer accept
         s.commit()
-    ex.configure()
-    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1}), 'the last parameters hold'
-    assert workers_of(ex).leases.pools['serve'] == Pool(slots={EVALUATION: 1})
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2}), 'config.toml holds'
+    assert workers_of(ex).leases.pools['serve'] == Pool(slots={EVALUATION: 2})
 
 
 def test_with_two_evaluations_running_a_lowered_limit_starts_no_third_until_none_runs(
@@ -99,8 +99,9 @@ def test_with_two_evaluations_running_a_lowered_limit_starts_no_third_until_none
         queue(db, evaluation_job_for_another_candidate(db, campaign, tmp_path, tree))
     first, second = worker.acquire(uuid4().hex, HOST), worker.acquire(uuid4().hex, HOST)
     assert isinstance(first, Grant) and isinstance(second, Grant) and worker.acquire(uuid4().hex, HOST) is NoLease.SLOTS
-    applied = limits.applied(Workers(), [Limit(key=KEY, value=1)], 'executor')
-    leases.pools = applied.pools  # what ``WorkersExecutor.configure`` does on the next tick
+    with db.session() as s:
+        limits.set_limit(s, {}, KEY, 1, reason='the GPU is busy', actor='human')
+        s.commit()
     worker.report(first.lease, 'r1', MEASURED)
     assert worker.acquire(uuid4().hex, HOST) is NoLease.SLOTS, 'one runs, and one is the limit'
     worker.report(second.lease, 'r2', MEASURED)
