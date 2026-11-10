@@ -1,5 +1,6 @@
 """A worker's capacity: the gates of its pool on its host sample, and the slots that the executor sums."""
 
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -106,9 +107,14 @@ def test_a_worker_whose_slots_are_full_says_slots_while_core_holds_back_a_job_fo
     assert leases.acquire('w2', uuid4().hex, HOST) is NoLease.SLOTS
 
 
-def test_capacity_sums_the_slots_of_the_reachable_workers_that_are_not_under_pressure(db: Database) -> None:
+@pytest.mark.parametrize('slack', [0, 60])
+def test_capacity_sums_the_slots_of_the_reachable_workers_that_are_not_under_pressure(
+    db: Database, slack: float
+) -> None:
+    """A heartbeat that brings pressure writes it at once, also when one that changes nothing writes nothing."""
+    timing = replace(TIMING, slack=slack)
     pools = {SERVE: Pool(agents=2), 'gpu': Pool(agents=0, max_load=1.0, slots={EVALUATION: 1})}
-    leases = Leases(db, Recorder(db), home_cas(db), TIMING, pools)
+    leases = Leases(db, Recorder(db), home_cas(db), timing, pools)
     assert leases.capacity() == Capacity(0, {EVALUATION: 0}), 'no worker yet'
     leases.register(SERVE, SERVE, '0.2.0', ['process'], HOST)
     assert leases.capacity() == Capacity(2, {EVALUATION: 2})
@@ -118,7 +124,7 @@ def test_capacity_sums_the_slots_of_the_reachable_workers_that_are_not_under_pre
     leases.heartbeat('gpu2', {}, HOST.model_copy(update={'load1': 4.5}))
     assert leases.capacity() == Capacity(2, {EVALUATION: 3}), 'under pressure: zero'
     with db.session() as s:
-        s.get_one(LeaseWorker, 'gpu1').seen_at = utcnow() - timedelta(seconds=TIMING.grace + 1)
+        s.get_one(LeaseWorker, 'gpu1').seen_at = utcnow() - timing.silence - timedelta(seconds=1)
         s.commit()
     assert leases.capacity() == Capacity(2, {EVALUATION: 2}), 'unreachable: zero'
     unbounded = Leases(db, Recorder(db), home_cas(db), TIMING, {SERVE: Pool(), 'gpu': Pool()})

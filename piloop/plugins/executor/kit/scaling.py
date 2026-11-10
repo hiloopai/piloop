@@ -332,7 +332,8 @@ class Scaler:
         """Move a row on from what its worker did: register it, or end it."""
         worker = seen.workers.get(row.name)
         heard = max(worker.seen_at, self._since) if worker is not None else now
-        silent = now - heard > timedelta(seconds=self.timing.toleration)
+        # its seen_at may lag a slack behind its last heartbeat (``Timing.slack``), as its leases' expiry runs ahead
+        silent = now - heard > timedelta(seconds=self.timing.toleration + self.timing.slack)
         timeout = max(row.requested_at, self._started.get(row.name, now)) + timedelta(seconds=policy.register_seconds)
         match row.state:
             case WorkerInstanceState.ENDED:  # a resync ended it
@@ -378,7 +379,7 @@ class Scaler:
             return 0
         if policy.max_worker_hours_per_day is not None and seen.hours[name] >= policy.max_worker_hours_per_day:
             return 0
-        since = now - timedelta(seconds=self.timing.grace)
+        since = now - self.timing.silence
         need = _need(pool, policy, seen, self.pools(), starting, since)
         now_starting = sum(1 for row in up if row.state is WorkerInstanceState.STARTING)
         desired = min(max(len(up) + need, policy.min), policy.max)

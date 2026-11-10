@@ -67,7 +67,11 @@ from tests.test_git import by
 SERVER_PROCESS = Path(__file__).parent.parent / 'fixtures' / 'server_process.py'
 WORKER = 'gpu1'
 WORKERS = Workers(
-    renew_seconds=0.2, grace_seconds=1.0, toleration_seconds=6.0, pools={'gpu': Pool(agents=1, slots={EVALUATION: 1})}
+    renew_seconds=0.2,
+    grace_seconds=1.0,
+    toleration_seconds=6.0,
+    slack_seconds=0,
+    pools={'gpu': Pool(agents=1, slots={EVALUATION: 1})},
 )
 """Short lease times with the default's two stages. The self-stop, 5.6 s, outlasts a restart of the server process."""
 

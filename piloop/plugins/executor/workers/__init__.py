@@ -84,6 +84,11 @@ class Workers(ExecutorConfig):
     """The silence after which its leases expire and their jobs are queued again with a larger fencing token. The
     worker stops its own jobs two heartbeats before. Kubernetes: the ``tolerationSeconds`` of 300 that the
     ``DefaultTolerationSeconds`` admission plugin gives a pod for the unreachable taint."""
+    slack_seconds: float = Field(default=60, ge=0)
+    """How long a heartbeat that changes nothing leaves the worker's row and its leases' expiry unwritten: most
+    heartbeats then take no write lock. A lease's expiry is written this far past ``toleration_seconds``, and a worker is
+    unreachable once silent for ``grace_seconds`` plus this, so a lost worker is found up to this much later. 0 writes
+    every heartbeat."""
     report_tries: int = Field(default=30, gt=0)
     """How many times the control plane may reject a job's report, with an error and not a silence, before the worker
     gives up on it: the job then ends as a crash, and its slot is free. The worker sends a report again on each
@@ -114,7 +119,13 @@ class WorkersExecutor:
     """``Executor``: every job on a lease (``piloop.plugins.executor.kit.leases``), run by the worker of this process."""
 
     def __init__(self, host: Host, config: Workers) -> None:
-        timing = Timing(config.renew_seconds, config.grace_seconds, config.toleration_seconds, config.report_tries)
+        timing = Timing(
+            config.renew_seconds,
+            config.grace_seconds,
+            config.toleration_seconds,
+            config.report_tries,
+            config.slack_seconds,
+        )
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
         self._watching = host.db.watching
         self._cas = host.cas

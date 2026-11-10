@@ -302,6 +302,16 @@ class Timing:
     unreachable taint: 300 s."""
     report_tries: int = 30
     """How many rejected sends of a job's report a worker makes before the job ends as a crash (``Worker._send``)."""
+    slack: float = 0
+    """How long a heartbeat that changes nothing may leave the worker's ``seen_at`` and its leases' expiry as they
+    are: such a heartbeat writes nothing. 0 writes every heartbeat; the ``workers`` executor takes ``slack_seconds``.
+    A renewal writes a lease's expiry ``toleration + slack`` ahead, so a lease expires ``toleration`` after its last
+    heartbeat at the earliest, as without it. A worker is silent once its ``seen_at`` is ``silence`` old."""
+
+    @property
+    def silence(self) -> timedelta:
+        """How old a worker's ``seen_at`` is once the worker is silent: ``grace``, plus the ``slack`` of its writes."""
+        return timedelta(seconds=self.grace + self.slack)
 
     @property
     def self_stop(self) -> float:
@@ -548,6 +558,16 @@ def cancel(s: Session, cas: Cas, lease: Lease, reason: str) -> None:
         )
 
 
+def _news(row: AgentSession, session: HarnessSession) -> bool:
+    """Whether ``session`` tells ``row`` something that it lacks: a session id, or a session file.
+
+    Each heartbeat sends them, and one that brings nothing new takes no write lock (``CampaignResults.session``).
+    """
+    return (session.id is not None and session.id != row.session_id) or (
+        session.file is not None and session.file != row.session_file
+    )
+
+
 def _registered(s: Session, worker: str) -> LeaseWorker:
     """The row of ``worker``, which ``register`` wrote. Raises ``UnknownWorker`` when it is gone."""
     if (row := s.get(LeaseWorker, worker)) is None:
@@ -655,19 +675,40 @@ class Leases:
         Return whether it emitted ``LeaseWorkerJoined``: the worker was unreachable, or silent past the grace, which
         ``capacity`` counts as unreachable before any ``expire`` marks it. A waiter that read no free slot then wakes.
         """
-        pool = self.pools.get(row.pool)
-        was = pressure(pool, HostSample.model_validate(row.sample)) if pool is not None and row.sample else None
         now = utcnow()
-        silent = row.seen_at is not None and row.seen_at <= now - timedelta(seconds=self.timing.grace)
+        silent = row.seen_at is not None and row.seen_at <= now - self.timing.silence
+        relieved = self._relieved(row, host)
         row.sample, row.seen_at = host.model_dump(mode='json'), now
         if row.no_lease == NoLease.UNREACHABLE:
             row.no_lease, silent = None, True
         if silent:
             emit(s, LeaseWorkerJoined(worker=row.id, pool=row.pool), HOME, System.DAEMON)
             return True
-        if was is not None and pool is not None and pressure(pool, host) is None:
-            emit(s, LeaseWorkerRelieved(worker=row.id, was=was), HOME, System.DAEMON)
+        if relieved is not None:
+            emit(s, LeaseWorkerRelieved(worker=row.id, was=relieved), HOME, System.DAEMON)
         return False
+
+    def _relieved(self, row: LeaseWorker, host: HostSample) -> str | None:
+        """The pressure that ``row``'s last sample had and ``host`` has not, or None."""
+        pool = self.pools.get(row.pool)
+        if pool is None or not row.sample:
+            return None
+        was = pressure(pool, HostSample.model_validate(row.sample))
+        return was if was is not None and pressure(pool, host) is None else None
+
+    def _unheard(self, row: LeaseWorker, host: HostSample, now: datetime) -> bool:
+        """Whether a heartbeat of ``row``'s worker changes nothing on its row: no write is due (``Timing.slack``).
+
+        Its ``seen_at`` is younger than the slack, it is reachable, and its sample has the pressure of the last one
+        written: the gates read that (``capacity``).
+        """
+        pool = self.pools.get(row.pool)
+        was = pressure(pool, HostSample.model_validate(row.sample)) if pool is not None and row.sample else None
+        return (
+            row.seen_at > now - timedelta(seconds=self.timing.slack)
+            and row.no_lease != NoLease.UNREACHABLE
+            and (pool is None or pressure(pool, host) == was)
+        )
 
     def acquire(self, worker: str, request_id: str, host: HostSample) -> Grant | NoLease:
         """Take the oldest queued job that ``worker`` can run and that its pool admits, or say why there is none.
@@ -740,7 +781,7 @@ class Leases:
         job then waits on a queued lease, which is the demand that starts a worker (``scaling``). GitHub's ARC and
         Buildkite queue jobs the same way, whether a runner exists or not.
         """
-        since = utcnow() - timedelta(seconds=self.timing.grace)
+        since = utcnow() - self.timing.silence
         # one snapshot: a lease that a worker takes between two reads would otherwise count in neither
         with self._db.session() as s, read_transaction(s):
             workers = s.execute(select(LeaseWorker.id, LeaseWorker.pool, LeaseWorker.sample, LeaseWorker.seen_at)).all()
@@ -840,28 +881,53 @@ class Leases:
         answers: dict[int, Answer] = {}
         reported: list[tuple[int, AgentSessionId, HarnessSession]] = []
         now = utcnow()
+        renewed = now + timedelta(seconds=self.timing.toleration)
         with self._db.session() as s:
-            write_transaction(s)
-            self._heard(s, _registered(s, worker), host)
-            for lease_id, session in sessions.items():
-                try:
-                    if s.get(Lease, lease_id) is None:  # a spooled report's, whose campaign was deleted since
-                        raise StaleLease(f'stale_lease: there is no lease#{lease_id}')
-                    lease = self._live(s, lease_id, worker)
-                except StaleLease:
-                    answers[lease_id] = Answer.STALE
-                    continue
-                lease.renewed_at = now
-                lease.expires_at = now + timedelta(seconds=self.timing.toleration)
-                if session != HarnessSession() and lease.agent_session_id is not None:
-                    reported.append((lease_id, lease.agent_session_id, session))
-                answers[lease_id] = Answer.REVOKED if lease.revoked_at is not None else Answer.RENEWED
-            s.commit()
+            due = True  # without a slack, every heartbeat writes
+            if self.timing.slack:
+                with read_transaction(s):  # most heartbeats change nothing: those take no write lock
+                    live = self._held(s, worker, sessions, answers, reported)
+                    due = not self._unheard(_registered(s, worker), host, now) or any(
+                        lease.expires_at is None or lease.expires_at < renewed for lease in live
+                    )
+            if due:
+                answers.clear()
+                reported.clear()
+                write_transaction(s)
+                self._heard(s, _registered(s, worker), host)
+                for lease in self._held(s, worker, sessions, answers, reported):
+                    lease.renewed_at = now
+                    lease.expires_at = renewed + timedelta(seconds=self.timing.slack)
+                s.commit()
         for lease_id, agent_session, session in reported:
             # a row that closed, or a lease that went, meanwhile: the next heartbeat's answer says so
             with contextlib.suppress(Settled, StaleLease):
                 self._results.session(AgentKey(agent_session), session, guard=self._fence(lease_id, worker))
         return answers
+
+    def _held(
+        self,
+        s: Session,
+        worker: str,
+        sessions: dict[int, HarnessSession],
+        answers: dict[int, Answer],
+        reported: list[tuple[int, AgentSessionId, HarnessSession]],
+    ) -> list[Lease]:
+        """The live leases of ``sessions`` that ``worker`` holds. Fill ``answers`` and the sessions to report."""
+        live = []
+        for lease_id, session in sessions.items():
+            try:
+                if s.get(Lease, lease_id) is None:  # a spooled report's, whose campaign was deleted since
+                    raise StaleLease(f'stale_lease: there is no lease#{lease_id}')
+                lease = self._live(s, lease_id, worker)
+            except StaleLease:
+                answers[lease_id] = Answer.STALE
+                continue
+            if lease.agent_session_id is not None and _news(s.get_one(AgentSession, lease.agent_session_id), session):
+                reported.append((lease_id, lease.agent_session_id, session))
+            answers[lease_id] = Answer.REVOKED if lease.revoked_at is not None else Answer.RENEWED
+            live.append(lease)
+        return live
 
     def relayed(self, lease_id: int, worker: str) -> AgentJob:
         """The agent's job of ``worker``'s live lease ``lease_id``, whose ``piloop`` calls its worker relays.
@@ -1010,7 +1076,7 @@ class Leases:
             self.renew_all(now)
             return now + timedelta(seconds=self.timing.toleration)
         live = Lease.state.in_(LIVE_LEASES)
-        newly_silent = (LeaseWorker.seen_at <= now - timedelta(seconds=self.timing.grace)) & (
+        newly_silent = (LeaseWorker.seen_at <= now - self.timing.silence) & (
             LeaseWorker.no_lease.is_distinct_from(NoLease.UNREACHABLE)
         )
         expiring: list[tuple[int, str]] = []
@@ -1038,7 +1104,7 @@ class Leases:
             reachable = LeaseWorker.no_lease.is_distinct_from(NoLease.UNREACHABLE)
             holding = LeaseWorker.id.in_(select(Lease.worker).where(live))
             heard = s.scalar(select(func.min(LeaseWorker.seen_at)).where(reachable, holding))
-        silent = heard + timedelta(seconds=self.timing.grace) if heard is not None else None
+        silent = heard + self.timing.silence if heard is not None else None
         return min((t for t in (expiry, silent) if t is not None), default=None)
 
     def gone(self, worker: str, reason: str) -> None:
@@ -1084,7 +1150,7 @@ class Leases:
 
         ``_heard`` is the other writer of ``seen_at``: a waiter that read no free slot wakes either way.
         """
-        silent = row.seen_at <= now - timedelta(seconds=self.timing.grace) or row.no_lease == NoLease.UNREACHABLE
+        silent = row.seen_at <= now - self.timing.silence or row.no_lease == NoLease.UNREACHABLE
         row.seen_at = now
         if row.no_lease == NoLease.UNREACHABLE:
             row.no_lease = None

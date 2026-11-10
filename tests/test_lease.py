@@ -4,7 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -20,7 +20,18 @@ from piloop.agents.results import PromptOutcome
 from piloop.db import feed
 from piloop.db.events import emit, has, in_order
 from piloop.db.machine import Refused, transition
-from piloop.db.models import PROCESS, AgentSession, Campaign, Comment, Event, EventModel, Lease, LeaseState, utcnow
+from piloop.db.models import (
+    LIVE_LEASES,
+    PROCESS,
+    AgentSession,
+    Campaign,
+    Comment,
+    Event,
+    EventModel,
+    Lease,
+    LeaseState,
+    utcnow,
+)
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
@@ -288,13 +299,17 @@ def test_a_lease_is_acquired_started_renewed_and_reported_once_with_its_receipt(
     handle = AgentHandle(runtime='subprocess', data={'pid': 7})
     Local(leases, 'w1').started(lease_id, handle, None)
     assert Local(leases, 'w1').heartbeat({lease_id: HarnessSession(id='sid')}, HOST) == {lease_id: Answer.RENEWED}
+    with db.session() as s:  # as core's ``learn`` does
+        s.get_one(AgentSession, job.agent_session).session_id = 'sid'
+        s.commit()
+    assert Local(leases, 'w1').heartbeat({lease_id: HarnessSession(id='sid')}, HOST) == {lease_id: Answer.RENEWED}
     assert Local(leases, 'w1').report(lease_id, 'r1', DONE) == RECEIPT
     assert Local(leases, 'w1').report(lease_id, 'r1', DONE) == RECEIPT, 'a resent report gets its receipt'
     assert recorder.calls == [
         ('started', job.agent_session, {'pid': 7}),
         ('session', job.agent_session, 'sid'),
         ('finished', job.agent_session, DONE),
-    ], "it applied once, with the runtime's handle"
+    ], "it applied once, with the runtime's handle, and a session that the row has goes to core no more"
     row = lease_row(db, lease_id)
     assert (row.state, row.worker, row.handle, row.report_request) == (
         LeaseState.REPORTED,
@@ -943,3 +958,62 @@ def test_a_worker_whose_slots_count_again_says_so_on_the_home(
     assert events(db, LeaseWorkerRelieved) == [(TargetKind.HOME, 1, LeaseWorkerRelieved(worker='w1', was=NoLease.LOAD))]
     Local(leases, 'w1').heartbeat({}, HOST)
     assert len(events(db, LeaseWorkerRelieved)) == 1, 'once, at the change'
+
+
+class Clock:
+    """The time that ``leases`` reads (``utcnow``), moved by hand."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.now = utcnow()
+        monkeypatch.setattr(leases_module, 'utcnow', lambda: self.now)
+
+    def after(self, seconds: float) -> datetime:
+        self.now += timedelta(seconds=seconds)
+        return self.now
+
+
+def test_a_heartbeat_that_changes_nothing_writes_nothing_and_the_lease_still_expires_on_silence(
+    db: Database, campaign: Campaign, tmp_path: Path, recorder: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a slack, a renewal writes the expiry ``toleration + slack`` ahead, and a worker is silent once its written
+    ``seen_at`` is ``grace + slack`` old. So a lease expires ``toleration`` after its last heartbeat at the earliest, a
+    worker is silent ``grace`` after it at the earliest, as with every heartbeat written, and each is found at most a
+    slack later. A worker that heartbeats every ``renew`` neither expires nor goes silent."""
+    timing = Timing(renew=10, grace=50, toleration=300, slack=60)
+    clock = Clock(monkeypatch)
+    leases = Leases(db, recorder, home_cas(db), timing, POOLS)
+    lease_id = queue(db, agent_job(db, campaign, tmp_path))
+    grant = take(leases, 'w1', ['process'])
+    assert grant is not None and grant.lease == lease_id
+    w1 = Local(leases, 'w1')
+    held = {lease_id: HarnessSession()}
+    statements: list[str] = []
+
+    def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        statements.append(statement)
+
+    event.listen(db.engine, 'before_cursor_execute', counted)
+    try:
+        for _ in range(40):  # 400 s of heartbeats, every renew
+            beat = clock.after(10)
+            assert w1.heartbeat(held, HOST) == {lease_id: Answer.RENEWED}
+            leases.expire(beat)
+            row = lease_row(db, lease_id)
+            assert row.state in LIVE_LEASES and row.expires_at is not None
+            assert row.expires_at >= beat + timedelta(seconds=300), 'toleration after it at least'
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', counted)
+    writes = sum(s.startswith('BEGIN IMMEDIATE') for s in statements)
+    assert writes == 7, f'one write per slack of 60 s, not one per heartbeat: {writes} in 40'
+    assert events(db, LeaseUnreachable) == [], 'never silent'
+    last = clock.now
+    expiry = lease_row(db, lease_id).expires_at
+    assert expiry is not None and last + timedelta(seconds=300) <= expiry <= last + timedelta(seconds=360)
+    leases.expire(last + timedelta(seconds=49))
+    assert events(db, LeaseUnreachable) == [], 'not silent before the grace: its seen_at is at most a slack old'
+    leases.expire(last + timedelta(seconds=110))
+    assert [e.lease for _, _, e in events(db, LeaseUnreachable)] == [lease_id], 'silent by grace + slack'
+    leases.expire(expiry - timedelta(seconds=1))
+    assert lease_row(db, lease_id).state in LIVE_LEASES
+    leases.expire(expiry)
+    assert lease_row(db, lease_id).state == LeaseState.EXPIRED, 'silent: it expires'

@@ -37,7 +37,9 @@ def main() -> None:
     db = Database(url, actor=System.DAEMON)
     cas = CAS.selected({}).open(home)
     results = CampaignResults(db, Tracer(None), home, cas, lambda: False)
-    leases = Leases(db, results, cas, Timing(p.renew_seconds, p.grace_seconds, p.toleration_seconds), p.pools)
+    leases = Leases(
+        db, results, cas, Timing(p.renew_seconds, p.grace_seconds, p.toleration_seconds, slack=p.slack_seconds), p.pools
+    )
     leases.renew_all()
     network = Https.model_validate({'listen': '127.0.0.1:0'}).open(
         NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))

@@ -711,7 +711,12 @@ def span_named(spans: InMemorySpanExporter, name: str) -> ReadableSpan:
 
 def timed(timing: Timing) -> Workers:
     """``[plugins.executor]`` for ``workers`` with the lease timing ``timing``."""
-    return Workers(renew_seconds=timing.renew, grace_seconds=timing.grace, toleration_seconds=timing.toleration)
+    return Workers(
+        renew_seconds=timing.renew,
+        grace_seconds=timing.grace,
+        toleration_seconds=timing.toleration,
+        slack_seconds=timing.slack,
+    )
 
 
 def still() -> float:
