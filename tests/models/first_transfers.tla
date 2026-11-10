@@ -1,11 +1,12 @@
 ---- MODULE first_transfers ----
-\* First transfers as rows (#821 at 280b9f80c); paths under piloop/plugins/executor/kit/ unless named. One repo, KIDS
+\* First transfers as rows (#821); paths under piloop/plugins/executor/kit/ unless named. One repo, KIDS
 \* requests (`send` in the API processes), the daemon's consumer `run` and its build threads. `age` is 1 once the
 \* row is past its deadline from started_at. An ask makes other reads stale (`_state` compares started_at). Arguments: what a step changed.
 EXTENDS Naturals, FiniteSets
 CONSTANTS WAKE_ON_UNSETTLED, START_IF_REQUESTED, RECHECK, ONE_BUILD, KIDS
-\* Fixes: an end that was not written wakes the consumer; `run` builds only if its update found the row requested.
-\* Protections: an ask writes only over the row that its request read (transfers.py:132); no second build (:192).
+\* Fixes: an end that was not written wakes the consumer (transfers.py:260); `run` builds only if its update found the
+\* row requested (:224-238).
+\* Protections: an ask writes only over the row that its request read (transfers.py:132); no second build (:208).
 Kids == 1..KIDS  Threads == {1, 2}
 VARIABLES row, age, stale, kid, seen, pc, snap, lag, building, unsettled, th, wake, due, crashes, flags
 vars == <<row, age, stale, kid, seen, pc, snap, lag, building, unsettled, th, wake, due, crashes, flags>>
@@ -29,15 +30,15 @@ Write(c) == LET ask == ~RECHECK \/ (row = seen[c] /\ c \notin stale) IN
                       ELSE stale' = stale \ {c} /\ UNCHANGED <<row, age, wake, flags>>
             /\ kid' = [kid EXCEPT ![c] = IF ask /\ seen[c] = "failed" THEN "failed" ELSE "wait"]
             /\ UNCHANGED <<pc, snap, lag, building, unsettled, th, due, crashes>>
-\* daemon/main.py:218-223, daemon/loop.py:104-108. The daemon restarts: an exception of a consumer ends it, and its
+\* daemon/main.py:219-224, daemon/loop.py:104-108. The daemon restarts: an exception of a consumer ends it, and its
 \* memory and threads go. The new one runs every consumer once. Not fair, at most once.
 Restarted == /\ crashes < 1 /\ crashes' = crashes + 1 /\ building' = FALSE /\ unsettled' = FALSE /\ pc' = "idle"
              /\ th' = [i \in Threads |-> "idle"] /\ wake' = TRUE /\ due' = FALSE /\ snap' = <<FALSE, FALSE>> /\ lag' = 0
 Restart == Restarted /\ UNCHANGED <<row, age, stale, kid, seen, flags>>
-\* transfers.py:186-190, daemon/loop.py:146-152. A turn that an event, the start or the due woke reads the rows.
+\* transfers.py:200-204, daemon/loop.py:146-152. A turn that an event, the start or the due woke reads the rows.
 RunRead == /\ pc = "idle" /\ wake /\ wake' = FALSE /\ snap' = <<row = "requested", age = 1>> /\ pc' = "read"
            /\ UNCHANGED <<row, age, stale, kid, seen, lag, building, unsettled, th, due, crashes, flags>>
-\* transfers.py:191-202, 216-217, daemon/loop.py:199. Under the process's lock: an end that was not written and is
+\* transfers.py:205-218, 239-240, daemon/loop.py:199. Under the process's lock: an end that was not written and is
 \* past its deadline is written failed; a requested row that no thread builds is new. Else the turn ends, with a
 \* due at the deadline of a row that it read requested, if that is ahead. A write that raises ends the daemon.
 RunLock(ok) == LET late == snap[1] /\ unsettled /\ snap[2]
@@ -50,7 +51,7 @@ RunLock(ok) == LET late == snap[1] /\ unsettled /\ snap[2]
      \/ ~late /\ ~new /\ ok /\ due' = (snap[1] /\ ~snap[2]) /\ pc' = "idle" /\ snap' = <<FALSE, FALSE>>
         /\ UNCHANGED <<row, lag, building, unsettled, th, wake, crashes>>
   /\ UNCHANGED <<age, stale, kid, seen, flags>>
-\* transfers.py:203-217. Set started_at to the time read after the lock (`lag` ticks ago) where the row is still
+\* transfers.py:219-240. Set started_at to the time read after the lock (`lag` ticks ago) where the row is still
 \* requested, then start a thread; the fix starts one only if that update found the row. The due is the new deadline. A write that raises ends the daemon.
 RunStart(ok) == LET found == row = "requested"
                     i == CHOOSE j \in Threads : th[j] = "idle" IN
@@ -63,10 +64,10 @@ RunStart(ok) == LET found == row = "requested"
         /\ UNCHANGED <<unsettled, wake, crashes>>
      \/ ~ok /\ Restarted /\ UNCHANGED <<age, flags>>
   /\ UNCHANGED <<row, stale, kid, seen>>
-\* transfers.py:221-229. The repo's head goes into the CAS, or that raises. It can take longer than its deadline.
+\* transfers.py:244-252. The repo's head goes into the CAS, or that raises. It can take longer than its deadline.
 BuildEnd(i, ok) == /\ th[i] = "building" /\ th' = [th EXCEPT ![i] = IF ok THEN "ok" ELSE "fail"]
                    /\ UNCHANGED <<row, age, stale, kid, seen, pc, snap, lag, building, unsettled, wake, due, crashes, flags>>
-\* transfers.py:230-238, 240-251. Write the end and its event, then leave `_building`. A write that raises leaves the
+\* transfers.py:253-263, 265-276. Write the end and its event, then leave `_building`. A write that raises leaves the
 \* row requested, and the repo unsettled.
 Settle(i, ok) == /\ th[i] \in {"ok", "fail"} /\ th' = [th EXCEPT ![i] = "idle"] /\ building' = FALSE
                  /\ IF ok THEN row' = (IF th[i] = "ok" THEN "built" ELSE "failed") /\ UNCHANGED <<unsettled, wake>>
