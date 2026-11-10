@@ -6,9 +6,11 @@ the executor's (``piloop.plugins.executor.contract``). An agent's end is a ``Job
 the agent reads it there (``Launcher.launch``), whichever process applied it.
 """
 
+import fcntl
+import os
 import tempfile
-import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from enum import StrEnum
@@ -473,6 +475,26 @@ def explained(process: AgentExit, output: str, found: Mapping[EnvName, SecretStr
     return replace(process, error=tail if process.error is None else f'{process.error}: {tail}')
 
 
+MERGE_LOCK = 'merge.lock'
+"""The file under the home whose lock a workspace merge holds (``merging``)."""
+
+
+@contextmanager
+def merging(home: Path) -> Generator[None]:
+    """Hold the home's merge lock: each path's compare-and-swap must not interleave with another merge's.
+
+    Every process that applies reports merges, the daemon's and each one that serves its API, so the lock is the file's
+    (``flock``), not one of a process: the kernel releases it when its holder dies. Each holder opens the file itself,
+    so two threads of one process exclude each other too.
+    """
+    fd = os.open(home / MERGE_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 class CampaignResults:
     """``Results``: what the end of an agent's job, or of another kind's (``JobKind.apply``), changes in the rows.
 
@@ -502,8 +524,6 @@ class CampaignResults:
         """``[agents] startup_seconds``: an agent that ends sooner and left nothing never worked."""
         self._startup_turns = startup_turns
         """``[agents] startup_turns``: an agent that took more turns worked, however soon it ended."""
-        self._merging = threading.Lock()
-        """Held by a workspace merge: each path's compare-and-swap must not interleave with another merge's."""
 
     def _apply(self, guard: Guard | None, change: Callable[[Session], None]) -> None:
         """Run ``guard``, then ``change``, in one write transaction, and commit. Nothing changes when one raises."""
@@ -706,13 +726,14 @@ class CampaignResults:
         A path that another agent wrote meanwhile keeps that agent's file: this one's goes beside it, named after the
         agent, and this one's removal is not done. The ``WorkspaceConflict`` returned says which.
 
-        One merge at a time, outside the write lock. A merge is idempotent, so a report sent again after a crash merges
-        to the same files; one that the fence then refuses has merged all the same, which keeps what its agent made.
+        One merge at a time on the home, in any of its processes (``merging``), outside the write lock. A merge is
+        idempotent, so a report sent again after a crash merges to the same files; one that the fence then refuses has
+        merged all the same, which keeps what its agent made.
         """
         with self._db.session() as s:
             w = s.get_one(AgentSession, job.agent_session)
             suffix = f'{w.kind}-{w.id}'
-        with self._merging:
+        with merging(self._home):
             merged = merge(self._home / workspace.place, base, staged, suffix)
         if not (merged.beside or merged.blocked or merged.kept):
             return None

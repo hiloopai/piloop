@@ -1,6 +1,8 @@
 """The core operations behind every executor (``CampaignResults``): a result for a settled row is refused."""
 
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping
@@ -15,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from piloop.agents import results as results_module
 from piloop.agents.results import (
+    MERGE_LOCK,
     AgentEnded,
     AgentSessionFinished,
     CampaignResults,
@@ -741,3 +744,58 @@ def test_an_evaluation_that_ends_while_the_current_term_stops_records_nothing_wh
     results.finished(job(running()), report)
     with db.session() as s:
         assert s.scalar(recorded) == before + 1, 'the term stops: the next daemon measures it again'
+
+
+def test_a_workspace_merge_waits_while_another_process_of_the_home_merges(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """The daemon and each process that serves its API apply reports: a merge in one excludes a merge in another."""
+    cas = disk(tmp_path)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
+    live = tmp_path / 'projects' / str(campaign.id) / 'workspace'
+    live.mkdir(parents=True)
+    workspace = Workspace(
+        place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, []).manifest.put(cas)
+    )
+    with db.session() as s:
+        agent = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        s.add(agent)
+        s.commit()
+        agent_session_id = agent.id
+    job = AgentJob(
+        agent_session=agent_session_id,
+        runtime='subprocess',
+        artifact=Source(
+            vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision, workspace=workspace
+        ),
+        place=f'agent_sessions/{agent_session_id}',
+        timeout=60,
+        brief_cid=BRIEF,
+        spec=START,
+    )
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            '-c',
+            'import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT);'
+            " fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); sys.stdin.read()",
+            str(tmp_path / MERGE_LOCK),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None and holder.stdin is not None
+    try:
+        assert holder.stdout.readline() == 'held\n'
+        report = AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0), workspace={'notes.md': cas.put(b'n')})
+        applying = threading.Thread(target=results.finished, args=(job, report))
+        applying.start()
+        applying.join(0.5)
+        assert applying.is_alive() and not (live / 'notes.md').exists(), 'it waits for the other process'
+        holder.stdin.close()
+        applying.join(10)
+        assert not applying.is_alive() and (live / 'notes.md').read_bytes() == b'n'
+    finally:
+        holder.kill()
+        holder.communicate()
