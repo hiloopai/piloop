@@ -47,9 +47,10 @@ from piloop.net.tokens import Caller
 from piloop.plugins.executor.contract import AgentJob, RepoId
 from piloop.plugins.executor.kit.client import Dismissed
 from piloop.plugins.executor.kit.door import NEVER_SENT, RELAY_SECONDS, AgentCall, Call, Relayed
+from piloop.plugins.executor.kit.forks import Runs
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
-from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env, run_group
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, child_env
 from piloop.settings import socket_dir
 
 
@@ -78,6 +79,8 @@ class Runner:
     db: Database
     home: Path
     repos: Callable[[RepoId], Path]
+    run: Runs
+    """Runs the call's ``piloop`` command: ``Forks``, or a process of its own (``processes``)."""
 
     def __call__(self, job: AgentJob, call: Call) -> Relayed:
         with self.db.session() as s:
@@ -106,12 +109,8 @@ class Runner:
                 CHECKOUT_ENV: str(moved),
             }
             try:
-                done = run_group(
-                    [*PILOOP_ARGV, *call.argv],
-                    cwd=self.repos(job.artifact.repo),
-                    env=env,
-                    timeout=RELAY_SECONDS,
-                    input=call.stdin,
+                done = self.run(
+                    call.argv, cwd=self.repos(job.artifact.repo), env=env, timeout=RELAY_SECONDS, input=call.stdin
                 )
             except subprocess.TimeoutExpired:
                 return Relayed(

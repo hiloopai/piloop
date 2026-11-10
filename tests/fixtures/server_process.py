@@ -19,6 +19,7 @@ from piloop.net.server import Server, app, executor_router
 from piloop.net.tokens import Tokens
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import CAS
+from piloop.plugins.executor.kit.forks import Forks
 from piloop.plugins.executor.kit.jobs import send_of_record
 from piloop.plugins.executor.kit.leases import Leases, Timing
 from piloop.plugins.executor.kit.relay import Runner
@@ -44,7 +45,9 @@ def main() -> None:
     listener = network.listener()
     assert listener is not None
     bundle = partial(send_of_record, cas, partial(record_of, db))
-    cli = Runner(db, home, partial(checkout_of, db))
+    cli = Runner(
+        db, home, partial(checkout_of, db), Forks(home, p.relayed_calls)
+    )  # its template ends with this process
     Server(
         app(Tokens(db), network, [executor_router(lease_routes(leases, db.watching, cas, bundle, cli))]), listener
     ).start()

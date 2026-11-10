@@ -6,6 +6,7 @@ those of its pool, through the same lease operations over HTTP (``piloop.plugins
 provisioner gets its workers started and stopped on demand (``piloop.plugins.executor.kit.scaling``).
 """
 
+import sys
 import threading
 import time
 from collections import Counter
@@ -40,6 +41,7 @@ from piloop.plugins.executor.contract import (
 from piloop.plugins.executor.kit import jobs, scaling
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, counted
 from piloop.plugins.executor.kit.client import Local
+from piloop.plugins.executor.kit.forks import Forks, processes
 from piloop.plugins.executor.kit.leases import (
     SERVE,
     Leases,
@@ -55,6 +57,10 @@ from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance, Work
 from piloop.plugins.executor.kit.transfers import FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.settings import RELAY_SOCKET, socket_at
+
+FORKED = sys.platform == 'linux'
+"""Whether the server forks each relayed call from a template (``Forks``), else runs it in a process of its own. macOS
+has no ``SOCK_SEQPACKET`` Unix sockets, and its system frameworks may crash in a child forked without an exec."""
 
 
 class Workers(ExecutorConfig):
@@ -85,6 +91,9 @@ class Workers(ExecutorConfig):
     first_transfer_seconds: float = Field(default=1800, gt=0)
     """How long the server may build a repo's first transfer, which every new worker's empty clone starts from. Past
     it, the jobs that wait on the build fail, and no other build starts until it ends."""
+    relayed_calls: int = Field(default=8, gt=0)
+    """How many ``piloop`` calls of agents on other machines the server runs at once. Each is a process forked from a
+    warm one, which uses about one core while it runs; the calls over it wait for one to end."""
 
     @field_validator('pools', mode='after')
     @classmethod
@@ -111,7 +120,8 @@ class WorkersExecutor:
         self._cas = host.cas
         self._send = FirstTransfers(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
         """What the ``send`` route does: versions from the repo of record, into the CAS."""
-        self._cli = Runner(host.db, host.home, host.repos)
+        self._forks = Forks(host.home, config.relayed_calls) if FORKED else None
+        self._cli = Runner(host.db, host.home, host.repos, processes if self._forks is None else self._forks)
         """What the ``cli`` route does: an agent's relayed call, run here."""
         local = Local(self.leases, SERVE)
         site = jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve)
@@ -221,7 +231,9 @@ class WorkersExecutor:
         self.scaler.join(self.leases.timing.renew)  # the next daemon process lists the instances again
 
     def close(self) -> None:
-        """Nothing to release: the worker's threads end with the daemon process."""
+        """End the template of the relayed calls (``Forks``). The worker's threads end with the daemon process."""
+        if self._forks is not None:
+            self._forks.close()
 
 
 def _worker_argv(server: str, pool: str, policy: Provisioner) -> list[str]:

@@ -1,12 +1,18 @@
 """The ``piloop`` calls of an agent on a worker elsewhere: relayed by its worker, run on the server as the agent."""
 
+import errno
 import io
+import logging
+import os
 import re
+import signal
 import socket
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from functools import partial
 from importlib.metadata import EntryPoint
 from pathlib import Path
@@ -30,26 +36,43 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, Revision
 from piloop.net.tokens import mint_agent
+from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.cli import land
 from piloop.plugins.campaign_type.kit.backlog.wire import Base
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.section import measure
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.executor import workers as workers_module
 from piloop.plugins.executor.contract import AgentJob, RepoId, Source
-from piloop.plugins.executor.kit import door as door_module, jobs, relay as relay_module
+from piloop.plugins.executor.kit import door as door_module, forks as forks_module, jobs, relay as relay_module
 from piloop.plugins.executor.kit.client import Dismissed
 from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed, main
+from piloop.plugins.executor.kit.forks import Forks, Runs, processes
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.executor.kit.relay import Relay, Runner, Shipped
+from piloop.plugins.executor.workers import FORKED, Workers
 from piloop.plugins.role.contract import RELAYED, RoleConfig, Verb
 from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
 from piloop.plugins.section.contract import SECTIONS, Guide
 from piloop.plugins.vcs.contract import Repository, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import Git
-from piloop.proc import ACTOR_ENV, CHECKOUT_ENV
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env, run_group
 from piloop.settings import Settings
-from tests.conftest import ROLE_GROUP, baseline, disk, forget_loaded, install_plugins, no_land, no_ship, no_take
+from tests.conftest import (
+    ROLE_GROUP,
+    ScriptRuntime,
+    baseline,
+    disk,
+    factory,
+    forget_loaded,
+    install_plugins,
+    no_land,
+    no_ship,
+    no_take,
+    workers_of,
+)
 from tests.fixtures.plugin import Auditor
 from tests.test_clones import REPO, commit, fetch_from
 from tests.test_lease import agent_job
@@ -129,8 +152,28 @@ def test_the_commands_that_run_are_those_of_the_agents_role(
 
 
 @pytest.fixture
-def runner(db: Database, tmp_path: Path) -> Runner:
-    return Runner(db, tmp_path, partial(checkout_of, db))
+def runner(db: Database, tmp_path: Path) -> Iterator[Runner]:
+    """The server's end, as the daemon of this platform runs its calls (``workers.FORKED``)."""
+    if not FORKED:
+        yield Runner(db, tmp_path, partial(checkout_of, db), processes)
+        return
+    forks = Forks(tmp_path, 4)
+    yield Runner(db, tmp_path, partial(checkout_of, db), forks)
+    forks.close()
+
+
+forked_only = pytest.mark.skipif(not FORKED, reason='the server forks relayed calls on Linux only (workers.FORKED)')
+
+
+def sh(script: str) -> Runs:
+    """Run ``script`` with sh in place of the call's ``piloop`` command, which gets its words after it."""
+
+    def run(
+        argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float, input: str | None
+    ) -> subprocess.CompletedProcess[str]:
+        return run_group(['sh', '-c', script, 'piloop', *argv], cwd=cwd, env=env, timeout=timeout, input=input)
+
+    return run
 
 
 def launched(db: Database, job: AgentJob) -> SecretStr:
@@ -175,6 +218,248 @@ def test_a_relayed_call_runs_only_with_the_token_of_the_lease_s_agent(
         )
 
 
+def as_agent(db: Database, job: AgentJob, token: SecretStr, tmp_path: Path) -> dict[str, str]:
+    """The environment of a relayed call of the job's agent, as ``Runner`` makes it."""
+    actor = Agent(role='implementer', session=job.agent_session).signature
+    return child_env() | {'PILOOP_HOME': str(tmp_path), ACTOR_ENV: actor, AGENT_TOKEN_ENV: token.get_secret_value()}
+
+
+def test_each_forked_call_runs_as_its_own_agent_with_its_own_token_also_two_at_once(
+    db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, daemon_api: None
+) -> None:
+    """The template is made with no agent's variables: each child reads ``settings`` from its own call's. An agent
+    acts only with its own token, so a child with another call's token would be refused."""
+    jobs_ = [agent_job(db, campaign, tmp_path) for _ in range(2)]
+    tokens_ = [launched(db, job) for job in jobs_]
+    done: list[subprocess.CompletedProcess[str]] = []
+
+    def message(job: AgentJob, token: SecretStr) -> None:
+        env = as_agent(db, job, token, tmp_path)
+        done.append(
+            runner.run(['message', 'demo', f'from {env[ACTOR_ENV]}'], cwd=tmp_path, env=env, timeout=60, input=None)
+        )
+
+    calls = [threading.Thread(target=message, args=pair) for pair in zip(jobs_, tokens_, strict=True)]
+    for each in calls:
+        each.start()
+    for each in calls:
+        each.join(60)
+    assert [d.returncode for d in done] == [0, 0], [d.stderr for d in done]
+    with db.session() as s:
+        signed = {(c.author, c.body) for c in s.scalars(select(Comment).where(Comment.kind == 'message'))}
+    assert signed == {
+        (a, f'from {a}') for a in (Agent(role='implementer', session=j.agent_session).signature for j in jobs_)
+    }
+
+
+def template_of(forks: Forks) -> subprocess.Popen[bytes]:
+    assert forks._template is not None, 'a call started it'
+    return forks._template[0]
+
+
+@forked_only
+@pytest.mark.parametrize('argv', [['sql', 'SELECT 41 + 1'], ['sql'], ['sql', 'SELECT nope']])
+def test_a_forked_call_prints_and_exits_as_a_process_of_its_own(tmp_path: Path, db: Database, argv: list[str]) -> None:
+    """Its output, and its code: 0, a usage error's 2, an error's message and 1."""
+    env = child_env() | {'PILOOP_HOME': str(tmp_path), 'COLUMNS': '80'}
+    forks = Forks(tmp_path, 1)
+    try:
+        forked = forks(argv, cwd=tmp_path, env=env, timeout=60, input=None)
+    finally:
+        forks.close()
+    alone = processes(argv, cwd=tmp_path, env=env, timeout=60, input=None)
+    assert (forked.returncode, forked.stdout, forked.stderr) == (alone.returncode, alone.stdout, alone.stderr)
+
+
+@forked_only
+def test_a_forked_call_that_fails_to_read_its_settings_ends_with_a_traceback_and_1(
+    tmp_path: Path, db: Database
+) -> None:
+    """As a ``piloop`` process does, whose import fails: the child sends no code."""
+    env = child_env() | {'PILOOP_HOME': str(tmp_path), 'PILOOP_DEBUG': 'maybe'}
+    forks = Forks(tmp_path, 1)
+    try:
+        forked = forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+    finally:
+        forks.close()
+    alone = processes(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+    assert forked.returncode == alone.returncode == 1
+    assert 'ValidationError' in forked.stderr and 'ValidationError' in alone.stderr
+
+
+@forked_only
+def test_a_template_that_does_not_start_leaves_each_call_to_a_process_of_its_own(
+    tmp_path: Path, db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(forks_module, 'TEMPLATE_ARGV', (str(tmp_path / 'missing'),))
+    forks = Forks(tmp_path, 1)
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    with caplog.at_level(logging.WARNING):
+        done = forks(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+    assert done.returncode == 0 and done.stdout.count('42') == 1
+    assert 'not forked from the template: the template did not start:' in caplog.text
+
+
+@forked_only
+def test_a_call_that_the_template_does_not_take_runs_in_a_process_of_its_own(
+    tmp_path: Path, db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    forks = Forks(tmp_path, 1)
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+
+    def broken(*_: object) -> int:
+        raise BrokenPipeError(32, 'Broken pipe')
+
+    try:
+        monkeypatch.setattr(forks_module.socket, 'send_fds', broken)
+        with caplog.at_level(logging.WARNING):
+            done = forks(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+        assert done.returncode == 0 and done.stdout.count('42') == 1
+        assert 'the template took no call: [Errno 32] Broken pipe' in caplog.text and forks._template is None
+    finally:
+        forks.close()
+
+
+@forked_only
+def test_a_dead_template_is_replaced_and_a_call_that_it_never_started_runs_in_a_process_of_its_own(
+    tmp_path: Path, db: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    forks = Forks(tmp_path, 2)
+    try:
+        assert forks(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None).stdout.count('42') == 1
+        first = template_of(forks)
+        first.kill()
+        first.wait()
+        with caplog.at_level(logging.WARNING):
+            assert forks(['sql', '-'], cwd=tmp_path, env=env, timeout=60, input='SELECT 6 * 7').stdout.count('42') == 1
+        assert 'the template of the relayed calls exited with -9: a new one starts' in caplog.text
+        second = template_of(forks)
+        assert second is not first
+        forks._end(first)  # as a call that the first one stalled ends it late
+        assert template_of(forks) is second, 'it ends only its own template'
+        os.kill(second.pid, signal.SIGSTOP)  # it takes no call now
+        found: list[subprocess.CompletedProcess[str]] = []
+        call = threading.Thread(
+            target=lambda: found.append(forks(['sql', 'SELECT 7'], cwd=tmp_path, env=env, timeout=60, input=None))
+        )
+        with caplog.at_level(logging.WARNING):
+            call.start()
+            time.sleep(0.3)
+            second.kill()  # with the call that it took, unstarted
+            call.join(60)
+        assert found[0].returncode == 0 and '│ 7 │' in found[0].stdout
+        assert 'a relayed call runs in a process of its own, not forked from the template:' in caplog.text
+    finally:
+        forks.close()
+
+
+@forked_only
+def test_a_call_that_its_template_did_not_start_in_time_ends_the_template(tmp_path: Path, db: Database) -> None:
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    forks = Forks(tmp_path, 1)
+    try:
+        assert forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None).returncode == 0
+        stuck = template_of(forks)
+        os.kill(stuck.pid, signal.SIGSTOP)
+        with pytest.raises(subprocess.TimeoutExpired):
+            forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=0.5, input=None)
+        assert stuck.poll() is not None and forks._template is None, 'it may start the call still: it goes'
+    finally:
+        forks.close()
+
+
+@forked_only
+def test_a_template_that_runs_another_thread_forks_nothing_and_every_call_runs_in_a_process_of_its_own(
+    tmp_path: Path, db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A fork copies only the thread that forks: a lock that another thread holds stays held in the child."""
+    threaded = 'import sys, threading, time; threading.Thread(target=time.sleep, args=(60,), daemon=True).start()'
+    serving = 'from piloop.plugins.executor.kit.template import serve; serve(int(sys.argv[1]))'
+    monkeypatch.setattr(forks_module, 'TEMPLATE_ARGV', (sys.executable, '-P', '-c', f'{threaded}; {serving}'))
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    forks = Forks(tmp_path, 1)
+    try:
+        with caplog.at_level(logging.WARNING):
+            for _ in range(3):
+                assert (
+                    forks(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None).stdout.count('42')
+                    == 1
+                )
+        assert 'the template ran more than one thread: every relayed call runs so from now on' in caplog.text
+        assert forks._template is None, 'none started after it'
+    finally:
+        forks.close()
+
+
+@forked_only
+def test_a_template_that_does_not_exit_when_closed_is_killed(
+    tmp_path: Path, db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(forks_module, 'CLOSE_SECONDS', 0.2)
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    forks = Forks(tmp_path, 1)
+    assert forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None).returncode == 0
+    stuck = template_of(forks)
+    os.kill(stuck.pid, signal.SIGSTOP)
+    forks.close()
+    assert stuck.returncode == -signal.SIGKILL
+
+
+def test_off_linux_the_server_runs_each_relayed_call_in_a_process_of_its_own(
+    tmp_path: Path, db: Database, runtime: ScriptRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workers_module, 'FORKED', False)
+    executor = workers_of(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    run = executor._cli.run
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    assert run is processes and executor._forks is None, 'no template'
+    done = run(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+    assert done.returncode == 0 and done.args[: len(PILOOP_ARGV)] == list(PILOOP_ARGV), 'a piloop process of its own'
+    executor.close()
+
+
+@forked_only
+def test_a_call_with_no_socket_for_it_runs_in_a_process_of_its_own(
+    tmp_path: Path, db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """As on a system without ``SOCK_SEQPACKET`` Unix sockets, or out of descriptors."""
+
+    def refused(*_: object) -> tuple[socket.socket, socket.socket]:
+        raise OSError(errno.EPROTONOSUPPORT, 'Protocol not supported')
+
+    monkeypatch.setattr(forks_module.socket, 'socketpair', refused)
+    forks = Forks(tmp_path, 1)
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    with caplog.at_level(logging.WARNING):
+        done = forks(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None)
+    assert done.returncode == 0 and done.stdout.count('42') == 1
+    assert f'not forked from the template: no socket for the call: [Errno {errno.EPROTONOSUPPORT}]' in caplog.text
+    forks.close()
+
+
+@forked_only
+def test_the_calls_over_the_size_wait_for_one_to_end(tmp_path: Path, db: Database) -> None:
+    env = child_env() | {'PILOOP_HOME': str(tmp_path)}
+    forks = Forks(tmp_path, 1)
+    endless = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c'
+    try:
+        assert forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None).returncode == 0
+        long = threading.Thread(
+            target=lambda: pytest.raises(
+                subprocess.TimeoutExpired, forks, ['sql', endless], cwd=tmp_path, env=env, timeout=2, input=None
+            )
+        )
+        long.start()
+        time.sleep(0.5)
+        began = time.monotonic()
+        assert forks(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None).returncode == 0
+        assert time.monotonic() - began > 1, 'it ran only once the first call was stopped'
+        long.join(30)
+    finally:
+        forks.close()
+
+
 def test_a_command_that_is_not_relayed_is_refused_with_what_is(
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner
 ) -> None:
@@ -186,11 +471,14 @@ def test_a_command_that_is_not_relayed_is_refused_with_what_is(
 def test_a_relayed_call_that_runs_too_long_is_stopped(
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(relay_module, 'RELAY_SECONDS', 0.2)
-    monkeypatch.setattr(relay_module, 'PILOOP_ARGV', ('sh', '-c', 'sleep 5', 'piloop'))
     job = agent_job(db, campaign, tmp_path)
-    done = runner(job, Call(argv=['sql', 'SELECT 1'], token=launched(db, job)))
-    assert (done.exit_code, done.stderr) == (124, 'piloop: the call ran for 0.2 s on the server and was stopped\n')
+    token = launched(db, job)
+    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).exit_code == 0, 'the template runs'
+    monkeypatch.setattr(relay_module, 'RELAY_SECONDS', 1.0)
+    endless = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c'
+    done = runner(job, Call(argv=['sql', endless], token=token))
+    assert (done.exit_code, done.stderr) == (124, 'piloop: the call ran for 1 s on the server and was stopped\n')
+    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).exit_code == 0, 'the template serves on'
 
 
 class Server:
@@ -544,12 +832,11 @@ def test_a_relayed_call_that_moves_the_agents_checkout_names_the_revision_and_mo
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A claim with a base writes its revision to the file that ``CHECKOUT_ENV`` names: the server's checkout stays."""
-    monkeypatch.setattr(relay_module, 'PILOOP_ARGV', ('sh', '-c', f'printf abc > "${CHECKOUT_ENV}"', 'piloop'))
     job = agent_job(db, campaign, tmp_path)
     token = launched(db, job)
-    assert runner(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout == 'abc'
-    monkeypatch.setattr(relay_module, 'PILOOP_ARGV', ('sh', '-c', 'true', 'piloop'))
-    assert runner(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout is None
+    writes = replace(runner, run=sh(f'printf abc > "${CHECKOUT_ENV}"'))
+    assert writes(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout == 'abc'
+    assert replace(runner, run=sh('true'))(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout is None
 
 
 def test_the_relay_moves_the_agents_checkout_after_a_call_that_names_a_revision(tmp_path: Path) -> None:

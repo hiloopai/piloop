@@ -392,8 +392,9 @@ filterwarnings = [
 [tool.coverage.run]
 data_file = ".coverage/.coverage"
 source = ["piloop"]
-omit = ["piloop/db/migrations/*", "piloop/plugins/*/*/migrations/*", "piloop/__main__.py", "piloop/plugins/campaign_type/optimization/templates/*"]
+omit = ["*/piloop/db/migrations/*", "*/piloop/plugins/*/*/migrations/*", "*/piloop/__main__.py", "*/piloop/plugins/campaign_type/optimization/templates/*"]
 branch = true
+patch = ["subprocess"]
 plugins = ["tests.quarantine"]
 
 [tool.coverage.report]
