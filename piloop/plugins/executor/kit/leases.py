@@ -36,13 +36,13 @@ expiry never both apply. The ``leases`` table is core's; ``lease_workers`` is th
 
 import contextlib
 import json
-import logging
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, assert_never
 
 from covalence import Cid
@@ -70,6 +70,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, Watch, read_transaction, write_transaction
 from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
+from piloop.otel import Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
     AGENT,
@@ -136,7 +137,6 @@ class Pools(Parameters):
 
 LIVE_POOLS = f'{EXECUTORS.name}.pools.'
 """The start of the key of each live limit of a pool."""
-_log = logging.getLogger(__name__)
 
 
 LEASE = TargetKind('lease')
@@ -640,20 +640,22 @@ class Leases:
         timing: Timing = DEFAULT_TIMING,
         pools: Mapping[str, Pool] | None = None,
         secrets: SecretsProvider | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         """``cas`` holds the jobs: ``submit`` puts each one there, and the workers read it from there.
 
         ``pools`` are ``[plugins.executor.pools]``: each read applies the live limits over them (``live_pools``).
         ``secrets`` holds the values that an agent's job starts with (``secrets``): the default provider when None.
+        ``tracer`` says which limit the pools refuse (``limits.refused``).
         """
         self._db = db
         self._results = results
         self._cas = cas
         self.timing = timing
-        self.pools = pools if pools is not None else default_pools()
-        """The pools of ``config.toml``. What the leases read is these with the live limits applied (``live_pools``)."""
-        self._applied: tuple[tuple[int, tuple[tuple[str, str], ...]], Mapping[str, Pool]] | None = None
-        """The last ``live_pools``: of which ``pools`` and limits, and what they were."""
+        self._pools: Mapping[str, Pool] = MappingProxyType(dict(pools if pools is not None else default_pools()))
+        self._tracer = tracer if tracer is not None else Tracer(None)
+        self._applied: tuple[tuple[tuple[str, str], ...], Mapping[str, Pool]] | None = None
+        """The last ``live_pools``: of which limits, and what they were."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._lock = threading.Lock()
         self._watching = contextlib.ExitStack()
@@ -664,6 +666,11 @@ class Leases:
         """Of each worker whose last read found no message: the cursor of that read, and ``_messages``' generation
         then."""
 
+    @property
+    def pools(self) -> Mapping[str, Pool]:
+        """The pools of ``config.toml``, which never change: the leases read them with the live limits applied."""
+        return self._pools
+
     def live_pools(self) -> Mapping[str, Pool]:
         """``pools`` with the live limits applied (``piloop limits``), as the rows have them now."""
         with self._db.session() as s:
@@ -673,20 +680,22 @@ class Leases:
         """``live_pools``, read in ``s``.
 
         Every process that serves the API reads them so, from the rows: a limit holds in each at its next read. They
-        are validated again only when the rows or ``pools`` changed. Limits that the pools refuse (a ``config.toml``
-        that changed under them) leave ``pools`` as they are, and the log says why.
+        are validated again only when the rows changed. Each limit applies over the ones before it, by key: one that
+        the pools refuse (a ``config.toml`` that changed under it) is left out, alone, and ``limits.refused`` says why.
         """
         with s.no_autoflush:  # the caller's changes are not the limits': a row half made stays unflushed
             rows = s.scalars(select(Limit).where(Limit.key.startswith(LIVE_POOLS)).order_by(Limit.key)).all()
-        seen = (id(self.pools), tuple((r.key, json.dumps(r.value)) for r in rows))
+        seen = tuple((r.key, json.dumps(r.value)) for r in rows)
         with self._lock:
             if self._applied is not None and self._applied[0] == seen:
                 return self._applied[1]
-        try:
-            found: Mapping[str, Pool] = applied(Pools(pools=dict(self.pools)), rows, EXECUTORS.name).pools
-        except ValidationError as e:
-            _log.warning('the live limits of the pools are refused, and config.toml holds: %s', e)
-            found = self.pools
+        live = Pools(pools=dict(self._pools))
+        for row in rows:
+            try:
+                live = applied(live, [row], EXECUTORS.name)
+            except ValidationError as e:
+                self._tracer.event('limits.refused', key=row.key, error=str(e))
+        found: Mapping[str, Pool] = MappingProxyType(live.pools)
         with self._lock:
             self._applied = seen, found
         return found

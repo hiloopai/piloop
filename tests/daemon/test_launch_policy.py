@@ -15,15 +15,21 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.executor.kit.capacity import Pool
-from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessCase, HarnessChoice, chosen
 from piloop.plugins.harness_choice.round_robin import RoundRobin
 from piloop.plugins.host import ContractBroken, data_errors
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.settings import DaemonSettings
-from tests.conftest import HARNESS_SLEEPS, ScriptRuntime, install_plugins, register, run_all, workers_of, write_toml
+from tests.conftest import (
+    HARNESS_SLEEPS,
+    ScriptRuntime,
+    install_plugins,
+    live_limit,
+    register,
+    run_all,
+    write_toml,
+)
 from tests.daemon.test_run_controller import reload_campaign
 from tests.daemon.test_scheduler import (
     add_ideas,
@@ -145,7 +151,7 @@ def test_a_launch_policy_that_puts_one_campaign_first_gets_it_every_slot_it_can_
     """With ``first``, the listed campaign takes the three free slots; ``fewest_live`` would have split them 2 and 1."""
     two_campaigns(db, campaign, tmp_path)
     scheduler = make_scheduler(db, runtime, tmp_path, plugins={'launch_policy': First(campaigns=['other'])})
-    workers_of(scheduler._controller).leases.pools = {SERVE: Pool(agents=3)}
+    live_limit(db, 'executor.pools.serve.agents', 3)
     assert launched_by_campaign(db, run_all(scheduler)) == {'other': 3}
     scheduler.stop(timeout=5)
 
@@ -156,7 +162,7 @@ def test_a_launch_policy_that_picks_no_campaign_leaves_the_free_slots_idle(
     """A quota of one live agent per campaign: of four free slots, two stay free."""
     two_campaigns(db, campaign, tmp_path)
     scheduler = make_scheduler(db, runtime, tmp_path, plugins={'launch_policy': Capped(max_live=1)})
-    workers_of(scheduler._controller).leases.pools = {SERVE: Pool(agents=4)}
+    live_limit(db, 'executor.pools.serve.agents', 4)
     assert launched_by_campaign(db, run_all(scheduler)) == {'demo': 1, 'other': 1}
     scheduler.stop(timeout=5)
 

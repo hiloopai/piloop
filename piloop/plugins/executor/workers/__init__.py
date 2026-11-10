@@ -128,7 +128,7 @@ class Workers(ExecutorConfig):
         Its first transfers are asked for there and built by the daemon (``FirstTransferBuilds``), and its relayed
         calls fork from a template of the process (``Forks``), which ``close`` ends.
         """
-        leases = Leases(host.db, host.results, host.cas, self.timing(), self.pools, host.secrets)
+        leases = Leases(host.db, host.results, host.cas, self.timing(), self.pools, host.secrets, host.tracer)
         send = FirstTransfers(host.db, host.cas, host.records, self.first_transfer_seconds)
         forks = Forks(host.home, self.relayed_calls) if FORKED else None
         cli = Runner(host.db, host.home, host.repos, processes if forks is None else forks)
@@ -141,7 +141,7 @@ class WorkersExecutor:
 
     def __init__(self, host: Host, config: Workers) -> None:
         timing = config.timing()
-        self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
+        self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets, host.tracer)
         self._builds = FirstTransferBuilds(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
         """Builds the first transfers that ``send`` asks for."""
         self._forks = Forks(host.home, config.relayed_calls) if FORKED else None

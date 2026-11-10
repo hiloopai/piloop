@@ -14,6 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import JsonValue
 from sqlalchemy import select
 
 from piloop.api.contract import Access
@@ -50,7 +51,7 @@ from piloop.plugins.provisioner.contract import InstanceState, Launch
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.git import Git
-from tests.conftest import ACTOR, at_head, baseline, home_cas, package
+from tests.conftest import ACTOR, at_head, baseline, home_cas, live_limit, package
 from tests.fixtures.provisioner import PLATFORMS, Machine, Platform
 from tests.test_lease import HOST, MEASURED, TIMING, Recorder, events, join, queue
 
@@ -99,15 +100,16 @@ class Server:
     def live(self) -> list[WorkerInstance]:
         return [row for row in self.rows() if row.state is not WorkerInstanceState.ENDED]
 
-    def configure(self, found: Mapping[str, Pool]) -> None:
-        self.leases.pools = found
+    def configure(self, key: str, value: JsonValue) -> None:
+        """Set the live limit ``executor.pools.gpu.provisioner.<key>``: the scaler reads it at its next pass."""
+        live_limit(self.db, f'executor.pools.gpu.provisioner.{key}', value)
 
 
 def server(db: Database, home: Path, found: Mapping[str, Pool]) -> Server:
     network = Https(url=URL).open(NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets())))
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, found)
     scaler = Scaler.of(
-        db, lambda: leases.pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone, leases.forget
+        db, leases.live_pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone, leases.forget
     )
     return Server(db, leases, scaler)
 
@@ -172,7 +174,7 @@ def test_a_provisioned_pool_counts_the_slots_of_its_max_workers_less_its_live_le
     join(s.leases, 'gpu-1', ['process'], 'gpu')
     assert isinstance(Local(s.leases, 'gpu-1').acquire(uuid4().hex, HOST), Grant)
     assert s.leases.capacity() == Capacity(0, {EVALUATION: 1}), 'a live lease too, whether its worker counts or not'
-    s.configure(pools(platform, max=0))
+    s.configure('max', 0)
     assert s.leases.capacity() == Capacity(0, {EVALUATION: 0})
 
 
@@ -284,7 +286,7 @@ def test_max_0_drains_a_busy_worker_which_stops_once_its_job_reported(
     registered(s, name)
     grant = Local(s.leases, name).acquire(uuid4().hex, HOST)
     assert isinstance(grant, Grant)
-    s.configure(pools(platform, max=0))
+    s.configure('max', 0)
     s.scaler.reconcile(utcnow())
     s.scaler.reconcile(utcnow())
     assert [row.state for row in s.live()] == [WorkerInstanceState.DRAINING] and name in PLATFORMS[platform].machines
@@ -458,7 +460,7 @@ def test_the_pool_starts_none_past_its_worker_hours_of_the_last_day(
     waiting(db, campaign, tmp_path)
     s.scaler.reconcile(utcnow())
     assert PLATFORMS[platform].machines == {}
-    s.configure(pools(platform, max_worker_hours_per_day=2))
+    s.configure('max_worker_hours_per_day', 2)
     s.scaler.reconcile(utcnow())
     assert len(PLATFORMS[platform].machines) == 1
 

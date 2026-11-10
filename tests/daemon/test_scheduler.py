@@ -93,8 +93,6 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_sessi
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner, RunQueued
 from piloop.plugins.contribution import Leaving
 from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
-from piloop.plugins.executor.kit.capacity import Pool
-from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.facts import HOURS, Facts
 from piloop.plugins.host import Plugins
@@ -123,6 +121,7 @@ from tests.conftest import (
     events,
     factory,
     home_cas,
+    live_limit,
     pinned,
     reconfigured,
     register,
@@ -135,7 +134,6 @@ from tests.conftest import (
     store_config,
     wait_for_agent_session_handle,
     wait_until,
-    workers_of,
     write_toml,
 )
 from tests.test_actor import ACTORS
@@ -301,7 +299,7 @@ def test_agents_launch_across_campaigns_within_the_executors_agent_slots_fewest_
     other = register(db, other_path)
     set_config(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    workers_of(scheduler._controller).leases.pools = {SERVE: Pool(agents=3)}
+    live_limit(db, 'executor.pools.serve.agents', 3)
     add_ideas(db, campaign, 'a1', 'a2', 'a3')
     add_ideas(db, other, 'b1', 'b2', 'b3')
 

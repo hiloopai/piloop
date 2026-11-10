@@ -5,6 +5,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select
 
 from piloop.db.models import Campaign, Limit
@@ -20,7 +21,7 @@ from piloop.plugins.executor.kit.client import Local
 from piloop.plugins.executor.kit.leases import Grant, Leases
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Live, Parameters
-from tests.conftest import ScriptRuntime, factory, home_cas, serving, workers_of
+from tests.conftest import ScriptRuntime, factory, home_cas, live_limit, serving, workers_of
 from tests.test_lease import (
     HOST,
     MEASURED,
@@ -68,23 +69,30 @@ def test_only_a_live_key_that_there_is_takes_a_limit_and_only_a_value_that_its_p
         ] is KeyOrigin.CONFIG
 
 
-def test_a_changed_limit_holds_at_the_next_read_of_any_process_and_a_refused_one_leaves_config_toml(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+def test_a_changed_limit_holds_at_the_next_read_of_any_process_and_a_refused_one_undoes_no_other(
+    db: Database,
+    campaign: Campaign,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    tracer: Tracer,
+    spans: InMemorySpanExporter,
 ) -> None:
-    """The leases read the limits from the rows, so a process that serves the API sees one as the daemon does."""
+    """The leases read the limits from the rows, so a process that serves the API sees one as the daemon does. Each
+    limit applies alone: one that the pools refuse is left out, and says so, and the others hold."""
     ex = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2})
-    other = Leases(db, Recorder(db), home_cas(db), TIMING, workers_of(ex).leases.pools)
+    other = Leases(db, Recorder(db), home_cas(db), TIMING, workers_of(ex).leases.pools, tracer=tracer)
     with db.session() as s:
         limits.set_limit(s, {}, KEY, 1, reason='the GPU is busy', actor='human')
         s.commit()
     assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1}), 'at once'
     assert other.live_pools()['serve'] == Pool(slots={EVALUATION: 1}), 'in the leases of another process too'
-    with db.session() as s:
-        s.get_one(Limit, KEY).value = 'many'  # a limit that the parameters no longer accept
-        s.commit()
-    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2}), 'config.toml holds'
-    assert workers_of(ex).leases.pools['serve'] == Pool(slots={EVALUATION: 2})
+    live_limit(db, 'executor.pools.serve.max_load', 'high')  # a limit that the parameters do not accept
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1}), 'the valid limit holds: no slot comes back'
+    assert other.live_pools()['serve'] == Pool(slots={EVALUATION: 1})
+    refused = [dict(s.attributes or {}) for s in spans.get_finished_spans() if s.name == 'limits.refused']
+    assert [r['key'] for r in refused] == ['executor.pools.serve.max_load'], 'once, by the process that read it'
+    assert workers_of(ex).leases.pools['serve'] == Pool(), "config.toml's pools never change"
 
 
 def test_with_two_evaluations_running_a_lowered_limit_starts_no_third_until_none_runs(

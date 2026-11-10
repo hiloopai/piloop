@@ -26,7 +26,7 @@ import pytest
 from git import Repo
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -41,7 +41,7 @@ from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import terms
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Limit, utcnow
 from piloop.db.session import Database, migrate
 from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName
 from piloop.net.server import Server, app, local_listener, url
@@ -810,6 +810,13 @@ def role_of[R: RoleConfig](cfg: CampaignConfig, kind: type[R]) -> R:
     [found] = [role for role in cfg.roles.all().values() if type(role) is kind]
     assert isinstance(found, kind)
     return found
+
+
+def live_limit(db: Database, key: str, value: JsonValue) -> None:
+    """A live limit of ``key``, as ``piloop limits set`` writes it, without its check against ``config.toml``."""
+    with db.session() as s:
+        s.merge(Limit(key=key, value=value, reason='the test', actor='human'))
+        s.commit()
 
 
 def answering(db: Database, listen: str | None = None) -> DaemonState:
