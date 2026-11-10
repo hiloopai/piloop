@@ -4,6 +4,8 @@ import re
 import threading
 import time
 import tomllib
+from collections.abc import Callable, Sequence
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -14,10 +16,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
 from pytest_mock import MockerFixture
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
+from piloop.agents import launcher as launcher_module
 from piloop.agents.launcher import Launcher, fill
 from piloop.agents.results import (
     AGENT_SESSION_STATES,
@@ -46,7 +49,7 @@ from piloop.agents.roles import (
     role,
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.db.events import emit, in_order
+from piloop.db.events import Topic, emit, in_order
 from piloop.db.machine import transition
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, utcnow
 from piloop.db.session import Database
@@ -81,7 +84,7 @@ from piloop.plugins.section.context import Context
 from piloop.plugins.section.contract import Rendering
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git
-from piloop.settings import AgentSettings, Settings
+from piloop.settings import AgentSettings, DaemonSettings, Settings
 from piloop.store.chunks import read
 from tests.conftest import (
     AUDITOR,
@@ -1301,3 +1304,33 @@ def put_secret(db: Database, owner: CampaignId | None, name: str, value: str) ->
         set_secret(s, SECRETS.selected({}), System.HUMAN, owner, name, SecretStr(value))
         s.commit()
     return value
+
+
+def test_a_wait_for_an_agent_sees_a_close_without_an_event_at_its_next_reread(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the agent's ``agent_session.finished`` wakes its wait. A close that adds none, by ``piloop sql`` say, is
+    seen at the next ``[daemon] agent_reread``."""
+    reread = DaemonSettings(agent_reread=timedelta(seconds=0.2))
+    monkeypatch.setattr(launcher_module, 'settings', Settings(daemon=reread))
+    agent_session_id = request(db, campaign, state=AgentSessionState.RUNNING)
+    reread, wait = threading.Event(), db.wait_until
+
+    def waits(
+        done: Callable[[Session], bool], *, on: Sequence[Topic], give_up: Callable[[], bool], timeout: float
+    ) -> bool:
+        found = wait(done, on=on, give_up=give_up, timeout=timeout)
+        reread.set()
+        return found
+
+    monkeypatch.setattr(db, 'wait_until', waits)
+    ended: list[Ended] = []
+    waiting = threading.Thread(target=lambda: ended.append(launcher(db, runtime, tmp_path).reattach(agent_session_id)))
+    waiting.start()
+    assert reread.wait(10), 'a first wait ended at its reread, with the row still open'
+    with db.session() as s:  # as piloop sql: no event
+        closed = update(AgentSession).where(AgentSession.id == agent_session_id)
+        s.execute(closed.values(state=AgentSessionState.KILLED, ended_at=utcnow(), error='closed by hand'))
+        s.commit()
+    waiting.join(10)
+    assert ended == [DaemonStopped()], "a close without a job end is a stop's"

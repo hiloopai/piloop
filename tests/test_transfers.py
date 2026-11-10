@@ -185,7 +185,7 @@ def worker(db: Database, store: Cas, record: Counted, dial: Dial) -> Generator[R
         app(
             Tokens(db),
             network,
-            [executor_router(lease_routes(leases, db.changed, store, transfers(db, store, record).send, echoed))],
+            [executor_router(lease_routes(leases, db.watching, store, transfers(db, store, record).send, echoed))],
         ),
         listener,
     )

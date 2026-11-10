@@ -35,6 +35,7 @@ from piloop.api.views import (
     Thread,
 )
 from piloop.db import feed as db_feed
+from piloop.db.events import Topic
 from piloop.db.models import NOT_RETIRED, Ack, AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.session import write_transaction
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited
@@ -143,7 +144,7 @@ def answers(s: Session, asked: Sequence[Comment]) -> dict[CommentId, Comment]:
     return found
 
 
-WAKES: Final = tuple(db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, CandidateScored))
+WAKES: Final = tuple(Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, CandidateScored))
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 
 

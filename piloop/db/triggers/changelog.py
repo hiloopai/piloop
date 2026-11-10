@@ -254,6 +254,24 @@ class EvaluationCancelled(EventModel):
     by: Annotated[str, Sql('{row}.cancelled_by')]
 
 
+class EvaluationDeleted(EventModel):
+    """On the candidate: its evaluation left the queue, as it ended, a cancel took it, or its evaluator retired."""
+
+    kind: Literal['evaluation.deleted'] = 'evaluation.deleted'
+    evaluation: Annotated[int, Sql('{row}.id')]
+
+
+class EvaluationRequeued(EventModel):
+    """On the candidate: nothing came back from its running evaluation, which waits for a slot again.
+
+    Its own request reads it (``RunController._wait``), and submits it when a slot is free.
+    """
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['evaluation.requeued'] = 'evaluation.requeued'
+    evaluation: Annotated[int, Sql('{row}.id')]
+
+
 class LimitSet(EventModel):
     """On the home: a live limit was set (``piloop limits set``)."""
 
@@ -509,6 +527,22 @@ OUTBOX = (
         of=('cancelled_by',),
         when='OLD.cancelled_by IS NULL AND NEW.cancelled_by IS NOT NULL',
         body=event_insert(SESSION_ACTOR, "'candidate'", 'NEW.candidate_id', payload(EvaluationCancelled, 'NEW')),
+        temp=True,
+    ),
+    Trigger(
+        'evaluations_deleted_event',
+        'evaluations',
+        'AFTER DELETE',
+        body=event_insert(SESSION_ACTOR, "'candidate'", 'OLD.candidate_id', payload(EvaluationDeleted, 'OLD')),
+        temp=True,
+    ),
+    Trigger(
+        'evaluations_requeued_event',
+        'evaluations',
+        'AFTER UPDATE',
+        of=('started_at',),
+        when='OLD.started_at IS NOT NULL AND NEW.started_at IS NULL',
+        body=event_insert(SESSION_ACTOR, "'candidate'", 'NEW.candidate_id', payload(EvaluationRequeued, 'NEW')),
         temp=True,
     ),
     inserted(LimitSet, 'limits', HOME_TARGET),

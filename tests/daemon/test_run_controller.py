@@ -453,6 +453,7 @@ def test_successful_run_scores_the_commit(
             'lease.acquired',
             'lease.started',
             'lease.reported',
+            'evaluation.deleted',
             'measurement.recorded',
             'candidate.scored',
         ]

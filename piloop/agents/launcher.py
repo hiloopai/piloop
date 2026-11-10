@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.agents.results import (
+    AgentSessionFinished,
     AgentSessionStarted,
     DaemonStopped,
     Ended,
@@ -31,7 +32,7 @@ from piloop.agents.results import (
     learn,
 )
 from piloop.config import BRIEF_FILE, CampaignConfig
-from piloop.db.events import emit, latest
+from piloop.db.events import Topic, emit, latest
 from piloop.db.machine import Refused
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database, write_transaction
@@ -41,6 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.executor.contract import AgentJob, Executor, ExecutorConfig, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.runtime.contract import AgentStart
+from piloop.settings import settings
 
 
 class Launcher:
@@ -140,14 +142,20 @@ class Launcher:
             return self._await(agent_session_id, span)
 
     def _await(self, agent_session_id: AgentSessionId, span: Span) -> Ended:
-        """Wait for the row to close, and return how its job ended (``ended_of``). A close without one is a stop's."""
+        """Wait for the row to close, and return how its job ended (``ended_of``). A close without one is a stop's.
+
+        Every close goes through ``finish``, whose ``agent_session.finished`` wakes this wait alone.
+        """
 
         def closed(s: Session) -> bool:
             return s.get_one(AgentSession, agent_session_id).state not in LIVE
 
-        if not self.db.wait_until(closed, give_up=self.handover.is_set):
-            span.set(state='handed_over')
-            return HandedOver()
+        finished = Topic(AgentSessionFinished, target=TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
+        reread = settings.daemon.agent_reread.total_seconds()
+        while not self.db.wait_until(closed, on=[finished], give_up=self.handover.is_set, timeout=reread):
+            if self.handover.is_set() or self.db.closed:
+                span.set(state='handed_over')
+                return HandedOver()
         with self.db.session() as s:
             span.set(state=s.get_one(AgentSession, agent_session_id).state)
             ended = ended_of(s, agent_session_id)

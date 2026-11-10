@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from piloop.api.contract import MAX_POLL_SECONDS, Polled
 from piloop.ids import Revision
-from piloop.net import Changed, Refusal, Route
+from piloop.net import Refusal, Route, Watching
 from piloop.net.tokens import Caller
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
@@ -60,6 +60,7 @@ from piloop.plugins.executor.kit.leases import (
     Revoke,
     StaleLease,
     Work,
+    topics,
 )
 from piloop.plugins.executor.kit.relay import LeaseCall, Run
 from piloop.plugins.executor.kit.tables import NoLease
@@ -191,11 +192,12 @@ class Sent(RootModel[list[BlobAddress]]):
     """The answer of ``send``: the addresses in the CAS to take, in order. Empty: the clone has the versions already."""
 
 
-def lease_routes(leases: Leases, changed: Changed, cas: Cas, send: Send, cli: Run) -> list[Route]:
+def lease_routes(leases: Leases, watching: Watching, cas: Cas, send: Send, cli: Run) -> list[Route]:
     """The routes of the ``LeaseClient`` calls, each made on ``Local`` as the caller, ``send`` and ``cli``.
 
-    ``changed`` is ``Database.changed`` of the leases' database: what ``messages`` and ``send`` await between two
-    reads. ``cas`` is the server's, which ``register`` checks that the worker shares (``WorkerInfo.cas_probe``).
+    ``watching`` is ``Database.watching`` of the leases' database: what ``messages`` and ``send`` await between two
+    reads. ``messages`` wakes on the events of its worker (``topics``); ``send`` on ``Database.notify`` alone, which
+    the transfer calls once it is done. ``cas`` is the server's, which ``register`` checks that the worker shares (``WorkerInfo.cas_probe``).
     ``send`` puts versions from the repo of record into it (``FirstTransfers.send``). ``cli`` runs a relayed call of an
     agent, on a live lease of the caller (``relay.Runner``).
     """
@@ -206,10 +208,12 @@ def lease_routes(leases: Leases, changed: Changed, cas: Cas, send: Send, cli: Ru
         Route('heartbeat', Heartbeat, _as_caller(leases, _heartbeat)),
         Route('report', Reported, _as_caller(leases, _report)),
         Route('lost', Lost, _as_caller(leases, _lost)),
-        Route.long_poll('messages', Read, _as_caller(leases, _messages), changed),
+        Route.long_poll(
+            'messages', Read, _as_caller(leases, _messages), watching, lambda caller, _: topics(caller.name)
+        ),
         Route('queued', Queued, _as_caller(leases, _queued)),
         Route('secrets', SecretsAsked, _as_caller(leases, _secrets)),
-        Route.long_poll('send', SendAsked, partial(_send, send), changed),
+        Route.long_poll('send', SendAsked, partial(_send, send), watching, lambda _caller, _body: ()),
         Route('cli', LeaseCall, _as_caller(leases, partial(_cli, cli))),
     ]
 

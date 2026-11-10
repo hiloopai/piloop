@@ -15,20 +15,9 @@ from dataclasses import dataclass
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
-from piloop.db.events import has
-from piloop.db.models import Event, EventModel
+from piloop.db.events import Topic
+from piloop.db.models import Event
 from piloop.db.session import read_transaction
-
-
-@dataclass(frozen=True)
-class Topic:
-    """The events of ``model``. With ``to``, only those addressed to that worker: the model's ``worker``."""
-
-    model: type[EventModel]
-    to: str | None = None
-
-    def matches(self) -> ColumnElement[bool]:
-        return has(self.model) if self.to is None else has(self.model, worker=self.to)
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from functools import partial
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from piloop.db.events import Topic
 from piloop.db.feed import newest
 from piloop.db.models import Event, EventModel, UnknownEvent, utcnow
 from piloop.db.session import Database
@@ -169,7 +170,10 @@ class Loop:
             left = (planned - self._now()).total_seconds() if planned is not None else None
             # it returns at once when an event, a wake or the due is there already
             self._db.wait_until(
-                partial(_moved, self._cursor), give_up=lambda: stopped() or self._has_woken(), timeout=_timeout(left)
+                partial(_moved, self._cursor),
+                on=[Topic()],
+                give_up=lambda: stopped() or self._has_woken(),
+                timeout=_timeout(left),
             )
             late = self._now() - planned if planned is not None else timedelta(0)
             absent = max(late, timedelta(0))

@@ -7,7 +7,7 @@ lookups as dependencies (``Selected``, ``Narrowed``) over one session per reques
 
 import os
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -115,8 +115,8 @@ from piloop.campaign.campaigns import (
 from piloop.campaign.stop import CANCELLABLE, request_cancel
 from piloop.config import ConfigError
 from piloop.db import feed as db_feed
-from piloop.db.events import has, latest
-from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
+from piloop.db.events import Topic, has, latest
+from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, utcnow
 from piloop.db.session import Database
 from piloop.ids import (
     AgentSessionId,
@@ -345,32 +345,40 @@ def inbox(s: Reading, me: Acting, campaign: Narrowed, query: Annotated[InboxQuer
 async def events(request: Request, api: Api, query: Annotated[EventsQuery, Query()]) -> Batch:
     """The events after a cursor. With wait, it answers once an event matches, or at the end of the wait with none.
 
-    Each read runs in the thread pool, in a session of its own. Between two reads the route awaits the database's
-    next wake and holds no thread. Each read starts at the cursor that the last one moved to, past what the filters
+    Each read runs in the thread pool, in a session of its own. Between two reads the route awaits the next event of
+    its kinds and holds no thread. Each read starts at the cursor that the last one moved to, past what the filters
     left out.
     """
-    deadline, seen = time.monotonic() + query.wait, 0
+    deadline = time.monotonic() + query.wait
     campaign = await run_in_threadpool(_narrowed, api.db, query)
-    batch = await run_in_threadpool(_events, api.db, query, campaign, query.after)
-    while not (batch.events or batch.more) and (left := deadline - time.monotonic()) > 0:
-        if (woke := await changed(request, api.db.changed, seen, left)) is None:
-            break
-        seen = woke
-        batch = await run_in_threadpool(_events, api.db, query, campaign, batch.next)
+    with api.db.watching(_of_kinds(query.kind)) as watch:
+        batch = await run_in_threadpool(_events, api.db, query, campaign, query.after)
+        while not (batch.events or batch.more) and (left := deadline - time.monotonic()) > 0:
+            if not await changed(request, watch, left):
+                break
+            batch = await run_in_threadpool(_events, api.db, query, campaign, batch.next)
     return batch
+
+
+def _of_kinds(kinds: Sequence[str]) -> list[Topic]:
+    """The topics of the events of ``kinds``: every event for none, or for a kind that no loaded module registers."""
+    registered = EventModel.registered()
+    if not kinds or any(k not in registered for k in kinds):
+        return [Topic()]
+    return [Topic(registered[k]) for k in kinds]
 
 
 @router.get('/inbox/news', operation_id='news')
 async def news(request: Request, api: Api, me: Acting, query: Annotated[NewsQuery, Query()]) -> News:
     """What needs the orchestrator after a cursor, but what the caller itself wrote. With wait, a long-poll."""
-    deadline, seen = time.monotonic() + query.wait, 0
+    deadline = time.monotonic() + query.wait
     campaign = await run_in_threadpool(_narrowed, api.db, query)
-    found = await run_in_threadpool(_news, api.db, campaign, me, query.after)
-    while not found.items and (left := deadline - time.monotonic()) > 0:
-        if (woke := await changed(request, api.db.changed, seen, left)) is None:
-            break
-        seen = woke
-        found = await run_in_threadpool(_news, api.db, campaign, me, found.next)
+    with api.db.watching(inbox_module.WAKES) as watch:
+        found = await run_in_threadpool(_news, api.db, campaign, me, query.after)
+        while not found.items and (left := deadline - time.monotonic()) > 0:
+            if not await changed(request, watch, left):
+                break
+            found = await run_in_threadpool(_news, api.db, campaign, me, found.next)
     return found
 
 
@@ -757,13 +765,13 @@ async def prompt(request: Request, api: Api, me: Acting, agent: AgentSessionId, 
     written first, in the thread pool; between two reads of its outcome the route holds no thread.
     """
     comment = await run_in_threadpool(_queue_prompt, api.db, me, agent, body.text)
-    deadline, seen = time.monotonic() + body.wait, 0
-    answer = await run_in_threadpool(_prompted, api.db, agent, comment)
-    while isinstance(answer.delivery, Pending) and (left := deadline - time.monotonic()) > 0:
-        if (woke := await changed(request, api.db.changed, seen, left)) is None:
-            break
-        seen = woke
+    deadline = time.monotonic() + body.wait
+    with api.db.watching([Topic(PromptOutcome, target=TargetRef(TargetKind.AGENT_SESSION, agent))]) as watch:
         answer = await run_in_threadpool(_prompted, api.db, agent, comment)
+        while isinstance(answer.delivery, Pending) and (left := deadline - time.monotonic()) > 0:
+            if not await changed(request, watch, left):
+                break
+            answer = await run_in_threadpool(_prompted, api.db, agent, comment)
     return answer
 
 

@@ -106,7 +106,7 @@ class WorkersExecutor:
     def __init__(self, host: Host, config: Workers) -> None:
         timing = Timing(config.renew_seconds, config.grace_seconds, config.toleration_seconds, config.report_tries)
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
-        self._changed = host.db.changed
+        self._watching = host.db.watching
         self._cas = host.cas
         self._send = FirstTransfers(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
         """What the ``send`` route does: versions from the repo of record, into the CAS."""
@@ -188,7 +188,7 @@ class WorkersExecutor:
         machines call the lease routes (``remote.lease_routes``, ``piloop worker``).
         """
         wakes = frozenset(t.model for t in scaling.WAKES)
-        routes = lease_routes(self.leases, self._changed, self._cas, self._send.send, self._cli)
+        routes = lease_routes(self.leases, self._watching, self._cas, self._send.send, self._cli)
         return Contribution(
             consumers=(Consumer('executor', wakes, self._upkeep, Phase.UPKEEP),), router=executor_router(routes)
         )

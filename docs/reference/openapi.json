@@ -363,7 +363,7 @@
     "/v1/events": {
       "get": {
         "summary": "Events",
-        "description": "The events after a cursor. With wait, it answers once an event matches, or at the end of the wait with none.\n\nEach read runs in the thread pool, in a session of its own. Between two reads the route awaits the database's\nnext wake and holds no thread. Each read starts at the cursor that the last one moved to, past what the filters\nleft out.",
+        "description": "The events after a cursor. With wait, it answers once an event matches, or at the end of the wait with none.\n\nEach read runs in the thread pool, in a session of its own. Between two reads the route awaits the next event of\nits kinds and holds no thread. Each read starts at the cursor that the last one moved to, past what the filters\nleft out.",
         "operationId": "events",
         "parameters": [
           {

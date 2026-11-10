@@ -19,8 +19,10 @@ from pydantic import BaseModel, ValidationError
 
 from piloop.api.contract import Access, Polled
 from piloop.daemon.main import preflight
-from piloop.db.models import Campaign
+from piloop.db.events import Topic
+from piloop.db.models import Campaign, Pause
 from piloop.db.session import Database
+from piloop.db.triggers.changelog import CampaignPausedChanged
 from piloop.net import Route, cas_server, tokens
 from piloop.net.cas import route
 from piloop.net.server import App, Server, app, executor_router
@@ -306,9 +308,9 @@ def renamed_to(db: Database) -> Callable[[Caller, Poll], Answer | None]:
 def test_more_long_polls_than_pool_threads_hold_none_and_a_quick_route_still_answers_at_once(
     serving: Serving, token: Callable[..., str], db: Database, campaign: Campaign, dial: Dial
 ) -> None:
-    """Starlette's pool has 40 threads. A long-poll holds one only while it reads, then awaits a commit."""
+    """Starlette's pool has 40 threads. A long-poll holds one only while it reads, then awaits an event."""
     polls = 50
-    route = Route.long_poll('renamed', Poll, renamed_to(db), db.changed)
+    route = Route.long_poll('renamed', Poll, renamed_to(db), db.watching, lambda *_: [Topic(CampaignPausedChanged)])
     with serving([ECHO, route]) as server, dial(server.url, token()) as client:
         with ThreadPoolExecutor(polls) as pool:
             waiting = [
@@ -319,13 +321,14 @@ def test_more_long_polls_than_pool_threads_hold_none_and_a_quick_route_still_ans
             began = time.monotonic()
             assert client.post(ECHOED, json=HI).status_code == 200
             assert time.monotonic() - began < 1, 'a heartbeat waits for no long-poll'
-            with db.session() as s:
-                s.get_one(Campaign, campaign.id).name = 'renamed'
+            with db.session() as s:  # a pause adds the event that wakes them
+                row = s.get_one(Campaign, campaign.id)
+                row.name, row.paused, row.paused_reason, row.paused_by = 'renamed', Pause.ALL, 'a test', 'human'
                 s.commit()
             began = time.monotonic()
             answers = [w.result(timeout=15) for w in waiting]
         assert {(a.status_code, a.json()['text']) for a in answers} == {(200, 'renamed')}
-        assert time.monotonic() - began < 10, 'the commit woke them, long before their wait ended'
+        assert time.monotonic() - began < 10, 'the event woke them, long before their wait ended'
         quiet = client.post('/v1/executor/renamed', json={'name': 'other', 'wait': 0.2})
         assert quiet.status_code == 204, 'nothing by the end of its wait'
         assert client.post('/v1/executor/renamed', json={'name': 'x', 'wait': 26}).status_code == 422
@@ -339,7 +342,7 @@ def test_a_close_ends_a_parked_long_poll_at_once_with_204_and_logs_no_error(
     dial: Dial,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    route = Route.long_poll('renamed', Poll, renamed_to(db), db.changed)
+    route = Route.long_poll('renamed', Poll, renamed_to(db), db.watching, lambda *_: [Topic(CampaignPausedChanged)])
     with serving([route]) as server, dial(server.url, token()) as client, ThreadPoolExecutor(1) as pool:
         parked = pool.submit(client.post, '/v1/executor/renamed', json={'name': 'renamed', 'wait': 20})
         time.sleep(0.5)  # the long-poll is parked

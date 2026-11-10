@@ -1,5 +1,8 @@
 """Add to the events feed, and find events in it. Every state change that piloop makes goes through ``emit``."""
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+from functools import cached_property
 from typing import Literal
 
 from pydantic_core import to_jsonable_python
@@ -45,6 +48,60 @@ def has(model: type[EventModel], **fields: object) -> ColumnElement[bool]:
         path = func.json_extract(Event.payload, f'$.{field.alias or name}')
         clauses.append(path.in_([to_jsonable_python(v) for v in values]))
     return and_(*clauses)
+
+
+@dataclass(frozen=True)
+class NewEvent:
+    """An event as ``Database`` reads it after its commit, to wake the waiters whose ``Topic`` admits it."""
+
+    id: int
+    kind: str
+    target_kind: str
+    target_id: int
+    payload: Mapping[str, object] | None
+    """Its stored JSON. None when that is no JSON object: no ``Topic.to`` admits it."""
+
+
+@dataclass(frozen=True)
+class Topic:
+    """The events of ``model`` and of its subclasses: ``EventModel``, the default, is every event.
+
+    With ``to``, only those addressed to that worker: the model's ``worker``. With ``target``, only those on that row.
+    """
+
+    model: type[EventModel] = EventModel
+    to: str | None = None
+    target: TargetRef | None = None
+
+    def matches(self) -> ColumnElement[bool]:
+        """The events that it admits, in SQL."""
+        clauses = [has(self.model) if self.to is None else has(self.model, worker=self.to)]
+        if self.target is not None:
+            clauses.append(Event.target == self.target)
+        return and_(*clauses)
+
+    def admits(self, event: NewEvent) -> bool:
+        """Whether ``event`` is of the topic: ``matches`` in memory."""
+        if self._kinds is not None and event.kind not in self._kinds:
+            return False
+        if self.target is not None and (event.target_kind, event.target_id) != (self.target.kind, self.target.id):
+            return False
+        return self._to is None or (event.payload is not None and event.payload.get(self._to) == self.to)
+
+    @cached_property
+    def _kinds(self) -> frozenset[str] | None:
+        """The kinds of ``model`` and of its subclasses. None for ``EventModel``: every kind, unknown ones too."""
+        if self.model is EventModel:
+            return None
+        return frozenset(kind for kind, m in EventModel.registered().items() if issubclass(m, self.model))
+
+    @cached_property
+    def _to(self) -> str | None:
+        """The key of the model's ``worker`` in the stored JSON, when ``to`` is set."""
+        if self.to is None:
+            return None
+        field = self.model.model_fields['worker']
+        return field.alias or 'worker'
 
 
 def latest[M: EventModel](s: Session, model: type[M], *where: ColumnElement[bool]) -> tuple[Event, M] | None:

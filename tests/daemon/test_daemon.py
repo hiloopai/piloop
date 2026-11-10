@@ -119,6 +119,7 @@ def test_daemon_end_to_end(
                 'lease.acquired candidate',
                 'lease.started candidate',
                 'lease.reported candidate',
+                'evaluation.deleted candidate',
                 'measurement.recorded measurement',
                 'candidate.scored candidate',
                 'idea.status idea',

@@ -354,11 +354,10 @@ def test_an_evaluation_that_waits_for_a_slot_gives_up_when_the_database_closes(
         evaluation, _ = queue.request(s, base, evaluator)
         s.commit()
         evaluation_id = evaluation.id
-    waking = mocker.spy(ex, '_next_wake')
+    capacity = mocker.spy(ex.executor, 'capacity')
     waited: list[bool] = []
-    waiter = in_thread(lambda: waited.append(ex._wait(evaluation_id)))
-    # the doorbell's first read wakes the first wait once; the second lasts until the close
-    wait_until(lambda: waking.call_count == 2, 'the wait for a slot')
+    waiter = in_thread(lambda: waited.append(ex._wait(evaluation_id, base)))
+    wait_until(lambda: capacity.call_count, 'the read of the free slots, after which it waits')
     db.close()
     waiter.join(SETTLE)
     assert waited == [False], 'it gave up'

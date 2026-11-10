@@ -4,7 +4,7 @@ import importlib
 import pkgutil
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,7 +18,7 @@ import piloop
 from piloop.actor import System
 from piloop.daemon.loop import Consumer, Loop, Phase, Turn, routes
 from piloop.daemon.scheduler import Scheduler
-from piloop.db.events import emit
+from piloop.db.events import Topic, emit
 from piloop.db.models import AgentSession, Campaign, EventModel, ReadBy, UnknownEvent, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaCreated, LimitSet
@@ -168,7 +168,9 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'comment.queued': [],
             'comment.undelivered': [],
             'evaluation.cancelled': ['evaluations'],
+            'evaluation.deleted': ['evaluations'],
             'evaluation.infra_error': [],
+            'evaluation.requeued': [],
             'fact.read': ['campaigns'],
             'idea.created': ['campaigns'],
             'idea.deleted': ['campaigns'],
@@ -197,7 +199,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'lease_worker.relieved': ['evaluations', 'campaigns'],
             'limit.set': ['limits', 'evaluations', 'campaigns'],
             'limit.unset': ['limits', 'evaluations', 'campaigns'],
-            'measurement.recorded': ['evaluations', 'campaigns'],
+            'measurement.recorded': ['campaigns'],
             'notification.failed': [],
             'notification.received': [],
             'notification.sent': [],
@@ -455,9 +457,11 @@ def test_a_served_loop_reads_a_long_feed_in_pages_and_runs_an_overdue_consumer_w
     waiting = threading.Event()
     wait = db.wait_until
 
-    def waits(done: Callable[[Session], bool], give_up: Callable[[], bool], timeout: float) -> bool:
+    def waits(
+        done: Callable[[Session], bool], *, on: Sequence[Topic], give_up: Callable[[], bool], timeout: float
+    ) -> bool:
         waiting.set()
-        return wait(done, give_up, timeout)
+        return wait(done, on=on, give_up=give_up, timeout=timeout)
 
     monkeypatch.setattr(db, 'wait_until', waits)
     served(loop := Loop(db, consumers, page=1))

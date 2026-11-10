@@ -115,9 +115,10 @@ class FirstTransfers:
         return None
 
     def _build(self, repo: RepoId, build: Future[None]) -> None:
-        """Put the repo of record's head and all before it into the CAS, and write its row: the commit wakes the polls.
+        """Put the repo of record's head and all before it into the CAS, write its row, and wake the polls.
 
-        A failure stays in ``build`` for the next request to raise, with its cause, and wakes the polls too.
+        A failure stays in ``build`` for the next request to raise, with its cause, and wakes the polls too. The row
+        adds no event, so ``notify`` wakes them.
         """
         try:
             with self._tracer.span('piloop.first_transfer', repo=repo):
@@ -125,7 +126,7 @@ class FirstTransfers:
                     head = record.head().revision
                     blob = record.send(self._cas, [head], [])
                 assert blob is not None  # with nothing had, the head is sent
-            # under the lock: a poll that the commit wakes reads after the build left, so it finds the row. One that
+            # under the lock: a poll that the notify wakes reads after the build left, so it finds the row. One that
             # found the build still there would wait for a wake that never comes, until its wait ends.
             with self._lock, self._db.session() as s:
                 s.merge(FirstTransfer(campaign_id=repo, revision=head, blob=blob))
@@ -133,6 +134,7 @@ class FirstTransfers:
                 del self._builds[repo]
         except Exception as e:
             build.set_exception(e)
-            self._db.notify()  # no commit wakes the polls
+            self._db.notify()
             return
         build.set_result(None)
+        self._db.notify()

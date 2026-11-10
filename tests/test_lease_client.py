@@ -113,7 +113,7 @@ def server(network: HttpsNetwork, leases: Leases, db: Database, tmp_path: Path) 
     cas = disk(tmp_path / 'server')
     assert cas.put(b'piloop worker cas probe\n') == PROBE, 'the workers share it'
     server = Server(
-        app(Tokens(db), network, [executor_router(lease_routes(leases, db.changed, cas, bundled, echoed))]), listener
+        app(Tokens(db), network, [executor_router(lease_routes(leases, db.watching, cas, bundled, echoed))]), listener
     )
     server.start()
     yield server
@@ -481,7 +481,7 @@ def test_long_polls_hold_no_thread_of_the_server_so_a_heartbeat_still_answers(
     ]
     for poll in polls:
         poll.start()
-    wait_until(lambda: len(db._changed) == len(polls))  # all parked: their first reads are done
+    wait_until(lambda: sum(w._future is not None for w in db._watches) == len(polls))  # all parked after a read
     assert workers[0].heartbeat({}, HOST) == {}
     assert all(poll.is_alive() for poll in polls), 'it answered before any long-poll gave up its wait'
     server.close()  # ends the long-polls

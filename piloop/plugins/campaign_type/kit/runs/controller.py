@@ -5,6 +5,7 @@ The run closes when its implementer ends, so the implementer slot is free while 
 """
 
 import json
+import math
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -48,7 +49,7 @@ from piloop.campaign.campaigns import (
 )
 from piloop.campaign.stop import run_cancel, seconds, timeout as agent_timeout
 from piloop.config import TRANSCRIPT, CampaignConfig
-from piloop.db.events import emit, has, latest
+from piloop.db.events import Topic, emit, has, latest
 from piloop.db.machine import Machine, Refused, transition
 from piloop.db.models import (
     LIVE,
@@ -61,8 +62,14 @@ from piloop.db.models import (
     ReadBy,
     utcnow,
 )
+from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database, write_transaction
-from piloop.db.triggers.changelog import AgentSessionRequested
+from piloop.db.triggers.changelog import (
+    AgentSessionRequested,
+    EvaluationCancelled,
+    EvaluationDeleted,
+    EvaluationRequeued,
+)
 from piloop.ids import (
     AgentSessionId,
     CampaignId,
@@ -76,7 +83,7 @@ from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue, submissions
@@ -102,7 +109,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, hold_on_infra_errors
-from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
+from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted, submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import firsts
 from piloop.plugins.campaign_type.kit.pool.pool import (
@@ -114,7 +121,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import (
     criterion,
     track_of,
 )
-from piloop.plugins.campaign_type.kit.pool.scored import record_scored
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored, record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
@@ -141,6 +148,8 @@ from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
 
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
 RUNS = 'runs'
+SETTLES = tuple(Topic(m) for m in (Submitted, CandidateScored, EvaluationCancelled, EvaluationDeleted, RequestAnswered))
+"""What can settle a submission (``submissions.unscored``): its score, or a cancel of its evaluation or remeasure."""
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
 
 
@@ -309,28 +318,29 @@ class RunController:
         self.executor.configure(config)
         self._tracer.event('limits.applied', limits=len(rows))
 
-    def _wait(self, evaluation_id: int) -> bool:
+    def _wait(self, evaluation_id: int, candidate_id: CandidateId) -> bool:
         """Wait until the evaluation leaves the queue, and return True; False once the daemon stops.
 
         While it waits for a slot, and one is free, it submits the next ones (``dispatch``): a lost evaluation waits
-        again, and nothing else may end to free a slot for it. It reads the free slots after its session: the executor
-        reads in a session of its own, and one thread never holds two connections (``Database``).
+        again (``EvaluationRequeued``), and nothing else may end to free a slot for it. It reads the free slots after
+        its session: the executor reads in a session of its own, and one thread never holds two connections
+        (``Database``). The events of its candidate's evaluations wake it, and those that say that the executor has
+        more slots (``Executor.capacity_events``). Another evaluation's end frees a slot too: its own request
+        dispatches then.
         """
-        while not self.launcher.cancelled.is_set():
-            with self._db.session() as s:
-                if (evaluation := s.get(Evaluation, evaluation_id)) is None:
-                    return True
-                waiting = evaluation.started_at is None
-            if waiting and ((free := self.executor.capacity().free(EVALUATION)) is None or free > 0):
-                self.dispatch()
-            elif not self._next_wake():
-                break
+        on = TargetRef(CANDIDATE, candidate_id)
+        mine = [Topic(EvaluationDeleted, target=on), Topic(EvaluationRequeued, target=on)]
+        with self._db.watching([*mine, *(Topic(m) for m in self.executor.capacity_events())]) as watch:
+            while not self.launcher.cancelled.is_set() and not self._db.closed:
+                with self._db.session() as s:
+                    if (evaluation := s.get(Evaluation, evaluation_id)) is None:
+                        return True
+                    waiting = evaluation.started_at is None
+                if waiting and ((free := self.executor.capacity().free(EVALUATION)) is None or free > 0):
+                    self.dispatch()
+                else:
+                    watch.wait(math.inf)
         return False
-
-    def _next_wake(self) -> bool:
-        """Wait for the database's next wake, a commit say: True, or False once the daemon stops."""
-        woken = iter((False,))  # the first read is now: it waits for the one after
-        return self._db.wait_until(lambda _: next(woken, True), give_up=self.launcher.cancelled.is_set)
 
     def dispatch(self) -> None:
         """Submit the next evaluations of the queue while the executor has free slots, in the queue's order.
@@ -1061,6 +1071,7 @@ class RunController:
                     self.dispatch()  # as after each request: a new evaluator takes it from the queue
                     gone = self._db.wait_until(
                         lambda s, row=row: s.get(Evaluation, row) is None,
+                        on=[Topic(EvaluationDeleted, target=TargetRef(CANDIDATE, candidate_id))],
                         give_up=self.launcher.cancelled.is_set,
                         timeout=retry.total_seconds(),
                     )
@@ -1164,7 +1175,7 @@ class RunController:
         self.dispatch()
         with self._tracer.span('piloop.measure', run=run_id, revision=revision, candidate=candidate_id) as span:
             span.set(evaluation=evaluation_id, joined=not mine)
-            measured = self._wait(evaluation_id)
+            measured = self._wait(evaluation_id, candidate_id)
             self._jobs.pop(evaluation_id, None)
             self.dispatch()  # its slot is free
             if not measured or self.launcher.cancelled.is_set():  # a stop's evaluation records nothing
@@ -1212,7 +1223,7 @@ class RunController:
             waiting = {c.id for c in submissions.waiting(s, s.get_one(Run, run_id).campaign)}
             return waiting.isdisjoint(submitted(s, run_id))
 
-        if not self._db.wait_until(scored, give_up=self.launcher.cancelled.is_set):
+        if not self._db.wait_until(scored, on=SETTLES, give_up=self.launcher.cancelled.is_set):
             return
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():  # stop() ends the claim; the run's end stands

@@ -7,7 +7,8 @@ route's. The server is FastAPI on uvicorn (``piloop.net.server``). It serves the
 workers read and write the artifact store's remote directly, and the routes pass only hashes.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
@@ -16,10 +17,12 @@ from http import HTTPStatus
 from pydantic import BaseModel, ValidationError
 
 from piloop.api.contract import Polled
+from piloop.db.events import Topic
+from piloop.db.session import Watch
 from piloop.net.tokens import Caller
 
-type Changed = Callable[[int, float], Awaitable[int]]
-"""``Database.changed``: the count of wakes once it passes the one seen, or at the timeout."""
+type Watching = Callable[[Sequence[Topic]], AbstractContextManager[Watch]]
+"""``Database.watching``: a watch of the topics that a long-poll awaits between two reads."""
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,8 @@ class Call[T]:
 
     handle: Callable[[], T]
     wait: float
+    on: Sequence[Topic] = ()
+    """The topics whose events wake a long-poll for its next call of ``handle``."""
 
 
 class Route:
@@ -44,8 +49,8 @@ class Route:
 
         self.bind: Callable[[Caller, bytes], Call[BaseModel | None]] = bind
         """Validate a request's body, and bind the handler to it. Raises ``InvalidBody``."""
-        self.changed: Changed | None = None
-        """What the server awaits between the calls of a long-poll's handler. None for any other route."""
+        self.watching: Watching | None = None
+        """What the server watches between the calls of a long-poll's handler. None for any other route."""
 
     @classmethod
     def long_poll[I: Polled](
@@ -53,19 +58,21 @@ class Route:
         path: str,
         body: type[I],
         handle: Callable[[Caller, I], BaseModel | None],
-        changed: Changed,
+        watching: Watching,
+        on: Callable[[Caller, I], Sequence[Topic]],
     ) -> Route:
         """A long-poll, as the GitHub Actions runner's ``GET message``: ``handle`` answers None for "nothing yet".
 
-        The server then awaits ``changed`` and calls it again, until the body's ``wait`` ends. No thread waits.
+        The server then awaits the next event of the call's topics ``on`` (``watching``) and calls it again, until the
+        body's ``wait`` ends. No thread waits.
         """
         route = cls(path, body, handle)
 
         def bind(caller: Caller, raw: bytes) -> Call[BaseModel | None]:
             parsed = _parsed(body, raw)
-            return Call(partial(handle, caller, parsed), parsed.wait)
+            return Call(partial(handle, caller, parsed), parsed.wait, on(caller, parsed))
 
-        route.bind, route.changed = bind, changed
+        route.bind, route.watching = bind, watching
         return route
 
 

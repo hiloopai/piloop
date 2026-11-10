@@ -43,8 +43,7 @@ from piloop.actor import System
 from piloop.api.contract import Access
 from piloop.campaign import escalations
 from piloop.db import feed
-from piloop.db.events import emit
-from piloop.db.feed import Topic
+from piloop.db.events import Topic, emit
 from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseState, ReadBy, utcnow
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import TargetRef

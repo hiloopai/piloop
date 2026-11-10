@@ -30,9 +30,9 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from piloop.api.client import SOCKET_ACTOR_HEADER
 from piloop.api.contract import GRANTS, Access, Problem
-from piloop.db.session import HOLDER
+from piloop.db.session import HOLDER, Watch
 from piloop.db.sql import BUSY_TIMEOUT_MS, busy
-from piloop.net import Changed, InvalidBody, Refusal, Route
+from piloop.net import InvalidBody, Refusal, Route
 from piloop.net.acting import OWNER
 from piloop.net.tokens import PREFIX, Caller, Tokens
 from piloop.plugins.host import PluginError
@@ -200,16 +200,19 @@ def executor_router(routes: Sequence[Route]) -> APIRouter:
     return router
 
 
-async def changed(request: Request, waited: Changed, seen: int, timeout: float) -> int | None:
-    """What ``waited`` returns, or None once the server of ``request`` closes: a long-poll then answers at once."""
-    return await _unless_closing(waited(seen, timeout), served(request).closing)
+async def changed(request: Request, watch: Watch, timeout: float) -> bool:
+    """Await the next wake of ``watch``, or ``timeout``: False once the server of ``request`` closes.
+
+    A long-poll then answers at once.
+    """
+    return await _unless_closing(watch.changed(timeout), served(request).closing)
 
 
 def _endpoint(scoped: Callable[[Request], Caller], route: Route) -> Callable[[Request, Caller], Awaitable[Response]]:
     """The handler of ``route``: its body is read and validated here, and the route's handler runs in the thread pool.
 
-    A long-poll calls it again after each wake (``Route.changed``) while it answers None, until the body's wait ends
-    or the server closes.
+    A long-poll calls it again after each wake of its watch (``Route.watching``) while it answers None, until the
+    body's wait ends or the server closes.
     """
 
     async def endpoint(request: Request, caller: Annotated[Caller, Depends(scoped)]) -> Response:
@@ -218,14 +221,15 @@ def _endpoint(scoped: Callable[[Request], Caller], route: Route) -> Callable[[Re
             call = route.bind(caller, body)
         except InvalidBody as e:
             raise RequestValidationError(e.error.errors()) from e
-        deadline, seen = time.monotonic() + call.wait, 0
+        deadline = time.monotonic() + call.wait
         try:
-            while (answer := await run_in_threadpool(call.handle)) is None and route.changed is not None:
-                if (left := deadline - time.monotonic()) <= 0:
-                    break
-                if (changed := await _unless_closing(route.changed(seen, left), served(request).closing)) is None:
-                    break
-                seen = changed
+            if route.watching is None:
+                answer = await run_in_threadpool(call.handle)
+            else:
+                with route.watching(call.on) as watch:
+                    while (answer := await run_in_threadpool(call.handle)) is None:
+                        if (left := deadline - time.monotonic()) <= 0 or not await changed(request, watch, left):
+                            break
         except Refusal as e:
             return JSONResponse({'error': e.error, 'detail': str(e)}, status_code=e.status)
         if answer is None:
@@ -235,15 +239,18 @@ def _endpoint(scoped: Callable[[Request], Caller], route: Route) -> Callable[[Re
     return endpoint
 
 
-async def _unless_closing(changed: Awaitable[int], closing: asyncio.Event) -> int | None:
-    """What ``changed`` returns, or None once ``closing`` is set."""
+async def _unless_closing(changed: Awaitable[None], closing: asyncio.Event) -> bool:
+    """Await ``changed``: True once it is done, False once ``closing`` is set first."""
     waits = asyncio.ensure_future(changed), asyncio.ensure_future(closing.wait())
     try:
         await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
     finally:
         for wait in waits:
             wait.cancel()
-    return None if closing.is_set() else waits[0].result()
+    if closing.is_set():
+        return False
+    waits[0].result()  # what the wait raised
+    return True
 
 
 class _Uvicorn(uvicorn.Server):

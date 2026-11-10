@@ -50,8 +50,7 @@ from sqlalchemy.orm import Session, aliased
 from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.db import feed
-from piloop.db.events import emit, has, latest
-from piloop.db.feed import Topic
+from piloop.db.events import Topic, emit, has, latest
 from piloop.db.machine import Machine, transition
 from piloop.db.models import (
     LIVE_LEASES,
@@ -1130,7 +1129,7 @@ class Leases:
         """Store ``after`` as the worker's cursor, and return its messages after it, waiting up to ``wait`` seconds.
 
         A long-poll, after the GitHub Actions runner: it returns at once when a message waits, and reads again on each
-        wake (``Database.wait_until``). A prompt whose comment has its outcome is left out: the worker answered it.
+        new event of its ``topics``. A prompt whose comment has its outcome is left out: the worker answered it.
 
         Raises:
             UnknownWorker: the worker's row is gone (``scaling`` ended its instance, or drained it), also while it
@@ -1149,7 +1148,7 @@ class Leases:
             found[:] = [_message(e) for e in s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id))]
             return bool(found)
 
-        self._db.wait_until(read, timeout=wait)
+        self._db.wait_until(read, on=topics(worker), timeout=wait)
         return found
 
     def queued(self, worker: str, message: int, error: str | None) -> None:

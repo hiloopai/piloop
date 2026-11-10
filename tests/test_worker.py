@@ -24,7 +24,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 
 from piloop.actor import System
-from piloop.agents.results import CampaignResults, DaemonStopped, Ended, Lost, NotStarted, PromptOutcome, Ran
+from piloop.agents.results import (
+    CampaignResults,
+    DaemonStopped,
+    Ended,
+    Lost,
+    NotStarted,
+    PromptOutcome,
+    Ran,
+    finish,
+)
 from piloop.campaign.campaigns import checkout_of, record_of
 from piloop.db import feed
 from piloop.db.events import emit, in_order
@@ -503,8 +512,7 @@ def test_an_agent_whose_lease_ends_while_it_starts_is_ended_and_not_reported(
     assert gate.entered.wait(10)
     with db.session() as s:  # as a stop does for a job that did not start
         cancel(s, ex.cas, s.scalars(select(Lease)).one(), 'daemon stopped')
-        w = s.get_one(AgentSession, agent_session_id)
-        w.state, w.ended_at = AgentSessionState.KILLED, utcnow()
+        finish(s, s.get_one(AgentSession, agent_session_id), AgentSessionState.KILLED, 'daemon stopped')
         s.commit()
     gate.release.set()
     launching.join(30)

@@ -29,9 +29,10 @@ from piloop.api.client import Client, Refused, socket_http
 from piloop.api.contract import Access
 from piloop.api.views import Batch, Envelope, Subject
 from piloop.campaign import ops
-from piloop.db.events import emit
+from piloop.db.events import Topic, emit
 from piloop.db.models import Ack, AgentSession, AgentSessionState, Campaign, Comment, Event, UnknownEvent, utcnow
 from piloop.db.session import Database
+from piloop.db.triggers.changelog import Commented
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
@@ -995,7 +996,7 @@ def _reply_wakes_the_wait(db: Database, campaign: Campaign, env: dict[str, str])
         os.write(controller, b'r')
         screen.wait_for('enter sends it')  # the reply box is open, and takes the keys
         os.write(controller, b'Use the cheaper model\r')
-        db.wait_until(lambda s: s.get(Comment, 2) is not None)
+        db.wait_until(lambda s: s.get(Comment, 2) is not None, on=[Topic(Commented)])
         os.write(controller, b'q')
         assert watching.wait() == 0
         waiting = subprocess.run(

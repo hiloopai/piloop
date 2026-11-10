@@ -46,7 +46,7 @@ def main() -> None:
     bundle = partial(send_of_record, cas, partial(record_of, db))
     cli = Runner(db, home, partial(checkout_of, db))
     Server(
-        app(Tokens(db), network, [executor_router(lease_routes(leases, db.changed, cas, bundle, cli))]), listener
+        app(Tokens(db), network, [executor_router(lease_routes(leases, db.watching, cas, bundle, cli))]), listener
     ).start()
     print(f'ready {listener.socket.getsockname()[1]}', flush=True)
     sys.stdin.read()

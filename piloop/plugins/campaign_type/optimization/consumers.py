@@ -6,8 +6,11 @@ from sqlalchemy import select
 
 from piloop.daemon.loop import Consumer, Kinds, Phase, Turn
 from piloop.db.models import NOT_RETIRED, OPTIMIZATION, Campaign, EventModel
-from piloop.db.triggers.changelog import CampaignConfigChanged, EvaluationCancelled
-from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
+from piloop.db.triggers.changelog import (
+    CampaignConfigChanged,
+    EvaluationCancelled,
+    EvaluationDeleted,
+)
 from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_scores
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.contribution import Contribution, DaemonHost
@@ -18,10 +21,11 @@ for kind in ('slots_idle.seen', 'slots_idle.raised', 'slots_idle.ended'):
 for kind in ('low_yield.raised', 'low_yield.cleared'):
     EventModel.retire(kind)  # 0.6 escalated a low yield; stop rules and escalations cover a stuck campaign now
 
-EVALUATIONS: Kinds = frozenset({EvaluationCancelled, MeasurementRecorded, CampaignConfigChanged, *LIMITS})
-"""What wakes the evaluation queue: a cancel to stop, a slot that an evaluation freed, more slots, or a new evaluator
-whose old one's evaluations leave the queue (``queue.withdraw``). The executor's ``capacity_events`` say that it has more
-slots too."""
+EVALUATIONS: Kinds = frozenset({EvaluationCancelled, EvaluationDeleted, CampaignConfigChanged, *LIMITS})
+"""What wakes the evaluation queue: a cancel to stop, a slot that an evaluation freed as it left the queue, more slots,
+or a new evaluator whose old one's evaluations leave the queue (``queue.withdraw``). The executor's
+``capacity_events`` say that it has more slots too. A lost evaluation that waits again wakes its own request
+(``RunController._wait``)."""
 
 
 def contribution(host: DaemonHost) -> Contribution:
