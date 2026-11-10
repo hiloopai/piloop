@@ -125,6 +125,10 @@ class DaemonSettings(BaseModel):
     inbox_page: int = Field(default=500, gt=0)
     """How many events one read of the inbox's news examines at most (``piloop inbox wait``). A read with more reads
     again at once."""
+    token_trust: timedelta = Field(default=timedelta(seconds=10), ge=timedelta(0))
+    """How long a server (``piloop serve``, ``piloop cas serve``) trusts a token that it verified before it reads the
+    token again. A token revoked through the server's own API stops at once; one revoked in another process, or an
+    agent's whose session ended, within this time. 0 reads the token on every call."""
     agent_reread: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a
     close that adds no event, by ``piloop sql`` say, is seen this late."""

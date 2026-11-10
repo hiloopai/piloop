@@ -132,7 +132,7 @@ from piloop.ids import (
 )
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
-from piloop.net.server import App, asked, authorized, changed
+from piloop.net.server import App, asked, authorized, changed, served
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
 from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
@@ -652,13 +652,14 @@ def create_token(s: Writing, body: TokenBody) -> TokenMade:
 
 
 @router.delete('/tokens/{name}', operation_id='revoke_token', dependencies=[Depends(admin_access)])
-def revoke_token(s: Writing, name: str) -> TokenList:
+def revoke_token(request: Request, s: Writing, name: str) -> TokenList:
     """Delete a token: the next call with it gets 401."""
     try:
         tokens.revoke(s, name)
     except tokens.NoToken as e:
         raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_TOKEN, str(e)) from e
     s.commit()
+    served(request).tokens.forget(name)
     return tokens.listing(s)
 
 

@@ -130,7 +130,7 @@ class Daemon:
             """What an in-place restart execs."""
             self._address = served.listen
             """Where the server listens, as asked."""
-            self._tokens = Tokens(self.db)
+            self._tokens = Tokens(self.db, cfg.daemon.token_trust.total_seconds())
             self.network = served.open(
                 network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
             )

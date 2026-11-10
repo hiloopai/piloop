@@ -62,7 +62,7 @@ def serve(
     local.refuse_other_schema()
     db = Database(common.settings.database_url, actor=common.settings.actor)
     try:
-        tokens = Tokens(db)
+        tokens = Tokens(db, common.settings.daemon.token_trust.total_seconds())
         net = network.open(NetworkHost(tokens, HomeSecrets(db, SECRETS.selected(common.settings.providers))))
         try:
             listener = net.listener()

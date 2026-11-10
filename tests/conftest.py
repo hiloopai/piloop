@@ -811,14 +811,15 @@ def role_of[R: RoleConfig](cfg: CampaignConfig, kind: type[R]) -> R:
 
 @contextmanager
 def serving_api(
-    cfg: Settings, listen: str | None = None, network_config: NetworkConfig | None = None
+    cfg: Settings, listen: str | None = None, network_config: NetworkConfig | None = None, trust: float = 0
 ) -> Generator[list[Server]]:
     """Serve the API of ``cfg``'s home, as the daemon does: on its socket, and on the network's ``listen``.
 
-    The network is ``https`` on ``listen``, unless ``network_config`` is another.
+    The network is ``https`` on ``listen``, unless ``network_config`` is another. A verified token is trusted for
+    ``trust`` seconds (``Tokens``): 0, unlike the daemon, so that a test's revoke on the database stops it at once.
     """
     db = Database(cfg.database_url, actor=ACTOR)
-    tokens = Tokens(db)
+    tokens = Tokens(db, trust)
     config = network_config or Https.model_validate({'listen': listen})
     network = config.open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
     listener = network.listener()

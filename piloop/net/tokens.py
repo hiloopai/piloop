@@ -11,7 +11,10 @@ with it, and only while its session is live: the token is deleted when the sessi
 
 import hashlib
 import secrets
-from dataclasses import dataclass
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from pydantic import SecretStr
 from sqlalchemy import delete, select
@@ -26,6 +29,8 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId
 
 PREFIX = 'plt_'
+TRUSTED = 4096
+"""The most tokens that a ``Tokens`` trusts at once (``trust``): more callers than any home has tokens."""
 AGENT_ACCESS = Access.ACT
 """The access of a launched agent's token: every operation on a campaign, and none of the home's own settings."""
 
@@ -113,7 +118,11 @@ def _view(token: Token) -> TokenView:
 
 def verify(s: Session, secret: str) -> Caller | None:
     """The caller that ``secret`` is the token of, or None for an unknown or revoked one, or an agent's that ended."""
-    token = s.scalar(select(Token).where(Token.sha256 == _sha256(secret)))
+    return _verified(s, _sha256(secret))
+
+
+def _verified(s: Session, sha256: str) -> Caller | None:
+    token = s.scalar(select(Token).where(Token.sha256 == sha256))
     match token:
         case None:
             return None
@@ -128,14 +137,47 @@ def verify(s: Session, secret: str) -> Caller | None:
 
 @dataclass(frozen=True)
 class Tokens:
-    """The tokens of a database, which a network provider verifies a caller's secret against."""
+    """The tokens of a database, which a network provider verifies a caller's secret against.
+
+    A caller that it verified is trusted for ``trust`` seconds: its next calls read no row. A token revoked through this
+    object (``revoke``, ``mint``, ``forget``) stops at once. One revoked by another process, or an agent's token whose
+    session ended, stops within ``trust``. A secret that verifies as nobody is never trusted: it is read again each
+    time. 0 reads every time.
+    """
 
     db: Database
+    trust: float = 0
+    clock: Callable[[], float] = time.monotonic
+    _trusted: dict[str, tuple[float, Caller]] = field(default_factory=dict, repr=False, compare=False)
+    """Each trusted caller by the SHA-256 of its secret, with when the trust ends."""
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    _forgotten: list[int] = field(default_factory=lambda: [0], repr=False, compare=False)
+    """How many times ``forget`` ran: a read that one overlaps trusts nothing, as it may have read a revoked token."""
 
     def verify(self, secret: str) -> Caller | None:
         """The caller that ``secret`` is the token of, or None for an unknown or revoked one."""
+        sha256, now = _sha256(secret), self.clock()
+        with self._lock:
+            trusted, forgotten = self._trusted.get(sha256), self._forgotten[0]
+        if trusted is not None and now < trusted[0]:
+            return trusted[1]
         with self.db.session() as s:
-            return verify(s, secret)
+            caller = _verified(s, sha256)
+        with self._lock:
+            if caller is None or self.trust <= 0 or self._forgotten[0] != forgotten:
+                self._trusted.pop(sha256, None)
+                return caller
+            if len(self._trusted) >= TRUSTED:  # ended trusts stay until then: the bound is what holds
+                self._trusted.clear()
+            self._trusted[sha256] = (now + self.trust, caller)
+        return caller
+
+    def forget(self, name: str) -> None:
+        """Trust no caller of the token called ``name`` any more: it was revoked or replaced."""
+        with self._lock:
+            self._forgotten[0] += 1
+            for sha256 in [k for k, (_, caller) in self._trusted.items() if caller.name == name]:
+                del self._trusted[sha256]
 
     def mint(self, name: str, access: Access) -> str:
         """Add a token called ``name`` in place of the one that has that name, and return its secret."""
@@ -143,6 +185,7 @@ class Tokens:
             s.execute(delete(Token).where(Token.name == name))
             secret = create(s, name, access)
             s.commit()
+        self.forget(name)
         return secret
 
     def revoke(self, name: str) -> None:
@@ -150,3 +193,4 @@ class Tokens:
         with self.db.session() as s:
             s.execute(delete(Token).where(Token.name == name))
             s.commit()
+        self.forget(name)

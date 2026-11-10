@@ -110,6 +110,18 @@ def test_act_sets_and_removes_a_campaign_s_secrets_and_only_admin_the_home_s(
     assert set_by[0] == 'human:ana'
 
 
+def test_a_token_that_the_server_trusts_stops_at_once_when_its_api_revokes_it(cfg: Settings, db: Database) -> None:
+    with (
+        serving_api(cfg, listen='127.0.0.1:0', trust=60) as [_, tcp],
+        Client.on(cfg.socket_file, System.HUMAN) as client,
+    ):
+        secret = client.create_token(TokenBody(name='gpu1', access=Access.READ)).secret.get_secret_value()
+        bearer = {'Authorization': f'Bearer {secret}'}
+        assert httpx.get(tcp.url + '/v1/status', headers=bearer, timeout=TIMEOUT).status_code == 200, 'now trusted'
+        client.revoke_token('gpu1')
+        assert httpx.get(tcp.url + '/v1/status', headers=bearer, timeout=TIMEOUT).status_code == 401
+
+
 def test_an_admin_makes_a_token_whose_secret_only_its_answer_carries_and_revokes_it(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
