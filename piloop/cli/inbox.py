@@ -5,6 +5,7 @@ import sys
 from typing import Annotated
 
 import cyclopts
+from cyclopts import validators
 
 from piloop.api.client import Client
 from piloop.api.contract import AckBody, ChooseBody, EscalateBody, GuideQuery, InboxQuery, MessageBody, ReplyBody
@@ -65,6 +66,9 @@ def message(
     body: Annotated[str, cyclopts.Parameter(help='What to say.')],
     /,
     *,
+    seat: Annotated[
+        int | None, cyclopts.Parameter(help='Address a numbered orchestrator seat.', validator=validators.Number(gte=1))
+    ] = None,
     priority: Annotated[int, cyclopts.Parameter(help='From 0 (urgent) to 4 (someday).')] = 2,
 ) -> None:
     """Write to the campaign's orchestrator, signed as PILOOP_ACTOR. It ends the orchestrator's `piloop inbox wait`.
@@ -72,6 +76,8 @@ def message(
     The orchestrator answers with `piloop inbox reply`, and the answer is in your inbox.
     """
     with Client.connect(daemon_http()) as client:
+        if seat is not None:
+            body = f'@seat-{seat} {body}'
         sent = client.message(campaign_name(client, ref), MessageBody(body=body, priority=priority)).comment
     common.console.print(f'comment#{sent.id} message on {sent.target}', markup=False)
 

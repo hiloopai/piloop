@@ -2756,9 +2756,11 @@ def test_the_startup_breaker_acknowledges_its_escalation_once_launches_resume(
         s.commit()
     assert run_all(scheduler) != []
     [resumed] = pause_escalations(db)
-    assert [(a.party, a.acked_by) for a in resumed.acks] == [('human', 'daemon'), ('orchestrator', 'daemon')], (
-        'withdrawn: it asks nothing any more'
-    )
+    assert [(a.party, a.acked_by) for a in resumed.acks] == [
+        ('human', 'daemon'),
+        ('orchestrator', 'daemon'),
+        ('all orchestrator seats', 'daemon'),
+    ], 'withdrawn: it asks nothing any more'
     scheduler.wait(SETTLE)
     scheduler.stop(timeout=5)
 

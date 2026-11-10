@@ -6,6 +6,7 @@
 ``human``, ``orchestrator`` or ``daemon``.
 """
 
+import re
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -21,6 +22,10 @@ CALLER_NAME = r'^[^\s#]{1,128}$'
 """A caller's name, as the network names it: the proxy's ``name_claims``, or a token's name."""
 ORCHESTRATING = 'orchestrator via '
 """What the signature of a person or a service acting as the orchestrator starts with, before its own."""
+
+
+SEAT_SIGNATURE = re.compile(r'orchestrator via service:seat-([1-9][0-9]*)')
+"""A numbered orchestrator seat signs with its own service identity on the campaign home."""
 
 
 def _fields(value: object) -> object:
@@ -143,8 +148,8 @@ class Orchestrating(BaseModel):
 
     @property
     def party(self) -> str:
-        """The orchestrator's: whoever acts as it, the person writes for the orchestrator."""
-        return System.ORCHESTRATOR.party
+        """A numbered seat reads for itself. Other callers acting as orchestrator share its inbox."""
+        return self.signature if SEAT_SIGNATURE.fullmatch(self.signature) else System.ORCHESTRATOR.party
 
     @property
     def launched(self) -> None:

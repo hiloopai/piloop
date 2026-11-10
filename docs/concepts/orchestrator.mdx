@@ -20,7 +20,29 @@ next: piloop inbox wait enwik8 --after 17
 
 The wait returns on a new inbox item, score or stop, or at the timeout. Its last line is the next wait, with a
 cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon runs without
-one. Run one orchestrator for each campaign: two would do the same work twice, and an escalation takes only one answer.
+one.
+
+## Multiple orchestrators
+
+Start each external agent from the campaign repository with a distinct positive seat number. For example, run these
+in separate terminals on the campaign home:
+
+```bash
+piloop orchestrate 1 -- codex 'Orchestrate this campaign with the piloop-operate skill. You are seat 1.'
+piloop orchestrate 2 -- codex 'Orchestrate this campaign with the piloop-operate skill. You are seat 2.'
+```
+
+The launcher runs the agent command you supply. Pass its usual tools, model and other options on that command line.
+Each child gets `PILOOP_SEAT_NUM` and a stable `PILOOP_INBOX_ID`, also set as its `PILOOP_ACTOR`. Preserve that
+identity in the agent's shell. Restart a seat with the same number to reuse its acknowledgements. Each seat reads
+the outstanding inbox on startup and tracks its own wait cursor. Scope waits and messages to the campaign.
+
+Both seats can steer all workers. For a 1:5 ratio, configure the implementer role for ten concurrent workers and
+start two seats. Read the current board and consult peers before overlapping changes. The seats decide how to
+divide work. Campaign messages reach peers. For one seat, use `piloop message enwik8 'Please review idea 12' --seat 2`.
+The addressed message is recorded on the campaign thread and delivered to seat 2's inbox. Acknowledging a broadcast
+clears it for that reader. The first escalation answer committed under the database write lock settles it for
+everyone. Peers see the signed decision in their inboxes. Perform the action only after your answer is accepted.
 
 ## The inbox
 
