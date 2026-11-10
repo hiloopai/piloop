@@ -5,6 +5,7 @@ import fcntl
 import os
 import plistlib
 import re
+import resource
 import shlex
 import signal
 import subprocess
@@ -29,6 +30,9 @@ def serve_argv(listen: Address | None) -> list[str]:
 
 
 POLL_SECONDS = 0.1
+STOP_SECONDS = 30
+"""How long ``piloop stop`` waits for the daemon by default. The daemon's shutdown keeps within it (``Daemon.shutdown``),
+so a ``piloop serve`` right after a stop finds the lock free."""
 LAUNCHD_LABEL = 'dev.piloop.serve'
 RESTART_SIGNAL = signal.SIGUSR1
 """Stop as on SIGTERM, then exec ``piloop serve`` in place.
@@ -143,6 +147,25 @@ def running_pid(cfg: Settings) -> int | None:
     finally:
         os.close(fd)
     return int(text) if text.isdigit() else None
+
+
+DARWIN_OPEN_FILES = 10240
+"""The most open files that macOS lets a process's soft limit reach when its hard limit is unlimited (``OPEN_MAX``)."""
+
+
+def open_files(platform: str = sys.platform) -> tuple[int, int]:
+    """Raise the soft limit of open files to the hard limit, and return the two limits.
+
+    The daemon holds about two descriptors per worker and one per long-poll, so a default soft limit of 1,024 ran out
+    near 500 workers and their agents. A process may raise its soft limit up to its hard limit. On macOS the hard limit
+    is often unlimited, and the soft one stops at ``DARWIN_OPEN_FILES``, as Go's runtime does it.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    unlimited = resource.RLIM_INFINITY
+    wanted = DARWIN_OPEN_FILES if platform == 'darwin' and (hard == unlimited or hard > DARWIN_OPEN_FILES) else hard
+    if soft != unlimited and soft < wanted:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, hard))
+    return resource.getrlimit(resource.RLIMIT_NOFILE)
 
 
 def spawn_detached(cfg: Settings, listen: Address | None = None) -> int:

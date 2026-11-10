@@ -45,7 +45,7 @@ from piloop.plugins.network.https import Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import Settings
-from tests.conftest import Dial, package
+from tests.conftest import Dial, package, wait_until
 from tests.net.conftest import Serving
 
 
@@ -351,6 +351,44 @@ def test_a_close_ends_a_parked_long_poll_at_once_with_204_and_logs_no_error(
         assert time.monotonic() - began < 1, 'the close waits for no long-poll'
         assert parked.result(timeout=5).status_code == 204
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_a_client_that_goes_away_before_its_body_logs_one_line_and_no_traceback(
+    serving: Serving, token: Callable[..., str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A worker whose call timed out under load closes its connection: 918 tracebacks in 10 minutes filled the log."""
+    with serving([ECHO]) as server:
+        host, port = server.listener.socket.getsockname()[:2]
+        with socket.create_connection((host, port)) as conn:
+            head = (
+                f'POST {ECHOED} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token()}\r\nContent-Length: 100\r\n\r\n'
+            )
+            conn.sendall(head.encode() + b'{"te')
+            time.sleep(0.2)  # the route reads the first chunk of the body
+        wait_until(lambda: any(r.name == 'piloop.net.server' for r in caplog.records))
+    logged = [(r.name, r.getMessage(), r.exc_info is not None) for r in caplog.records if r.levelno >= logging.WARNING]
+    assert logged == [
+        ('piloop.net.server', f'POST {ECHOED}: the client went away before it sent its whole request', False)
+    ]
+
+
+def test_a_connection_that_idled_as_long_as_a_client_keeps_one_still_takes_a_request(
+    serving: Serving, token: Callable[..., str]
+) -> None:
+    """httpx reuses a connection that idled for under 5 s. A server that closed it at 5 s reset a request sent just then."""
+    idle = httpx.Limits().keepalive_expiry
+    assert idle is not None
+    with serving([ECHO]) as server:
+        host, port = server.listener.socket.getsockname()[:2]
+        conn = http.client.HTTPConnection(host, port, timeout=10)
+        headers = {'Authorization': f'Bearer {token()}', 'Content-Type': 'application/json'}
+        try:
+            for _ in range(2):
+                conn.request('POST', ECHOED, body=json.dumps(HI), headers=headers)
+                assert json.loads(conn.getresponse().read())['text'] == 'hi'
+                time.sleep(idle + 0.5)
+        finally:
+            conn.close()
 
 
 def test_https_enrolls_a_machine_with_a_token_that_its_client_dials_with_until_it_is_revoked(

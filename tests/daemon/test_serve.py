@@ -3,6 +3,7 @@
 import os
 import plistlib
 import re
+import resource
 import shutil
 import signal
 import stat
@@ -19,10 +20,12 @@ from sqlalchemy import select
 
 from piloop import proc
 from piloop.daemon.serve import (
+    DARWIN_OPEN_FILES,
     SERVE_ARGV,
     _mtime_ns,
     acquire,
     carried_env,
+    open_files,
     restart,
     running_pid,
     service_unit,
@@ -175,6 +178,42 @@ def test_detach_survives_the_cli_and_stop_ends_it(tmp_path: Path) -> None:
     nothing = piloop(cfg.home, 'stop')
     assert (nothing.returncode, nothing.stderr.strip()) == (1, 'no daemon is running')
     assert piloop(cfg.home, 'status').stderr.startswith(f'no daemon listens on {cfg.socket_file}: start it with')
+
+
+def test_a_daemon_raises_its_soft_limit_of_open_files_to_the_hard_one_and_logs_both(tmp_path: Path) -> None:
+    """A soft limit of 1,024, the default of most shells and units, ran out near 500 workers and their agents."""
+    cfg = Settings(home=tmp_path / 'home')
+    _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+    def low() -> None:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard))
+
+    started = subprocess.run(
+        [*PILOOP, 'serve', '--detach'],
+        capture_output=True,
+        text=True,
+        env=env_for(cfg.home),
+        preexec_fn=low,
+        timeout=60,
+    )
+    assert started.returncode == 0, started.stderr
+    pid = int(cfg.pid_file.read_text())
+    assert psutil.Process(pid).rlimit(psutil.RLIMIT_NOFILE) == (hard, hard)
+    wait_until(lambda: 'piloop.start' in cfg.log_file.read_text())
+    assert re.search(rf'piloop\.start .*open_files={hard} open_files_hard={hard}', cfg.log_file.read_text())
+    assert piloop(cfg.home, 'stop').returncode == 0
+
+
+def test_on_macos_the_soft_limit_of_open_files_stops_at_open_max_under_an_unlimited_hard_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS refuses a soft limit above ``kern.maxfilesperproc``, even when the hard one is unlimited."""
+    limits = [(256, resource.RLIM_INFINITY)]
+    monkeypatch.setattr(resource, 'getrlimit', lambda _: limits[-1])
+    monkeypatch.setattr(resource, 'setrlimit', lambda _, wanted: limits.append(wanted))
+    assert open_files('darwin') == (DARWIN_OPEN_FILES, resource.RLIM_INFINITY)
+    assert open_files('darwin') == (DARWIN_OPEN_FILES, resource.RLIM_INFINITY)
+    assert len(limits) == 2, 'a soft limit at its most is left as it is'
 
 
 def test_a_daemon_backs_up_a_database_behind_it_before_it_migrates_and_logs_where(tmp_path: Path) -> None:

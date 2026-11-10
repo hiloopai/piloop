@@ -7,6 +7,7 @@ provisioner gets its workers started and stopped on demand (``piloop.plugins.exe
 """
 
 import threading
+import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -199,17 +200,21 @@ class WorkersExecutor:
         return min(due, default=None)
 
     def stop(self, timeout: float) -> None:
-        """End the agent leases that no worker took, stop the worker's jobs, and wait for their reports.
+        """End the agent leases that no worker took, stop every agent and the worker's jobs, and wait for their reports.
 
-        A kill that failed is tried once more after the wait. Then the lease of an agent that did not start ends. That of
-        a started agent stays live: its report waits in the worker's spool, and the next daemon applies it (``adopt``).
+        The workers elsewhere stop their agents on a revoke, and their reports close the rows while the daemon serves. A
+        kill that failed is tried once more after the wait. Then the lease of an agent that did not start ends. That of a
+        started agent stays live: a report that did not come waits in its worker's spool, and the next daemon applies it
+        (``adopt``). The waits share ``timeout``.
         """
+        deadline = time.monotonic() + timeout
         self.leases.stop_untaken()
+        self.leases.revoke_agents()
         self.worker.stop()
-        self.worker.join(timeout)
+        self.worker.join(max(0.0, deadline - time.monotonic()))
         self.worker.stop()
         self.leases.end_unstarted()
-        self.scaler.join(timeout)
+        self.scaler.join(max(0.0, deadline - time.monotonic()))
 
     def hand_over(self) -> None:
         self.worker.hand_over()

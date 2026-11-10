@@ -1223,6 +1223,18 @@ class Leases:
                     take(s)
                 s.commit()
 
+    def revoke_agents(self) -> None:
+        """Ask the worker of each live agent lease to stop its agent (``revoke``): a daemon's stop kills every agent.
+
+        A worker on another machine stops only on a revoke. Its report then closes the agent's row while the daemon
+        still serves.
+        """
+        with self._db.session() as s:
+            write_transaction(s)
+            for lease in s.scalars(select(Lease).where(Lease.kind == AGENT, Lease.state.in_(LIVE_LEASES))).all():
+                revoke(s, self._cas, lease)
+            s.commit()
+
     def end_unstarted(self) -> None:
         """End the agent leases whose agent did not start: it made nothing, so a report that comes later is refused.
 

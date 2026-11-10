@@ -24,7 +24,7 @@ from sqlalchemy import func, select
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseState
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseState
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
@@ -520,6 +520,30 @@ def test_a_prompt_reaches_a_remote_implementer_within_a_round_trip_and_its_relay
             content=AgentCall(agent=AgentSessionId(1), argv=[], token=SecretStr('plt_x')).model_dump_json(),
         )
     assert refused.status_code == 404, 'its job ended: its worker relays nothing more for it'
+
+
+HARNESS_HELD = '#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
+"""An implementer that works while ``hold`` exists."""
+
+
+def test_a_stop_kills_a_remote_implementer_and_its_run_ends_before_the_daemon_does(
+    db: Database, net: Net, core: RunController, campaign: Campaign, hold: Path
+) -> None:
+    """The stop revokes its lease: the worker kills it and reports while the server serves, so the stop waits no longer.
+
+    A stop that only killed the local worker's agents left this one running: its run waited out the whole stop, and the
+    next daemon killed the agent.
+    """
+    use_harness(db, campaign, HARNESS_HELD.format(hold=hold), **MINTED_HARNESS)
+    net.start_worker()
+    run_id = make_run(db, campaign)
+    running = in_thread(execute, core, db, run_id)
+    wait_until(lambda: state(db, 1) is LeaseState.RUNNING)
+    core.stop(30)
+    running.join(30)
+    assert not running.is_alive(), 'its run ended in the stop'
+    with db.session() as s:
+        assert (state(db, 1), s.get_one(AgentSession, 1).state) == (LeaseState.REPORTED, AgentSessionState.KILLED)
 
 
 LATENCY = 0.3

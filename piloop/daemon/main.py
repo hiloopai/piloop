@@ -11,8 +11,10 @@ from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
+    STOP_SECONDS,
     acquire,
     hand_on,
+    open_files,
     running_pid,
     serve_argv,
 )
@@ -20,7 +22,7 @@ from piloop.db.models import TARGET_KINDS, utcnow
 from piloop.db.schema import schemas
 from piloop.db.session import BackupFailed, Database, OlderDaemon, SchemaMismatch, WriteSpans, migrate
 from piloop.db.triggers.changelog import COMMENT_KINDS
-from piloop.net.server import Server, app, local_listener, url
+from piloop.net.server import GRACE_SECONDS, Server, app, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
@@ -41,6 +43,9 @@ DECLARED = (JOB_KINDS, TARGET_KINDS, COMMENT_KINDS, CONTRIBUTORS)
 """The slots of what packages add that the daemon reads, which it checks before it starts."""
 ACTOR = System.DAEMON
 """The actor that the daemon's connections record in ``updated_by``. The change-log triggers use this name."""
+SHUTDOWN_SECONDS = STOP_SECONDS - GRACE_SECONDS - 5
+"""What the waits of a stop for the agents, the jobs and the lifecycles share. The servers' grace, the flush of the
+traces and the close of the database come after, in the 5 s left: the daemon frees its lock within ``STOP_SECONDS``."""
 
 
 def bound(cfg: Settings) -> list[plugins.Capability[plugins.Parameters]]:
@@ -188,6 +193,8 @@ class Daemon:
                 db=self._cfg.database_url,
                 backup=None if self._backup is None else str(self._backup),
             ) as span:
+                soft, hard = open_files()
+                span.set(open_files=soft, open_files_hard=hard)
                 self._listen(span)
                 self.scheduler.reap()
                 self._inherited.watch()
@@ -251,10 +258,15 @@ class Daemon:
         self._restart = True
         self.scheduler.interrupt()
 
-    def shutdown(self, timeout: float = 30) -> None:
-        """Stop the scheduler and flush traces. An in-place restart hands the agents over. Any other stop kills them."""
+    def shutdown(self, timeout: float = SHUTDOWN_SECONDS) -> None:
+        """Stop the scheduler and the servers, and flush traces. A restart hands the agents over. A stop kills them.
+
+        The scheduler's waits share ``timeout``. Then the servers let their requests in flight finish, all together.
+        """
         with self.tracer.span('piloop.shutdown'):
             (self.scheduler.hand_over if self._restart else self.scheduler.stop)(timeout)
+            for server in self._servers:
+                server.stop()
             for server in self._servers:
                 server.close()
             self._cfg.socket_file.unlink(missing_ok=True)

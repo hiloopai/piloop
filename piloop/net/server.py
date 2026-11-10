@@ -7,6 +7,7 @@ next call outside it, so many long-polls never starve a heartbeat.
 """
 
 import asyncio
+import logging
 import math
 import socket
 import ssl
@@ -25,6 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import OperationalError
+from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
@@ -41,9 +43,16 @@ from piloop.settings import socket_dir
 
 GRACE_SECONDS = 5
 """How long ``Server.close`` lets the requests in flight finish."""
+KEEP_ALIVE_SECONDS = 65
+"""How long the server keeps a connection that idles: longer than a client keeps one, so that the client closes it first.
+
+A client reuses a connection that idled for less than its own limit: 5 s for httpx, 60 s for a typical load balancer.
+At uvicorn's default of 5 s, a busy server closed a connection as a worker sent a request on it: the request was reset,
+and its answer lost."""
 OPENAPI = '/v1/openapi.json'
 BUSY_RETRY_SECONDS = math.ceil(BUSY_TIMEOUT_MS / 1000)
 """The Retry-After of a request that waited out the busy timeout: as long as that wait."""
+_log = logging.getLogger(__name__)
 
 
 def authorized(access: Access) -> Callable[[Request], Caller]:
@@ -119,7 +128,8 @@ class App(FastAPI):
 
     One ``Server`` serves one ``App``. A route's ``Refusal`` answers its status with ``{"error", "detail"}``, and a body
     that its model refuses answers 422 with where and why, never with the value that was sent. A request that waited
-    out the database's busy timeout answers 503 ``busy``, with a Retry-After.
+    out the database's busy timeout answers 503 ``busy``, with a Retry-After. A client that goes away before it sent its
+    request logs one line.
     """
 
     def __init__(self, tokens: Tokens, network: Network, *, openapi_url: str | None = None) -> None:
@@ -149,6 +159,14 @@ class App(FastAPI):
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
                 headers={'Retry-After': str(BUSY_RETRY_SECONDS)},
             )
+
+        @self.exception_handler(ClientDisconnect)
+        def gone(request: Request, e: ClientDisconnect) -> Response:
+            # a client that gave up waits for no answer, as a worker's timed-out call: one line, not a traceback
+            _log.warning(
+                '%s %s: the client went away before it sent its whole request', request.method, request.url.path
+            )
+            return Response(status_code=HTTPStatus.BAD_REQUEST)
 
         @self.exception_handler(RequestValidationError)
         def invalid(request: Request, e: RequestValidationError) -> Response:
@@ -277,6 +295,7 @@ class Server:
             lifespan='off',
             http=_Protocol,
             timeout_graceful_shutdown=GRACE_SECONDS,
+            timeout_keep_alive=KEEP_ALIVE_SECONDS,
             ssl_context_factory=_tls(listener.tls) if listener.tls is not None else None,
         )
         self._server = _Uvicorn(config, app.closing)
@@ -301,12 +320,16 @@ class Server:
         """Serve in a thread. The socket listens already, so a request that comes before uvicorn accepts waits."""
         self._thread.start()
 
+    def stop(self) -> None:
+        """Start to ``close``, and return at once: the servers of a daemon close together."""
+        self._server.should_exit = True
+
     def close(self) -> None:
         """Stop accepting, end the long-polls, let the other requests in flight finish for up to ``GRACE_SECONDS``.
 
         ``run`` closes the socket.
         """
-        self._server.should_exit = True
+        self.stop()
         self._thread.join()
 
 

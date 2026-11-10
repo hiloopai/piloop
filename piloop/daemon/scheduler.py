@@ -8,6 +8,7 @@ and stops their lifecycles with the daemon, and runs their threads.
 
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime
@@ -172,31 +173,39 @@ class Scheduler:
         waits up to ``timeout`` for the threads that do not watch an agent. If an agent ends meanwhile, the next daemon
         also handles it.
         """
+        left = _deadline(timeout)
         self._stop.set()
         self.interrupt()
         self._controller.hand_over()
-        wait(self._in_flight().values(), timeout=timeout)
-        self._stop_lifecycles(Leaving.HAND_OVER, timeout)
+        wait(self._in_flight().values(), timeout=left())
+        self._stop_lifecycles(Leaving.HAND_OVER, left)
 
     def stop(self, timeout: float) -> None:
         """Stop the loop, kill the agents in flight, and write what is still open.
 
         The executor stops first: no job is submitted after it, and it stops every job. Each job still reports, which
-        closes its agent's row as stopped and lets its run keep what it made. ``timeout`` limits the wait for them.
-        Then each lifecycle writes what is still open (``Lifecycle.stop``).
+        closes its agent's row as stopped and lets its run keep what it made. Then each lifecycle writes what is still
+        open (``Lifecycle.stop``). Every wait shares ``timeout``: the stop takes no longer, so ``piloop stop`` sees it end.
         """
+        left = _deadline(timeout)
         self._stop.set()
         self.interrupt()
-        self._controller.stop(timeout)
-        wait(self._in_flight().values(), timeout=timeout)
-        self._stop_lifecycles(Leaving.STOP, timeout)
+        self._controller.stop(left())
+        wait(self._in_flight().values(), timeout=left())
+        self._stop_lifecycles(Leaving.STOP, left)
 
-    def _stop_lifecycles(self, leaving: Leaving, timeout: float) -> None:
-        """Stop each lifecycle, the latest contributed first, then release the threads.
+    def _stop_lifecycles(self, leaving: Leaving, left: Callable[[], float]) -> None:
+        """Stop each lifecycle, the latest contributed first, within what is ``left`` of the stop, then release the threads.
 
         The archiver stops after the campaigns' pass wrote what is open: its job prunes and evicts, so the next daemon
         must not start under it.
         """
         for lifecycle in reversed(self.contributions.lifecycles):
-            lifecycle.stop(leaving, timeout)
+            lifecycle.stop(leaving, left())
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _deadline(timeout: float) -> Callable[[], float]:
+    """The seconds that are left of ``timeout`` from now, never below 0: the waits of one stop share one deadline."""
+    end = time.monotonic() + timeout
+    return lambda: max(0.0, end - time.monotonic())

@@ -9,8 +9,9 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import Future
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from importlib.metadata import EntryPoints
 from pathlib import Path
@@ -89,6 +90,7 @@ from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_run, 
 from piloop.plugins.campaign_type.kit.runs.stop import release, runs
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, run_of
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner, RunQueued
+from piloop.plugins.contribution import Leaving
 from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import SERVE
@@ -971,6 +973,34 @@ def test_serve_stops(db: Database, campaign: Campaign, runtime: ScriptRuntime, t
     scheduler.stop(timeout=5)
     t.join(timeout=5)
     assert not t.is_alive()
+
+
+@dataclass
+class SlowLifecycle:
+    """A lifecycle whose stop waits out the whole timeout that it is given, and records it."""
+
+    given: list[float] = field(default_factory=list)
+
+    def start(self) -> None: ...
+
+    def in_flight(self) -> dict[str, Future[None]]:
+        return {}
+
+    def stop(self, leaving: Leaving, timeout: float) -> None:
+        self.given.append(timeout)
+        time.sleep(timeout)
+
+
+@pytest.mark.usefixtures('no_fresh_runs')
+def test_the_waits_of_a_stop_share_its_timeout(db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
+    """Each wait had the whole timeout: two slow lifecycles made a stop of 30 s take 60, and ``piloop stop`` gave up."""
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    slow = SlowLifecycle()
+    scheduler.contributions = replace(scheduler.contributions, lifecycles=(slow, slow))
+    started = time.monotonic()
+    scheduler.stop(timeout=0.5)
+    assert time.monotonic() - started < 1.0
+    assert slow.given[1] < 0.1, slow.given
 
 
 class HeldEvent(threading.Event):

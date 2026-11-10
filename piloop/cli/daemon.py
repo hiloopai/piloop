@@ -9,6 +9,7 @@ from sqlalchemy import select
 from piloop.cli import common, local
 from piloop.daemon.main import Daemon, preflight
 from piloop.daemon.serve import (
+    STOP_SECONDS,
     restart as restart_in_place,
     running_pid,
     service_unit,
@@ -73,7 +74,9 @@ def detached(address: Address | None = None) -> None:
     )
 
 
-def stop(*, timeout: Annotated[float, cyclopts.Parameter(help='Seconds to wait for the daemon to exit.')] = 30) -> None:
+def stop(
+    *, timeout: Annotated[float, cyclopts.Parameter(help='Seconds to wait for the daemon to exit.')] = STOP_SECONDS
+) -> None:
     """Stop the running daemon with SIGTERM, and wait for it to exit.
 
     The daemon kills the agents that are running, and their runs fail. A run whose implementer already ran `piloop run end`
