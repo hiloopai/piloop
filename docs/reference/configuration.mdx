@@ -543,7 +543,10 @@ candidate, `--base`), and its versions are scored into the pool. A new role of t
 | `home_check` | duration | `"PT10S"` | How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find it there to stop it. |
 | `inbox_page` | integer | `500` | How many events one read of the inbox's news examines at most (`piloop inbox wait`). A read with more reads again at once. |
 | `token_trust` | duration | `"PT10S"` | How long a server (`piloop serve`, `piloop cas serve`) trusts a token that it verified before it reads the token again. A token revoked through the server's own API stops at once; one revoked in another process, or an agent's whose session ended, within this time. 0 reads the token on every call. |
-| `api_processes` | integer | `0` | How many processes serve the daemon's API beside it, on the sockets that it binds (`piloop.daemon.tier`). 0: the daemon serves it in its own process. Each one holds its own connections and its relay template, and the relayed calls (`[plugins.executor] relayed_calls`) are shared out among them. |
+| `api_processes` | integer | `0` | How many processes serve the daemon's API beside it, on the sockets that it binds. 0: the daemon serves it in its own process. Each one holds its own connections and its relay template, and the relayed calls (`[plugins.executor] relayed_calls`) are shared out among them, so there are no more of them than relayed calls. |
+| `api_start` | duration | `"PT1M"` | How long an API process may take to serve once it started. The daemon does not start when one of the first ones does not serve in time, or says why it cannot. |
+| `api_respawn` | duration | `"PT1S"` | How long the daemon waits before it starts an API process in place of one that exited: one that crashes at once does not spin. |
+| `api_respawns` | integer | `3` | How many API processes started again in a row may fail to serve before the daemon stops. |
 | `agent_reread` | duration | `"PT1M"` | How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a close that adds no event, by `piloop sql` say, is seen this late. |
 
 ### `[agents]`

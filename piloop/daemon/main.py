@@ -19,7 +19,7 @@ from piloop.daemon.serve import (
     serve_argv,
 )
 from piloop.daemon.served import Served
-from piloop.daemon.tier import ApiProcesses
+from piloop.daemon.tier import CLOSE_SECONDS as API_CLOSE_SECONDS, ApiProcesses, NotServing
 from piloop.db import terms
 from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import schemas
@@ -53,9 +53,10 @@ DECLARED = (JOB_KINDS, TARGET_KINDS, COMMENT_KINDS, CONTRIBUTORS)
 """The slots of what packages add that the daemon reads, which it checks before it starts."""
 ACTOR = System.DAEMON
 """The actor that the daemon's connections record in ``updated_by``. The change-log triggers use this name."""
-SHUTDOWN_SECONDS = STOP_SECONDS - GRACE_SECONDS - 5
-"""What the waits of a stop for the agents, the jobs and the lifecycles share. The servers' grace, the flush of the
-traces and the close of the database come after, in the 5 s left: the daemon frees its lock within ``STOP_SECONDS``."""
+SHUTDOWN_SECONDS = STOP_SECONDS - max(GRACE_SECONDS, API_CLOSE_SECONDS) - 5
+"""What the waits of a stop for the agents, the jobs and the lifecycles share. The close of the servers (their grace,
+or the whole close of the API processes), the flush of the traces and the close of the database come after: the daemon
+frees its lock within ``STOP_SECONDS``."""
 
 
 def bound(cfg: Settings) -> list[plugins.Capability[plugins.Parameters]]:
@@ -257,16 +258,21 @@ class Daemon:
             write_transaction(s)
             term = terms.listening(s, self._epoch, listen)
             s.commit()
-        if (count := self._cfg.daemon.api_processes) > 0:
+        if self._cfg.daemon.api_processes > 0:
             remote = None if listener is None else listener.socket
-            self._servers = [ApiProcesses(count, [local.socket, remote], self._cfg.home, self.tracer)]
+            processes = ApiProcesses(self._cfg, [local.socket, remote], self.tracer, self._api_failed)
+            try:
+                processes.start()
+            except NotServing as e:
+                raise SystemExit(f'the daemon does not start: {e}') from e
+            self._servers = [processes]
         else:
             self._served = Served(
                 self.db, self._cfg, self._tokens, self.network, self.tracer, self.controller.cas, daemon_state(term)
             )
             self._servers = [Server(self._served.app(), each) for each in listeners]
-        for server in self._servers:
-            server.start()
+            for server in self._servers:
+                server.start()
         if listener is not None:
             assert self._address is not None  # a network binds nothing without ``listen``
             if self._address.port == 0:
@@ -277,6 +283,11 @@ class Daemon:
     def _wake(self, consumer: str) -> None:
         """Run ``consumer`` in the next turn of the loop: a thread of a provider that the daemon opened ended."""
         self.scheduler.loop.wake(consumer)
+
+    def _api_failed(self, why: str) -> None:
+        """API processes started again keep failing to serve: the daemon stops, as on SIGTERM, and says why."""
+        self.tracer.event('api_processes.failed', error=why)
+        self.scheduler.interrupt()
 
     def _wake_archiver(self) -> None:
         """The archiver's job ended: the next turn of the loop starts the next one."""

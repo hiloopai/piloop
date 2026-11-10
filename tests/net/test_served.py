@@ -96,7 +96,7 @@ def test_an_executor_without_workers_elsewhere_serves_no_routes(
 def test_each_process_that_serves_runs_its_share_of_the_relayed_calls(
     db: Database, cfg: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``relayed_calls`` bounds the home: each of 3 API processes forks at most 3 of the 8 at once."""
+    """``relayed_calls`` bounds the home: 3 API processes fork at most 8 at once between them."""
     sizes: list[int] = []
 
     class Counted(Forks):
@@ -110,7 +110,8 @@ def test_each_process_that_serves_runs_its_share_of_the_relayed_calls(
         s.commit()
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
+    Served(db, cfg, tokens, network, Tracer(None), disk(cfg.home), daemon_state(term)).close()
     three = cfg.model_copy(update={'daemon': DaemonSettings(api_processes=3)})
-    for each in (cfg, three):
-        Served(db, each, tokens, network, Tracer(None), disk(cfg.home), daemon_state(term)).close()
-    assert sizes == ([8, 3] if workers_module.FORKED else [])
+    for process in range(3):
+        Served(db, three, tokens, network, Tracer(None), disk(cfg.home), daemon_state(term), process).close()
+    assert sizes == ([8, 3, 3, 2] if workers_module.FORKED else []), 'the daemon alone runs 8; three run 8 between them'

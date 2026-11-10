@@ -130,9 +130,17 @@ class DaemonSettings(BaseModel):
     token again. A token revoked through the server's own API stops at once; one revoked in another process, or an
     agent's whose session ended, within this time. 0 reads the token on every call."""
     api_processes: int = Field(default=0, ge=0)
-    """How many processes serve the daemon's API beside it, on the sockets that it binds (``piloop.daemon.tier``). 0:
-    the daemon serves it in its own process. Each one holds its own connections and its relay template, and the
-    relayed calls (``[plugins.executor] relayed_calls``) are shared out among them."""
+    """How many processes serve the daemon's API beside it, on the sockets that it binds. 0: the daemon serves it in
+    its own process. Each one holds its own connections and its relay template, and the relayed calls
+    (``[plugins.executor] relayed_calls``) are shared out among them, so there are no more of them than relayed calls."""
+    api_start: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
+    """How long an API process may take to serve once it started. The daemon does not start when one of the first ones
+    does not serve in time, or says why it cannot."""
+    api_respawn: timedelta = Field(default=timedelta(seconds=1), ge=timedelta(0))
+    """How long the daemon waits before it starts an API process in place of one that exited: one that crashes at once
+    does not spin."""
+    api_respawns: int = Field(default=3, gt=0)
+    """How many API processes started again in a row may fail to serve before the daemon stops."""
     agent_reread: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a
     close that adds no event, by ``piloop sql`` say, is seen this late."""

@@ -153,3 +153,26 @@ def test_a_short_socket_directory_that_others_reach_is_refused(tmp_path: Path, s
     cfg.socket_file.parent.symlink_to(tmp_path / 'elsewhere')
     with pytest.raises(PermissionError, match='is not a directory that only this user reaches'):
         local_listener(cfg.socket_file)
+
+
+def test_an_api_process_ends_the_network_s_tls_on_the_socket_that_the_daemon_bound(
+    tmp_path: Path, certificate: dict[str, str]
+) -> None:
+    home = tmp_path / 'home'
+    home.mkdir(mode=0o700)
+    (home / 'config.toml').write_text(
+        f'[daemon]\napi_processes = 1\n\n[plugins.network]\ntls = {{ cert = "{certificate["cert"]}", key = "{certificate["key"]}" }}\n'
+    )
+    cfg = Settings(home=home)
+    daemon = Daemon(cfg, listen=Address(host='127.0.0.1', port=0))
+    with daemon.tracer.span('test') as span:
+        daemon._listen(span)
+    try:
+        with Client.on(cfg.socket_file, System.HUMAN) as client:
+            url = client.status(Selection()).daemon.listen
+        assert url is not None and url.startswith('https://127.0.0.1:')
+        assert httpx.post(url + UNROUTED).status_code == 404, 'the API process answered over TLS'
+        with pytest.raises(httpx.RemoteProtocolError):
+            httpx.post(url.replace('https://', 'http://') + UNROUTED)
+    finally:
+        daemon.shutdown(timeout=5)

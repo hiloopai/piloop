@@ -71,6 +71,7 @@ from tests.conftest import (
     no_land,
     no_ship,
     no_take,
+    route_host,
     workers_of,
 )
 from tests.fixtures.plugin import Auditor
@@ -409,11 +410,19 @@ def test_a_template_that_does_not_exit_when_closed_is_killed(
 def test_off_linux_the_server_runs_each_relayed_call_in_a_process_of_its_own(
     tmp_path: Path, db: Database, runtime: ScriptRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The templates are the API's: each process that serves it has one on Linux, none elsewhere. The daemon's own
+    worker runs the calls of its isolated agents in a process each, as off Linux."""
     monkeypatch.setattr(workers_module, 'FORKED', False)
+
+    def no_template(*_: object) -> Forks:
+        raise AssertionError('no template off Linux')
+
+    monkeypatch.setattr(workers_module, 'Forks', no_template)
+    Workers().routes(route_host(db, tmp_path)).close()
     executor = workers_of(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     run = executor._cli.run
     env = child_env() | {'PILOOP_HOME': str(tmp_path)}
-    assert run is processes and executor._forks is None, 'no template'
+    assert run is processes, 'no template in the daemon'
     done = run(['sql', 'SELECT 41 + 1'], cwd=tmp_path, env=env, timeout=60, input=None)
     assert done.returncode == 0 and done.args[: len(PILOOP_ARGV)] == list(PILOOP_ARGV), 'a piloop process of its own'
     executor.close()

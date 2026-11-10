@@ -30,7 +30,7 @@ def serve_argv(listen: Address | None) -> list[str]:
 
 
 POLL_SECONDS = 0.1
-STOP_SECONDS = 30
+STOP_SECONDS = 45
 """How long ``piloop stop`` waits for the daemon by default. The daemon's shutdown keeps within it (``Daemon.shutdown``),
 so a ``piloop serve`` right after a stop finds the lock free."""
 LAUNCHD_LABEL = 'dev.piloop.serve'

@@ -320,6 +320,18 @@ class Server:
         """Serve in a thread. The socket listens already, so a request that comes before uvicorn accepts waits."""
         self._thread.start()
 
+    def serving(self, timeout: float) -> None:
+        """Wait until the thread of ``start`` accepts on the socket.
+
+        Raises:
+            RuntimeError: It ended first, or ``timeout`` seconds passed.
+        """
+        deadline = time.monotonic() + timeout
+        while not self._server.started:
+            if not self._thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError(f'the server on {self.listener.socket.getsockname()!r} did not start')
+            time.sleep(0.01)
+
     def stop(self) -> None:
         """Start to ``close``, and return at once: the servers of a daemon close together."""
         self._server.should_exit = True

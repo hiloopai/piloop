@@ -128,10 +128,16 @@ class RouteHost:
     secrets: SecretsProvider
     processes: int
     """How many processes serve the API, this one among them: a bound of the home is shared out among them."""
+    process: int
+    """Which of them this one is, from 0."""
 
 
 def _nothing() -> None:
     return None
+
+
+ROUTES_CLOSE_SECONDS = 5.0
+"""How long a ``Routes.close`` may take: a process that serves the API waits no longer before it exits."""
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ class Routes:
 
     router: APIRouter
     close: Callable[[], None] = _nothing
+    """Returns within ``ROUTES_CLOSE_SECONDS``."""
 
 
 @runtime_checkable

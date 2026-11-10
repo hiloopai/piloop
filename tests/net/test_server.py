@@ -25,7 +25,7 @@ from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged
 from piloop.net import Route, cas_server, tokens
 from piloop.net.cas import route
-from piloop.net.server import App, Server, app, executor_router
+from piloop.net.server import App, Server, app, executor_router, listening
 from piloop.net.tokens import Caller, Tokens
 from piloop.plugins import host as plugins
 from piloop.plugins.cas.contract import BLAKE3
@@ -473,3 +473,15 @@ def test_a_network_that_authenticates_every_caller_makes_core_refuse_piloop_toke
         assert 'takes no piloop token' in valid.json()['detail']
         assert httpx.post(server.url + ECHOED, json=HI, headers=stamped).status_code == 200
     assert network.asked == [''], 'the refused token never reached the network'
+
+
+def test_a_server_whose_thread_never_ran_is_not_serving(db: Database) -> None:
+    network = Https.model_validate({'listen': '127.0.0.1:0'}).open(
+        NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets()))
+    )
+    listener = listening(network)
+    assert listener is not None
+    server = Server(app(Tokens(db), network, []), listener)
+    with pytest.raises(RuntimeError, match='did not start'):
+        server.serving(0.05)
+    listener.socket.close()

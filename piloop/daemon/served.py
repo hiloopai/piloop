@@ -43,8 +43,13 @@ class Served:
         tracer: Tracer,
         cas: Cas,
         daemon: DaemonState,
+        process: int = 0,
     ) -> None:
-        """``daemon``: the daemon that answers, of the current term."""
+        """``daemon``: the daemon that answers, of the current term.
+
+        ``process``: which of the processes that serve the API this one is (``[daemon] api_processes``), 0 for the
+        daemon itself.
+        """
         secrets = SECRETS.selected(cfg.providers)
         results = CampaignResults(
             db,
@@ -66,6 +71,7 @@ class Served:
             partial(record_of, db),
             secrets,
             max(1, cfg.daemon.api_processes),
+            process,
         )
         self._routes = routes_of(host, cfg.providers)
         self._tokens, self._network = tokens, network
@@ -93,7 +99,8 @@ def openapi() -> dict[str, object]:
         tracing, cas, secrets = Tracer(None), CAS.selected({}).open(home), SECRETS.selected({})
         results = CampaignResults(db, tracing, home, cas, secrets=secrets)
         routes = routes_of(
-            RouteHost(db, results, tracing, home, cas, partial(checkout_of, db), partial(record_of, db), secrets, 1), {}
+            RouteHost(db, results, tracing, home, cas, partial(checkout_of, db), partial(record_of, db), secrets, 1, 0),
+            {},
         )
         described = FastAPI(title='piloop', version='1')
         try:
@@ -107,11 +114,14 @@ def openapi() -> dict[str, object]:
 
 
 @contextmanager
-def serving(local: socket.socket, remote: socket.socket | None, cfg: Settings = settings) -> Generator[None]:
+def serving(
+    local: socket.socket, remote: socket.socket | None, process: int, cfg: Settings = settings
+) -> Generator[None]:
     """Serve the API of ``cfg``'s home for the block, as an API process (``piloop.daemon.tier``).
 
-    ``local`` is the home's Unix socket, and ``remote`` the network's or None: the daemon bound them. The process opens
-    the home as a client does, and the current term says which daemon answers.
+    ``local`` is the home's Unix socket, and ``remote`` the network's or None: the daemon bound them. ``process`` is
+    which API process this is. It opens the home as a client does, and the current term says which daemon answers.
+    The block runs once every server serves.
 
     Raises:
         SystemExit: No daemon began a term on the home: nothing here would answer for it.
@@ -133,12 +143,14 @@ def serving(local: socket.socket, remote: socket.socket | None, cfg: Settings = 
         secrets = SECRETS.selected(cfg.providers)
         network = NETWORKS.selected(cfg.providers).open(NetworkHost(tokens, HomeSecrets(db, secrets)))
         cas = CAS.selected(cfg.providers).open(cfg.home)
-        api = Served(db, cfg, tokens, network, tracing, cas, daemon_state(term))
+        api = Served(db, cfg, tokens, network, tracing, cas, daemon_state(term), process)
         listeners = [Listener(local, None), *([] if remote is None else [network.listener(remote)])]
         servers = [Server(api.app(), each) for each in listeners]
         for server in servers:
             server.start()
         try:
+            for server in servers:
+                server.serving(cfg.daemon.api_start.total_seconds())
             yield
         finally:
             for server in servers:

@@ -27,6 +27,7 @@ from typing import IO, Protocol
 
 from pydantic import BaseModel
 
+from piloop.plugins.contribution import ROUTES_CLOSE_SECONDS
 from piloop.proc import PILOOP_ARGV, child_env, run_group
 
 _log = logging.getLogger(__name__)
@@ -43,8 +44,9 @@ REQUEST_BYTES = 1 << 20
 """The most that one request may hold: its argv and its environment."""
 THREADED = os.EX_SOFTWARE
 """The template's exit code when it runs more than one thread: it forks no call, and the server starts no other."""
-CLOSE_SECONDS = 5.0
-"""How long ``Forks.close`` waits for the template to exit once it closed its end of the socket, before it kills it."""
+CLOSE_SECONDS = ROUTES_CLOSE_SECONDS
+"""How long ``Forks.close`` waits for the template to exit once it closed its end of the socket, before it kills it: a
+close of the routes that it serves keeps within their bound."""
 GO = b'go'
 """What the server sends a call's child once it read the child's pid: only then does the child run the command."""
 

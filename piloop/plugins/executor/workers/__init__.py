@@ -6,7 +6,6 @@ those of its pool, through the same lease operations over HTTP (``piloop.plugins
 provisioner gets its workers started and stopped on demand (``piloop.plugins.executor.kit.scaling``).
 """
 
-import math
 import sys
 import threading
 import time
@@ -57,6 +56,7 @@ from piloop.plugins.executor.kit.scaling import Scaler
 from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance, WorkerInstanceState
 from piloop.plugins.executor.kit.transfers import BUILDS, FirstTransferBuilds, FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
+from piloop.plugins.host import PluginError
 from piloop.settings import RELAY_SOCKET, socket_at
 
 FORKED = sys.platform == 'linux'
@@ -126,12 +126,21 @@ class Workers(ExecutorConfig):
         """Its workers' lease routes (``remote.lease_routes``, ``Serves``), on leases of their own over the database.
 
         Its first transfers are asked for there and built by the daemon (``FirstTransferBuilds``), and its relayed
-        calls fork from a template of the process (``Forks``), which ``close`` ends: ``relayed_calls`` shared out among
-        the processes that serve.
+        calls fork from a template of the process (``Forks``), which ``close`` ends: the processes that serve share out
+        ``relayed_calls`` among them.
+
+        Raises:
+            PluginError: More processes serve than ``relayed_calls``.
         """
         leases = Leases(host.db, host.results, host.cas, self.timing(), self.pools, host.secrets, host.tracer)
         send = FirstTransfers(host.db, host.cas, host.records, self.first_transfer_seconds)
-        forks = Forks(host.home, math.ceil(self.relayed_calls / host.processes)) if FORKED else None
+        if host.processes > self.relayed_calls:
+            raise PluginError(
+                f'[daemon] api_processes = {host.processes} is more than [plugins.executor] relayed_calls ='
+                f' {self.relayed_calls}: each API process runs at least one relayed call, and all of them no more'
+            )
+        share, more = divmod(self.relayed_calls, host.processes)
+        forks = Forks(host.home, share + (host.process < more)) if FORKED else None
         cli = Runner(host.db, host.home, host.repos, processes if forks is None else forks)
         router = executor_router(lease_routes(leases, host.db.watching, host.cas, send.send, cli))
         return Routes(router, lambda: None if forks is None else forks.close())
@@ -147,9 +156,9 @@ class WorkersExecutor:
             host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds, partial(host.wake, BUILDS)
         )
         """Builds the first transfers that ``send`` asks for."""
-        self._forks = Forks(host.home, config.relayed_calls) if FORKED else None
-        self._cli = Runner(host.db, host.home, host.repos, processes if self._forks is None else self._forks)
-        """Runs the relayed calls of the agents of this worker whose runtime sees none of this home."""
+        self._cli = Runner(host.db, host.home, host.repos, processes)
+        """Runs the relayed calls of the agents of this worker whose runtime sees none of this home, a process each: the
+        templates that fork them belong to the processes that serve the API (``routes``)."""
         local = Local(self.leases, SERVE)
         site = jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve)
         self.worker = Worker(
@@ -253,9 +262,7 @@ class WorkersExecutor:
         self.scaler.join(self.leases.timing.renew)  # the next daemon process lists the instances again
 
     def close(self) -> None:
-        """End the template of its worker's relayed calls (``Forks``). The worker's threads end with the daemon process."""
-        if self._forks is not None:
-            self._forks.close()
+        """Nothing to release: the worker's threads end with the daemon process."""
 
 
 def _worker_argv(server: str, pool: str, policy: Provisioner) -> list[str]:

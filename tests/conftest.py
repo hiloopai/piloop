@@ -819,7 +819,7 @@ def route_host(db: Database, home: Path) -> RouteHost:
     cas = disk(home)
     results = CampaignResults(db, Tracer(None), home, cas)
     return RouteHost(
-        db, results, Tracer(None), home, cas, partial(checkout_of, db), partial(record_of, db), LocalSecrets(), 1
+        db, results, Tracer(None), home, cas, partial(checkout_of, db), partial(record_of, db), LocalSecrets(), 1, 0
     )
 
 
