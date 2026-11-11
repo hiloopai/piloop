@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Final
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from piloop.actor import Agent, System
 from piloop.agents.results import (
@@ -321,7 +321,18 @@ class Agents:
             implementers = select(AgentSession).where(
                 (AgentSession.subject_kind == RUN), AgentSession.state.in_(winding)
             )
-            graces = {w.id: grace for w in s.scalars(implementers) if (grace := self._end_grace(s, w)) is not None}
+            of_implementers = implementers.with_only_columns(AgentSession.campaign_id)
+            campaigns: dict[CampaignId | None, Campaign] = {
+                c.id: c
+                for c in s.scalars(
+                    select(Campaign).options(undefer(Campaign.config)).where(Campaign.id.in_(of_implementers))
+                )
+            }
+            graces = {
+                w.id: grace
+                for w in s.scalars(implementers)
+                if (grace := self._end_grace(s, w, campaigns[w.campaign_id])) is not None
+            }
             found = {i: end for i, (at, end) in graces.items() if at <= now}
             soonest.add(*(at for at, _ in graces.values()))
             agent_sessions = s.scalars(
@@ -378,7 +389,7 @@ class Agents:
                 else:
                     soonest.add(told + grace)
             for agent_session in s.scalars(implementers.where(AgentSession.state == AgentSessionState.RUNNING)):
-                left = self._time_left(s, agent_session, now)
+                left = self._time_left(s, agent_session, campaigns[agent_session.campaign_id], now)
                 if isinstance(left, TimeLeft):
                     cause = left.cut.value.format(timeout=left.timeout)
                     text = WRAP_UP_PROMPT.format(what='Your time is almost up', cause=cause, minutes=left.minutes)
@@ -399,20 +410,21 @@ class Agents:
             return self._agents
         return s.get_one(Campaign, agent_session.campaign_id).config.agents.over(self._agents)
 
-    def _end_grace(self, s: Session, implementer: AgentSession) -> tuple[datetime, RunEnd] | None:
+    def _end_grace(self, s: Session, implementer: AgentSession, campaign: Campaign) -> tuple[datetime, RunEnd] | None:
         """When the grace after the implementer ended its run ends (its role's ``end_grace``), and its run's end."""
-        ended = self._planner_by_id(s, implementer.campaign_id).ended_at(s, implementer)
-        role = s.get_one(Campaign, implementer.campaign_id).config.roles.doing_runs().get(implementer.kind)
+        ended = self._host.planners[campaign.type].ended_at(s, implementer)
+        role = campaign.config.roles.doing_runs().get(implementer.kind)
         return None if ended is None or role is None else (ended[0] + role.end_grace, ended[1])
 
-    def _time_left(self, s: Session, implementer: AgentSession, now: datetime) -> TimeLeft | datetime | None:
-        """What an implementer that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
+    def _time_left(
+        self, s: Session, implementer: AgentSession, campaign: Campaign, now: datetime
+    ) -> TimeLeft | datetime | None:
+        """What an implementer of ``campaign`` that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
 
         Its timeout is its ``deadline``, set at its launch (its role's, cut at the campaign's stop), plus its
         extensions. One told before its last extension is told again. Before the lead, when it comes. None when it was
         told, or has no deadline to wrap up before (0.6 launched it).
         """
-        campaign = s.get_one(Campaign, implementer.campaign_id)
         role = campaign.config.roles.doing_runs().get(implementer.kind)
         on = Event.target == TargetRef(TargetKind.AGENT_SESSION, implementer.id)
         last = latest(s, AgentSessionExtended, on)

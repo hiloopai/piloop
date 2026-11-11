@@ -61,6 +61,7 @@ from piloop.db.models import (
     Lease,
     LeaseState,
     Pause,
+    PydanticJSON,
     utcnow,
 )
 from piloop.db.requests import answer, pending
@@ -3036,6 +3037,29 @@ def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_
         assert s.get_one(AgentSession, idea).state is closed
     assert settled(db, 'agent_session.stop_ended') == []
     scheduler.stop(timeout=5)
+
+
+def test_a_wind_down_pass_decodes_the_config_of_its_implementers_campaign_once(
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass reads each implementer's role from its campaign's config: one decode per campaign, not per implementer."""
+    for title in ('a', 'b', 'c'):
+        running_agent_session(db, campaign, title)
+    lease_running(db)
+    scheduler = make_scheduler(db, PromptingRuntime(), tmp_path)
+    [wind_down] = [c for c in scheduler.consumers() if c.name == 'wind_down']
+    column = Campaign.__table__.c.config.type
+    assert isinstance(column, PydanticJSON)
+    validate = column.adapter.validate_python
+    decoded: list[CampaignConfig] = []
+
+    def counted(value: object) -> CampaignConfig:
+        decoded.append(config := validate(value))
+        return config
+
+    monkeypatch.setattr(column.adapter, 'validate_python', counted)
+    wind_down.run(Turn(utcnow()))
+    assert len(decoded) == 1
 
 
 @pytest.mark.usefixtures('daemon_api')
