@@ -87,9 +87,9 @@ class EvaluationSettings(BaseModel):
     """The longest wait between two runs of an evaluation that keeps failing for a cause that is not its candidate's
     (``infra_retry``)."""
     stop_after_tries: int = Field(default=3, ge=1)
-    """Consecutive infrastructure failures that pause evaluations of one task in a campaign. A committed single-line
-    ``TASK`` file identifies submissions for the same task; without one the hold applies to that candidate only.
-    PiLoop records no score. Fix the cause and use ``piloop candidate remeasure <id>`` for an affected candidate to resume its task."""
+    """Consecutive infrastructure failures before piloop pauses work. Submissions with the same committed single-line
+    ``TASK`` ID share a count and pause evaluations of that task. Submissions without a task ID share a count and pause
+    the entire campaign. After repair, use ``piloop candidate remeasure <id>`` for a task or ``piloop resume <campaign>`` for the campaign."""
 
     @property
     def max_evidence_bytes(self) -> int:

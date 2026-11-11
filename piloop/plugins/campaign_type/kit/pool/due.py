@@ -42,6 +42,8 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     someone asks (``request_remeasure``).
     """
     held = task_holds.held_keys(s, campaign.id)
+    if task_holds.CAMPAIGN in held:
+        return []
     asked = [c for c, _ in requested(s, campaign) if task_holds.key(c) not in held]
     if campaign.status is not CampaignStatus.ACTIVE:
         return list(dict.fromkeys(asked))

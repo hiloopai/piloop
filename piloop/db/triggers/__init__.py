@@ -43,6 +43,7 @@ PERSISTENT: tuple[Trigger, ...] = (
     links.same_campaign(),
     roles.known_role(),
     *campaigns.acyclic(),
+    campaigns.EVALUATIONS_RESUMED,
     *fts.SYNC,
 )
 """The triggers in ``sqlite_master`` after ``migrate()``. ``tests/db/test_migrations.py`` checks that the two agree."""

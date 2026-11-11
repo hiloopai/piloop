@@ -71,6 +71,7 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
             'agent_sessions_kind',
             'campaigns_parent_insert',
             'campaigns_parent_update',
+            'campaigns_resume_untagged_evaluations',
             'ideas_fts_insert',
             'ideas_fts_delete',
             'ideas_fts_update',

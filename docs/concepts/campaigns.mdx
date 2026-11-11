@@ -85,8 +85,12 @@ in a row (3 by default, in `config.toml`), piloop holds evaluations of the affec
 In a campaign with independent tasks, commit a short, single-line task ID in a regular file named `TASK` at the
 root of each submission. Candidates with the same ID share a failure count within the campaign. A completed
 evaluation of that task breaks the streak. Once held, new evaluations of the task wait while other tasks continue.
-Without a task ID, only the failing candidate is held. After fixing the cause, run
-`piloop candidate remeasure <id>` on a candidate of the held task to retry it and release its siblings.
+After fixing the cause, run `piloop candidate remeasure <id>` on a candidate of the held task to retry it and release its siblings.
+
+Submissions without a usable `TASK` ID share one failure count per campaign. For example, if three different untagged
+ideas each hit the same broken evaluator once, the third consecutive infrastructure failure pauses the entire campaign
+at the default limit. Queued evaluations wait, including tagged ones. Work already running can finish. After fixing
+the evaluator, run `piloop resume <campaign>` to resume with a fresh count.
 
 `[evaluator] dev` names a fast check that the implementers run in their own checkouts. piloop never runs it:
 

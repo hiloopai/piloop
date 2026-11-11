@@ -234,8 +234,9 @@ waits for its own evaluations. The column `evaluations.ask` names the request th
 
 A full disk while piloop stores a campaign's linked inputs is no longer the candidate's crash. It is an infra error, as
 in the evaluate command: the evaluation runs again after `[evaluation] infra_retry`, and after `stop_after_tries`
-failures in a row the affected task's evaluations pause and piloop escalates. Without a committed `TASK` ID,
-only the failing candidate is held. Retry with `piloop candidate remeasure <id>`.
+failures in a row for the same committed `TASK` ID, that task's evaluations pause. Retry the task with
+`piloop candidate remeasure <id>`. Submissions without a task ID share one count and pause the entire campaign at
+the same limit. After repair, use `piloop resume <campaign>`.
 
 ### An agent that took a few turns worked
 

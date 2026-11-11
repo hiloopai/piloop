@@ -15,7 +15,7 @@ from piloop.actor import System
 from piloop.campaign import ops as campaign_ops
 from piloop.config import CampaignConfig
 from piloop.db.events import in_order, latest
-from piloop.db.models import PROCESS, Campaign, Comment, Event, utcnow
+from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, Revision, TargetRef
 from piloop.otel import Span, Tracer
@@ -735,7 +735,7 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
 def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, limit: int | None
 ) -> None:
-    """Without a TASK, the failure holds only the candidate. The escalation identifies the failing evaluation."""
+    """Without a TASK, the full campaign pauses and later submissions wait without spending more attempts."""
     set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
     settings = EvaluationSettings(infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20))
     if limit is not None:
@@ -753,7 +753,7 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
         proj = s.get_one(Campaign, campaign.id)
         [*_, last] = [e for _, e in in_order(s, InfraFailed)]
         [escalation] = s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all()
-        assert proj.paused is None and task_holds.held(s, s.get_one(Candidate, base))
+        assert proj.paused is Pause.ALL and task_holds.held(s, s.get_one(Candidate, base))
         assert escalation.target == TargetRef(CANDIDATE, base)
         assert f'candidate#{base}, evaluation#{last.evaluation}, evaluator#{proj.evaluator_id}: {last.error}' in (
             escalation.body
@@ -763,12 +763,12 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
     wait_until(lambda: run_candidates(db, run_id) != [], 'the submission')
     [version] = run_candidates(db, run_id)
     ex.score_submission(version.id)
-    assert tries(tmp_path) == expected * 2, "a run's submission stops after its tries too"
+    assert tries(tmp_path) == expected, 'a later submission never reaches the held evaluator'
     with db.session() as s:
         assert s.get_one(Candidate, version.id).measurements == []
         on = [c.target for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))]
-        assert on == [TargetRef(CANDIDATE, base), TargetRef(CANDIDATE, version.id)], 'one escalation for each'
-        assert s.get_one(Campaign, campaign.id).paused is None
+        assert on == [TargetRef(CANDIDATE, base)], 'one escalation for the shared outage'
+        assert s.get_one(Campaign, campaign.id).paused is Pause.ALL
         assert task_holds.held(s, s.get_one(Candidate, version.id))
         host = TypeHost(
             Tracer(None), tmp_path, ex, lambda _: pytest.fail('held tasks should not start scoring threads')
@@ -859,6 +859,61 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
     assert attempt(later) is Measuring.MEASURED
 
 
+def test_untagged_ideas_share_one_budget_and_only_campaign_resume_reopens_the_evaluator(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=3))
+    ex = queued_executor(db, runtime, tmp_path, slots=1)
+    path = Path(campaign.path)
+    ids = []
+    with Repo(path) as repo, db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        for idea in ('a', 'b', 'c', 'tagged'):
+            if idea == 'tagged':
+                (path / 'TASK').write_text('independent')
+                repo.git.add('TASK')
+            (path / 'idea').write_text(idea)
+            repo.git.add('idea')
+            repo.git.commit('-qm', idea)
+            ids.append(
+                import_reference(s, proj, GitRepository(repo, PILOOP), 'HEAD', summary=None, actor=System.HUMAN).id
+            )
+        s.commit()
+    a, b, c, tagged = ids
+
+    def attempt(candidate: CandidateId) -> Measuring | InfraFailed:
+        return ex._request(None, *measuring(db, campaign, candidate), tmp_path / 'one', 1, None, Split.VISIBLE, None)
+
+    assert isinstance(attempt(a), InfraFailed)
+    assert isinstance(attempt(b), InfraFailed)
+    evaluator = measuring(db, campaign, c)[-1]
+    with db.session() as s:
+        assert s.get_one(Campaign, campaign.id).paused is None
+        waiting, _ = queue.request(s, tagged, evaluator)
+        queued_id = waiting.id
+        s.commit()
+    assert isinstance(attempt(c), InfraFailed)
+    assert rows(db) == []
+    assert attempt(tagged) is Measuring.ABANDONED
+    assert tries(tmp_path) == 3
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        assert proj.paused is Pause.ALL
+        assert left(s, queued_id, tagged, evaluator, None) is Measuring.ABANDONED
+        assert due(s, proj) == []
+        ask_remeasure(s, System.HUMAN, s.get_one(Candidate, a), RemeasureBody(repeats=1))
+        assert task_holds.held(s, s.get_one(Candidate, tagged))
+        campaign_ops.resume(s, campaign.id)
+        s.commit()
+        assert task_holds.held_keys(s, campaign.id) == set()
+    assert attempt(tagged) is Measuring.MEASURED
+    # After resume, a new outage has a fresh budget.
+    (tmp_path / 'tries').unlink()
+    assert isinstance(attempt(b), InfraFailed)
+    with db.session() as s:
+        assert s.get_one(Campaign, campaign.id).paused is None
+
+
 def test_a_stale_evaluation_refusal_never_spends_the_task_retry_budget_twice(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -878,7 +933,7 @@ def test_a_stale_evaluation_refusal_never_spends_the_task_retry_budget_twice(
             unmade(s, evaluation, 'same callback', 2)
         assert not task_holds.held(s, candidate)
 
-        # Upgraded rows whose revisions are unavailable still count under their own candidate id.
+        # An unavailable pre-upgrade revision also uses the campaign fallback.
         candidate.task_id = None
         candidate.revision = Revision('f' * 40)
         task_holds.identify(s, candidate)
@@ -993,7 +1048,7 @@ def test_a_request_reads_the_infra_error_of_its_put_back_evaluation_that_another
     assert isinstance(ended['second'], InfraFailed)
     assert ended['first'] is Measuring.ABANDONED, 'two failures in a row: the measurements wait for a human'
     with db.session() as s:
-        assert s.get_one(Campaign, campaign.id).paused is None and task_holds.held(s, s.get_one(Candidate, base))
+        assert s.get_one(Campaign, campaign.id).paused is Pause.ALL and task_holds.held(s, s.get_one(Candidate, base))
         assert s.get_one(Candidate, base).cancels == [], 'no cancel'
 
 
@@ -1016,7 +1071,7 @@ def test_a_remeasure_whose_inputs_cannot_be_stored_fails_for_the_machine_not_for
         assert len(s.get_one(Candidate, base).measurements) == before, 'no crash'
         failed = [p.error for _, p in in_order(s, InfraFailed)]
         assert failed == ['cannot store its inputs: OSError: [Errno 28] No space left on device'] * 2
-        assert s.get_one(Campaign, campaign.id).paused is None and task_holds.held(s, s.get_one(Candidate, base))
+        assert s.get_one(Campaign, campaign.id).paused is Pause.ALL and task_holds.held(s, s.get_one(Candidate, base))
     assert rows(db) == [], 'nothing waits'
 
 

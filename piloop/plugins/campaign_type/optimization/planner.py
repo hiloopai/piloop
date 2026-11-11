@@ -176,7 +176,7 @@ class OptimizationPlanner:
         """
         held_tasks = task_holds.held_keys(s, campaign.id)
         for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
-            if task_holds.key(submission) in held_tasks:
+            if task_holds.CAMPAIGN in held_tasks or task_holds.key(submission) in held_tasks:
                 continue
             mine = (CANDIDATE, submission.id)
             if (busy := self._scoring.get(mine)) is None or busy.done():

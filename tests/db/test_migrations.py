@@ -113,7 +113,9 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'worker_instances',
         ], 'an external-content FTS5 index has no _content shadow: the text stays in the base table only'
         triggers = [t for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")]
-        assert triggers == sorted(t.name for t in PERSISTENT), 'the package lists what the migrations install'
+        assert triggers == sorted(t.name for t in PERSISTENT if t.requires is None or t.requires in tables), (
+            'a core-only upgrade installs each trigger whose tables exist'
+        )
         con.execute("INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
         con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 't', 'c')")
         with pytest.raises(

@@ -216,7 +216,7 @@ class Measuring(StrEnum):
     measures it instead."""
     ABANDONED = 'abandoned'
     """It failed ``[evaluation] stop_after_tries`` times in a row for a cause that is not its candidate's: no measurement,
-    and evaluations of its task wait for an explicit remeasure."""
+    and evaluations wait until the affected task or campaign resumes."""
 
 
 type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED, Measuring.ABANDONED]
@@ -1001,8 +1001,8 @@ class RunController:
         request ran it (``left``): it waits in the queue, where ``piloop eval queue`` lists it and ``piloop eval
         cancel`` cancels it, and runs again after ``[evaluation] infra_retry``, twice as long after each failure up to
         ``infra_retry_max``. Each failure is an event. It ends once it measures, someone cancels it, the daemon stops, a new evaluator of its split replaces
-        ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``), or it
-        its task reached ``stop_after_tries`` consecutive infra failures. Only that task's evaluations pause.
+        ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``), or
+        its task or campaign reached ``stop_after_tries`` consecutive infrastructure failures.
         """
         failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
         request = partial(

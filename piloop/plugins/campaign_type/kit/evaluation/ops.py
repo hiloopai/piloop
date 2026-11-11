@@ -81,11 +81,21 @@ def hold_on_infra_errors(
     changed = s.execute(attempt).one_or_none()
     if changed is None or not changed.held:
         return
-    same = (Candidate.campaign_id == candidate.campaign_id) & (Candidate.task_id == candidate.task_id)
-    affected = Evaluation.candidate.has(same) if candidate.task_id else Evaluation.candidate_id == candidate_id
-    s.execute(delete(Evaluation).where(Evaluation.started_at.is_(None), affected))
-    scope = f'task {candidate.task_id!r}' if candidate.task_id else f'candidate#{candidate_id}'
-    resume = f'`piloop candidate remeasure {candidate_id}`'
+    affected = Candidate.campaign_id == candidate.campaign_id
+    if candidate.task_id:
+        affected &= Candidate.task_id == candidate.task_id
+        scope = f'task {candidate.task_id!r}'
+        resume = f'`piloop candidate remeasure {candidate_id}`'
+    else:
+        campaign = s.get_one(Campaign, candidate.campaign_id)
+        scope = f'campaign {campaign.name}'
+        resume = f'`piloop resume {campaign.name}`'
+        hold(
+            campaign,
+            Pause.ALL,
+            f'{changed.failures} consecutive infrastructure failures on submissions without a TASK: {error}; fix it, then {resume}',
+        )
+    s.execute(delete(Evaluation).where(Evaluation.started_at.is_(None), Evaluation.candidate.has(affected)))
     asked = EscalationView(
         headline=f'Evaluations paused for {scope} after {changed.failures} consecutive infrastructure failures.',
         why=(
@@ -100,7 +110,7 @@ def hold_on_infra_errors(
             Choice(
                 id='B',
                 label='Leave these evaluations on hold.',
-                result='Other tasks can continue.',
+                result=f'Evaluations for {scope} wait for an operator.',
             ),
         ),
         recommended='A',
