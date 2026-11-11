@@ -1835,7 +1835,7 @@ def test_optimization_0013_counts_runs_candidates_ideas_and_measurements_with_au
     path = tmp_path / 'piloop.db'
     command.upgrade(alembic(path), 'head')
     chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
-    command.upgrade(chain, 'head')
+    command.upgrade(chain, '0013')
     tables = ('runs', 'candidates', 'ideas', 'measurements')
     head = {t: _schema_of(path, t) for t in tables}
     command.downgrade(chain, '0012')
@@ -1846,3 +1846,27 @@ def test_optimization_0013_counts_runs_candidates_ideas_and_measurements_with_au
     assert {t: _schema_of(path, t)[:3] for t in tables} == {t: v[:3] for t, v in head.items()}, (
         'as the models make them'
     )
+
+
+def test_optimization_0014_preserves_candidates_and_scopes_task_failures_per_campaign(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0013')
+    with closing(sqlite3.connect(path)) as con, con:
+        for name in ('one', 'two'):
+            con.execute("INSERT INTO campaigns (name, path, config) VALUES (?, ?, '{}')", (name, '/' + name))
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'commit')")
+    command.upgrade(chain, '0014')
+    with closing(sqlite3.connect(path)) as con, con:
+        assert con.execute('SELECT revision, task_id FROM candidates').fetchall() == [('commit', None)]
+        con.execute("UPDATE candidates SET task_id='shared'")
+        con.executemany(
+            'INSERT INTO evaluation_task_failures (campaign_id,task_key,failures,held) VALUES (?,?,?,?)',
+            [(1, 'task:shared', 3, True), (2, 'task:shared', 1, False)],
+        )
+    command.downgrade(chain, '0013')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT revision FROM candidates').fetchall() == [('commit',)]
+        assert 'task_id' not in {row[1] for row in con.execute('PRAGMA table_info(candidates)')}
+        assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='evaluation_task_failures'").fetchall()
