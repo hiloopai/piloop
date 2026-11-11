@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -214,8 +215,12 @@ a timeout, which sets its own, ever reaches it."""
 
 
 def write_script(path: Path, body: str) -> Path:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    # Config-change tests can replace a harness while a shell is still reading its original inode.
+    with tempfile.TemporaryDirectory(dir=path.parent) as scratch:
+        replacement = Path(scratch) / path.name
+        replacement.write_text(body)
+        replacement.chmod(replacement.stat().st_mode | stat.S_IEXEC)
+        replacement.replace(path)
     return path
 
 

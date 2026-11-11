@@ -8,7 +8,6 @@ real objects: each pipe closed once (``NoDoubleClose``, ``ClosedOnce``) and no c
 """
 
 import os
-import socket
 import sys
 import threading
 from collections import Counter
@@ -21,6 +20,7 @@ import pytest
 
 from piloop.daemon import tier as tier_module
 from piloop.daemon.tier import ApiProcesses
+from piloop.net.server import local_listener
 from piloop.otel import Tracer
 from piloop.settings import DaemonSettings, Settings
 from tests.conftest import wait_until
@@ -31,12 +31,10 @@ RESPAWN = timedelta(seconds=0.05)
 
 def processes_running(code: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ApiProcesses:
     """One API process that runs ``code`` after ``FAKE`` in place of the API, on a Unix socket of its own."""
-    monkeypatch.setattr(tier_module, 'CHILD_ARGV', (sys.executable, '-c', FAKE + code))
-    listening = socket.socket(socket.AF_UNIX)
-    listening.bind(str(tmp_path / 'api.sock'))
+    monkeypatch.setattr(tier_module, 'CHILD_ARGV', (sys.executable, '-S', '-c', FAKE + code))
     settings = DaemonSettings.model_validate({'api_processes': 1, 'api_start': 10, 'api_respawn': RESPAWN})
     cfg = Settings(home=tmp_path).model_copy(update={'daemon': settings})
-    return ApiProcesses(cfg, [listening, None], Tracer(None), lambda why: None)
+    return ApiProcesses(cfg, [local_listener(cfg.socket_file).socket, None], Tracer(None), lambda why: None)
 
 
 def counted_closes(monkeypatch: pytest.MonkeyPatch, after: Callable[[int], None] = lambda fd: None) -> Counter[object]:
@@ -104,7 +102,8 @@ def test_a_respawned_api_process_and_each_pipe_end_once_at_the_stop(
     """start, child_ready, child_fail, w_exit, w_timeout, w_spawn, child_ready, stop, stop, snapshot, reaped."""
     marker = tmp_path / 'failed-once'
     code = (
-        f'from pathlib import Path; m = Path({str(marker)!r}); first = not m.exists(); m.touch()\n'
+        f'from pathlib import Path; m = Path({str(marker)!r}); first = not m.exists()\n'
+        'if first: m.write_text(str(os.getpid()))\n'
         "os.write(ready, b'ready\\n')\n"
         'if first: sys.exit(1)\n'
         'os.read(control, 1)\n'
@@ -112,7 +111,7 @@ def test_a_respawned_api_process_and_each_pipe_end_once_at_the_stop(
     processes = processes_running(code, tmp_path, monkeypatch)
     closes = counted_closes(monkeypatch)
     processes.start()
-    [first] = processes.pids()
+    first = int(marker.read_text())
     old = pipes(processes)
     wait_until(lambda: processes.pids() != [first], 'a new API process in place of the one that exited')
     [second] = processes.pids()

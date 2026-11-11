@@ -32,6 +32,7 @@ from piloop.db.feed import newest
 from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.ids import Revision
+from piloop.net.server import local_listener
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.executor.contract import RepoId
@@ -40,7 +41,7 @@ from piloop.plugins.executor.kit.leases import Grant
 from piloop.plugins.executor.kit.remote import Remote
 from piloop.plugins.executor.kit.tables import FirstTransfer
 from piloop.plugins.network.contract import Address
-from piloop.settings import DaemonSettings, Settings
+from piloop.settings import DaemonSettings, Settings, socket_at
 from tests.conftest import Dial, baseline, disk, register, wait_until
 from tests.test_lease import HOST, MEASURED, PROBE, evaluation_job, queue
 from tests.test_lease_client import secret
@@ -266,11 +267,11 @@ def tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., ApiPr
     """An ``ApiProcesses`` of one process that runs ``code`` after ``FAKE`` in place of the API, with ``failed``."""
 
     def make(code: str, failed: Callable[[str], None] = lambda why: None, **daemon: object) -> ApiProcesses:
-        monkeypatch.setattr(tier_module, 'CHILD_ARGV', (sys.executable, '-c', FAKE + code))
-        listening = socket.socket(socket.AF_UNIX)
-        listening.bind(str(tmp_path / f'api-{uuid4().hex[:8]}.sock'))
+        # The stand-in uses only the stdlib: site/coverage startup must not consume its readiness deadline.
+        monkeypatch.setattr(tier_module, 'CHILD_ARGV', (sys.executable, '-S', '-c', FAKE + code))
         settings = DaemonSettings.model_validate({'api_processes': 1, 'api_start': 10, **daemon})
         cfg = Settings(home=tmp_path).model_copy(update={'daemon': settings})
+        listening = local_listener(socket_at(tmp_path / f'api-{uuid4().hex[:8]}.sock')).socket
         return ApiProcesses(cfg, [listening, None], Tracer(None), failed)
 
     return make
@@ -385,12 +386,12 @@ def test_a_stop_while_a_new_api_process_starts_counts_no_failure(
     code = (
         f'from pathlib import Path; once = Path({str(once)!r})\n'
         'if once.exists(): os.read(control, 1); sys.exit(0)\n'
-        "once.touch(); os.write(ready, b'ready\\n')"
+        "once.write_text(str(os.getpid())); os.write(ready, b'ready\\n')"
     )
     why: list[str] = []
     processes = tier(code, failed=why.append, api_respawn=0, api_respawns=1)
     processes.start()
-    [first] = processes.pids()
+    first = int(once.read_text())
     wait_until(lambda: processes.pids() != [first], 'a new one starts, and waits')
     processes.close()
     assert why == [], 'the stop ended it: no failure'
