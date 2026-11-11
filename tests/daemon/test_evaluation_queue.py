@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.pool.wire import RemeasureBody
-from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController
+from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, left
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
@@ -826,13 +826,15 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
     evaluator = measuring(db, campaign, a1)[-1]
     with db.session() as s:
         # A queued sibling, and an old candidate whose migration left its task to be resolved at first use.
-        queue.request(s, sibling, evaluator)
+        pending, _ = queue.request(s, sibling, evaluator)
+        pending_id = pending.id
         s.get_one(Candidate, a1).task_id = None
         s.commit()
     assert isinstance(attempt(a1), InfraFailed)
     assert rows(db) == []
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).paused is None
+        assert left(s, pending_id, sibling, evaluator, None) is Measuring.ABANDONED
         assert task_holds.held_keys(s, campaign.id) == {'task:A'}
         assert not {a1, a2, sibling}.intersection(c.id for c in due(s, s.get_one(Campaign, campaign.id)))
     # A new controller sees the same hold, even for a new revision.

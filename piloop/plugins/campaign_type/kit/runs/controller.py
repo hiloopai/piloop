@@ -1260,19 +1260,21 @@ def track_brief(idea: Idea) -> str | None:
 
 def left(
     s: Session, evaluation_id: int, candidate_id: CandidateId, evaluator_id: EvaluatorId, before: MeasurementId | None
-) -> Literal[Measuring.MEASURED, Measuring.CANCELLED, Measuring.REPLACED] | InfraFailed:
+) -> Literal[Measuring.MEASURED, Measuring.CANCELLED, Measuring.REPLACED, Measuring.ABANDONED] | InfraFailed:
     """How the evaluation ``evaluation_id`` ended, once it left the queue, for a request that waited for it.
 
     ``before`` is the candidate's last measurement under ``evaluator_id`` when the request found the evaluation. The one
     place that says it, whichever request ran the evaluation: it failed for a cause that is not its candidate's
     (``InfraFailed``), so the request asks again; it measured the candidate (``MEASURED``); else a new evaluator took it
-    from the queue (``REPLACED``, ``queue.withdraw``), or someone cancelled it (``CANCELLED``, ``queue.cancel``).
+    from the queue (``REPLACED``), its task was held (``ABANDONED``), or someone cancelled it (``CANCELLED``).
     """
     if (infra := latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))) is not None:
         return infra[1]
     if _last_measurement(s, candidate_id, evaluator_id) != before:
         return Measuring.MEASURED
-    return Measuring.REPLACED if retired(s, evaluator_id) else Measuring.CANCELLED
+    if retired(s, evaluator_id):
+        return Measuring.REPLACED
+    return Measuring.ABANDONED if task_holds.held(s, s.get_one(Candidate, candidate_id)) else Measuring.CANCELLED
 
 
 def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> MeasurementId | None:
