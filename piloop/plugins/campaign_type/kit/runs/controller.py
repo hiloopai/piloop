@@ -251,7 +251,6 @@ class RunController:
         self._tracer = tracer
         self._runs_dir = home / RUNS
         self._home = home
-        self._units_dir = home / 'units'
         self._evaluation = evaluation if evaluation is not None else EvaluationSettings()
         self._agents = agents if agents is not None else AgentSettings()
         self.cas = cas if cas is not None else CAS.selected({}).open(home)
@@ -804,7 +803,7 @@ class RunController:
         except Exception as e:  # a repo that is gone is the candidate's crash, not a job's
             with self._db.session() as s:
                 error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
-                record(s, self._units_dir, None, candidate_id, evaluator_id, error)
+                record(s, self.cas, None, candidate_id, evaluator_id, error)
                 hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), None)
                 s.commit()
             return

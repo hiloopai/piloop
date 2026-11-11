@@ -39,7 +39,6 @@ UNDER_TEST_ENV = 'PILOOP_UNDER_TEST'
 install, so a test can never open, let alone migrate, the database of a user's piloop."""
 CONFIG_FILE = 'config.toml'
 STORE_DIR = 'store'
-UNITS_DIR = 'units'
 INPUTS_DIR = 'inputs'
 """The read-only copies of the blobs of linked inputs that worktrees share (``piloop.store.tree.Copies``)."""
 TMP_DIR = 'tmp'

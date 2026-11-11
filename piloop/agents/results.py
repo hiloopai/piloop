@@ -592,7 +592,7 @@ class CampaignResults:
                     if conflict is not None:
                         emit(s, conflict, TargetRef(TargetKind.AGENT_SESSION, job.agent_session), System.DAEMON)
                 else:
-                    kind_of(job).apply(s, job, report, Applying(self._home, terms.stopping(s)))
+                    kind_of(job).apply(s, job, report, Applying(self._home, terms.stopping(s), self._cas))
                 write_files(self._cas, report.files, self._home / job.place)
 
             self._apply(guard, change)

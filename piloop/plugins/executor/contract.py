@@ -339,6 +339,8 @@ class Applying:
     home: Path
     stopping: bool
     """The daemon stops: what its job measured may be cut short, and the next daemon asks again."""
+    cas: Cas
+    """The home's CAS, for what a result keeps out of its rows."""
 
 
 class HarnessSession(BaseModel):

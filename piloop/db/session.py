@@ -37,7 +37,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, NewType, Self
 
-from alembic import command
+from alembic import command, context
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, create_engine, event, exc, make_url
@@ -462,6 +462,12 @@ def scripts() -> dict[str, ScriptDirectory]:
         name: ScriptDirectory(str(MIGRATIONS), version_locations=[str(schema.versions)])
         for name, schema in schemas().items()
     }
+
+
+def migration_cas() -> Cas:
+    """The home's CAS, in a revision that ``migrate`` runs."""
+    cas: Cas = context.config.attributes[CAS_ATTRIBUTE]
+    return cas
 
 
 def unmigratable(database: Path) -> SchemaMismatch | None:

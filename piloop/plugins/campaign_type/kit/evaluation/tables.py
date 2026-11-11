@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from covalence import Cid
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
@@ -12,7 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from piloop.db.models import EMPTY_JSON, NOW, PROCESS, Base, Campaign, text_checks, utcnow
+from piloop.db.models import EMPTY_JSON, NOW, PROCESS, Base, Campaign, CidText, text_checks, utcnow
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -86,6 +87,9 @@ class Measurement(Base):
     stopped: Mapped[str | None]
     """Why the climb stopped at ``rung``: the stop that held. NULL when the climb went on."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+    units: Mapped[Cid | None] = mapped_column(CidText)
+    """Its per-unit results (``Units``), a JSON blob in the CAS. NULL when it had none. No agent reads it: an implementer
+    must not tune against per-unit results, so ``piloop sql`` hides the column (``Schema.hidden``)."""
 
     candidate: Mapped[Candidate] = relationship(back_populates='measurements')
     evaluator: Mapped[Evaluator] = relationship()

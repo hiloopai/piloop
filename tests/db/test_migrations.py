@@ -16,6 +16,7 @@ import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
+from covalence import Cid
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 
@@ -1844,7 +1845,7 @@ def test_optimization_0013_counts_runs_candidates_ideas_and_measurements_with_au
     for table in tables:
         sql, indexes, triggers, _ = _schema_of(path, table)
         assert 'AUTOINCREMENT' not in sql and (indexes, triggers) == head[table][1:3], table
-    command.upgrade(chain, '0013')
+    command.upgrade(chain, 'head')
     assert {t: _schema_of(path, t)[:3] for t in tables} == {t: v[:3] for t, v in head.items()}, (
         'as the models make them'
     )
@@ -1888,3 +1889,26 @@ def test_executor_0003_moves_the_owner_id_from_its_file_into_the_database_and_do
     assert (tmp_path / 'owner').read_text() == 'abc123', 'the file again, for the code before'
     with closing(sqlite3.connect(path)) as con:
         assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'owners'").fetchone() is None
+
+
+def test_optimization_0015_moves_per_unit_results_from_their_files_into_the_cas_and_downgrades(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0014')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        con.execute("INSERT INTO evaluators (campaign_id, key, definition) VALUES (1, 'k', '{}')")
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 't', 'r')")
+        for _ in range(2):
+            con.execute('INSERT INTO measurements (candidate_id, evaluator_id) VALUES (1, 1)')
+    (tmp_path / 'units').mkdir()
+    (tmp_path / 'units' / '1.json').write_text('{"score": {"a": 1.0}}')
+    command.upgrade(chain, '0015')
+    with closing(sqlite3.connect(path)) as con:
+        [(_, blob), (_, none)] = con.execute('SELECT id, units FROM measurements ORDER BY id').fetchall()
+    assert none is None and loads(disk(tmp_path).get(Cid(blob)) or b'null') == {'score': {'a': 1.0}}
+    (tmp_path / 'units' / '1.json').unlink()
+    command.downgrade(chain, '0014')
+    assert loads((tmp_path / 'units' / '1.json').read_text()) == {'score': {'a': 1.0}}
+    assert 'AUTOINCREMENT' in _schema_of(path, 'measurements')[0], 'the column goes in place'

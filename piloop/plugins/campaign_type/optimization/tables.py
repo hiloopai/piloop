@@ -17,5 +17,9 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 
 TABLES = (Evaluator, Idea, IdeaLink, Run, Candidate, Measurement, Evaluation, Cancel, Technique, EvaluationTaskFailure)
 SCHEMA = Schema(
-    tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES), internal=(Evaluator,)
+    tables=TABLES,
+    versions=Path(__file__).parent / 'migrations',
+    triggers=on(TABLES),
+    internal=(Evaluator,),
+    hidden=(Measurement.units,),
 )

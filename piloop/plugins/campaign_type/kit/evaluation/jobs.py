@@ -7,7 +7,6 @@ measuring.
 
 import subprocess
 from collections.abc import Sequence
-from pathlib import Path
 from typing import ClassVar, Literal, Self, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,15 +39,15 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
-from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, save_units
+from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, stored_units
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_infra_errors, sealed_refused
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
 from piloop.plugins.vcs.contract import UnknownRevision
 from piloop.proc import kill_group
-from piloop.settings import UNITS_DIR
 
 EVALUATION = 'evaluation'
 """The name of the kind (``piloop.job_kinds``)."""
@@ -257,22 +256,22 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
         return
     task_holds.reset(s, s.get_one(Candidate, job.candidate))
     for sample in report.samples:
-        record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluation.evaluator_id, sample)
+        record(s, daemon.cas, job.run, job.candidate, evaluation.evaluator_id, sample)
     if evaluation.ask is not None:
         ledger.answer_remeasure(s, s.get_one(Candidate, job.candidate), evaluation.evaluator_id, evaluation.ask)
 
 
 def record(
     s: Session,
-    units_dir: Path,
+    cas: Cas,
     run_id: RunId | None,
     candidate_id: CandidateId,
     evaluator_id: EvaluatorId,
     sample: Sample,
 ) -> MeasurementId:
-    """Store one sample as the daemon's measurement (``ledger.record``), with its per-unit results, and return its id.
+    """Store one sample as the daemon's measurement (``ledger.record``), and return its id.
 
-    The caller commits.
+    Its per-unit results go into ``cas``, named by the row. The caller commits.
     """
     candidate = s.get_one(Candidate, candidate_id)
     measurement = ledger.record(
@@ -288,7 +287,7 @@ def record(
         stopped=sample.stopped,
         feedback=sample.feedback,
     )
-    save_units(units_dir, measurement.id, sample.units)
+    measurement.units = stored_units(cas, sample.units)
     return measurement.id
 
 

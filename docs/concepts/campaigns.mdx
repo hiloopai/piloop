@@ -222,7 +222,7 @@ A metric that is a sum over units, such as test examples, can report each unit's
 ```
 
 The parts must sum to the metric's value, within 0.1%. The score's units go under the primary's name. piloop stores
-them in `~/.piloop/units/`, where no agent sees them. No score reads them.
+them in the CAS, named by a column of the measurement that no agent can read. No score reads them.
 
 ## Evaluators
 

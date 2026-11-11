@@ -10,10 +10,10 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from statistics import fmean
 from typing import Final, Literal
 
+from covalence import Cid
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.exc import IntegrityError
@@ -41,7 +41,6 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import (
     MEASUREMENT,
     EvaluatorId,
     Measured,
-    MeasurementId,
     Reading,
     RungName,
 )
@@ -49,6 +48,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement, read
 from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, RungResult
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.cas.contract import Cas
 
 EventModel.retire('evaluator.metric_lines')  # 0.4 noted an evaluator that printed METRIC lines; 0.5 reads none
 
@@ -437,34 +437,23 @@ class MeasurementRecorded(EventModel):
     """The line that the evaluate command's result said of the run (``Result.feedback``)."""
 
 
-def units_file(units_dir: Path, measurement_id: MeasurementId) -> Path:
-    """Return the path of a measurement's per-unit results, under ``PILOOP_HOME``.
-
-    The file is outside every worktree and the database. The results are not a column, because every agent can read
-    every table through ``piloop sql``, and an implementer must not tune against per-unit results. A file is not a sandbox,
-    because an agent's shell can read ``PILOOP_HOME``. But the file is not in the schema, the briefs or any renderer.
-    """
-    return units_dir / f'{measurement_id}.json'
+def stored_units(cas: Cas, units: Units) -> Cid | None:
+    """Put a measurement's per-unit results into the CAS, for its hidden column (``Measurement.units``). None for none."""
+    return cas.put(UNITS.dump_json(units)) if units else None
 
 
-def save_units(units_dir: Path, measurement_id: MeasurementId, units: Units) -> None:
-    """Store a measurement's per-unit results. With none, remove any old file that a reused id could find."""
-    path = units_file(units_dir, measurement_id)
-    if not units:
-        path.unlink(missing_ok=True)
-        return
-    units_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(units))
+def _blob(cas: Cas, cid: Cid) -> bytes:
+    if (data := cas.get(cid)) is None:
+        raise LookupError(f'per-unit results {cid} are not in the CAS')
+    return data
 
 
-def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> Units:
+def units(cas: Cas, candidate: Candidate, evaluator_id: EvaluatorId) -> Units:
     """Return the candidate's per-unit results under ``evaluator_id``: each unit's mean over its measurements."""
     rows = [
-        UNITS.validate_json(path.read_bytes())
+        UNITS.validate_json(_blob(cas, m.units))
         for m in candidate.measurements
-        if m.evaluator_id == evaluator_id
-        and m.reading is Reading.SCORE
-        and (path := units_file(units_dir, m.id)).is_file()
+        if m.evaluator_id == evaluator_id and m.reading is Reading.SCORE and m.units is not None
     ]
     per_metric: dict[str, dict[str, list[float]]] = {}
     for row in rows:

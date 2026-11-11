@@ -60,8 +60,8 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     request_remeasure,
     requested,
-    save_units,
     status,
+    stored_units,
     units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
@@ -86,6 +86,7 @@ from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
 from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
+from piloop.plugins.campaign_type.optimization.tables import SCHEMA
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
 from piloop.plugins.executor.kit.jobs import INPUTS_REBUILT
@@ -2041,10 +2042,9 @@ def set_config(db: Database, campaign: Campaign, **overrides: object) -> None:
 
 
 @pytest.mark.usefixtures('submitting')
-def test_per_unit_results_live_outside_the_database(
+def test_per_unit_results_live_in_the_cas_named_by_a_column_that_agents_cannot_read(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    units_dir = tmp_path / 'units'
     set_config(db, campaign, evaluate=SPLIT_UNITS)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
@@ -2053,9 +2053,10 @@ def test_per_unit_results_live_outside_the_database(
     with db.session() as s:
         c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         [m] = c.measurements
-        assert m.metrics.keys() == {'score', 'size'}, 'per-unit results are not a column any agent can SELECT'
-    assert json.loads((units_dir / f'{m.id}.json').read_text()) == {'score': {'a': 3, 'b': -1}}
-    assert sorted(p.name for p in units_dir.iterdir()) == [f'{m.id}.json'], 'no pending file is left behind'
+        assert m.metrics.keys() == {'score', 'size'} and m.units is not None
+    assert json.loads(ex.cas.get(m.units) or b'null') == {'score': {'a': 3, 'b': -1}}
+    assert Measurement.units in SCHEMA.hidden, 'piloop sql cannot read it'
+    assert not (tmp_path / 'units').exists()
 
 
 @pytest.mark.usefixtures('submitting')
@@ -2094,16 +2095,15 @@ def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
         s.flush()
         rows = [Measurement(candidate_id=c.id, evaluator_id=evaluator_id, metrics={'score': 1.0}) for _ in range(4)]
         rows[3].error = 'crashed'
+        cas = home_cas(db)
+        for row, per_unit in zip(
+            rows, ({'a': 1.0, 'b': 0.0}, {'a': 3.0, 'b': 0.0}, {}, {'a': 100.0, 'b': 0.0}), strict=True
+        ):
+            row.units = stored_units(cas, {'score': per_unit} if per_unit else {})
         s.add_all(rows)
         s.flush()
-        save_units(tmp_path, rows[0].id, {'score': {'a': 1.0, 'b': 0.0}})
-        save_units(tmp_path, rows[1].id, {'score': {'a': 3.0, 'b': 0.0}})
-        save_units(tmp_path, rows[3].id, {'score': {'a': 100.0, 'b': 0.0}})
-        (tmp_path / f'{rows[2].id}.json').write_text('{"score": {"a": 50}}')
-        save_units(tmp_path, rows[2].id, {})
-        assert units(c, evaluator_id, tmp_path) == {'score': {'a': 2.0, 'b': 0.0}}, (
-            'a crashed measurement does not count, and one without units leaves no stale file behind'
-        )
+        assert rows[2].units is None, 'none stored for a measurement without per-unit results'
+        assert units(cas, c, evaluator_id) == {'score': {'a': 2.0, 'b': 0.0}}, 'a crashed measurement does not count'
 
 
 def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | None, int, int | None]]:

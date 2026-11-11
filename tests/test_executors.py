@@ -441,7 +441,7 @@ def test_two_campaigns_on_clones_of_one_repo_get_their_own_checkouts(
         checkout_of(db, RepoId(CampaignId(999)))
 
 
-def test_a_job_and_a_report_validate_as_the_model_of_their_kind_and_an_unknown_kind_is_refused() -> None:
+def test_a_job_and_a_report_validate_as_the_model_of_their_kind_and_an_unknown_kind_is_refused(tmp_path: Path) -> None:
     artifact = Source(vcs=Git(), repo=RepoId(CampaignId(1)), revision=Revision('abc'))
     job = EvaluationJob(
         evaluation=3, candidate=CandidateId(1), runner='process', artifact=artifact, place='eval', command=['true'],
@@ -455,7 +455,7 @@ def test_a_job_and_a_report_validate_as_the_model_of_their_kind_and_an_unknown_k
     with pytest.raises(TypeError, match='the evaluation kind runs evaluations, not agent'):
         KIND.id(AgentJob.model_construct())
     with pytest.raises(TypeError, match='an evaluation reports an evaluation, not agent_not_started'):
-        KIND.apply(Session(), job, AgentNotStarted(reason='r'), Applying(Path(), stopping=False))
+        KIND.apply(Session(), job, AgentNotStarted(reason='r'), Applying(tmp_path, stopping=False, cas=disk(tmp_path)))
 
 
 def test_a_pin_name_is_segments_joined_by_slashes() -> None:
