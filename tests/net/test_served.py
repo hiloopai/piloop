@@ -38,7 +38,7 @@ from tests.test_lease_client import secret
 def served(db: Database, cfg: Settings) -> Generator[Server]:
     """The API of ``cfg``'s home in one ``Served``, on a network listener: the daemon of term 1 is pid 4242."""
     with db.session() as s:
-        term = terms.begin(s, 4242, 'https://elsewhere:7000')
+        term = terms.begin(s, 1, 4242, 'https://elsewhere:7000')
         s.commit()
     tokens = Tokens(db)
     network = Https.model_validate({'listen': '127.0.0.1:0'}).open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
@@ -81,7 +81,7 @@ def test_an_executor_without_workers_elsewhere_serves_no_routes(
 ) -> None:
     monkeypatch.setattr(EXECUTORS, 'selected', lambda _plugins: NoWorkers())
     with db.session() as s:
-        term = terms.begin(s, 4242, None)
+        term = terms.begin(s, 1, 4242, None)
         s.commit()
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
@@ -106,7 +106,7 @@ def test_each_process_that_serves_runs_its_share_of_the_relayed_calls(
 
     monkeypatch.setattr(workers_module, 'Forks', Counted)
     with db.session() as s:
-        term = terms.begin(s, 4242, None)
+        term = terms.begin(s, 1, 4242, None)
         s.commit()
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))

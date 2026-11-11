@@ -706,7 +706,7 @@ def test_an_evaluation_that_ends_while_the_current_term_stops_records_nothing_wh
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     base = baseline(db, campaign.id)
     with db.session() as s:
-        terms.begin(s, 1, None)
+        terms.begin(s, 1, 1, None)
         s.commit()
 
     def running() -> int:

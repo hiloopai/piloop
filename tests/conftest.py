@@ -838,7 +838,7 @@ def live_limit(db: Database, key: str, value: JsonValue) -> None:
 def answering(db: Database, listen: str | None = None) -> DaemonState:
     """The daemon state of a new term of this process on ``db``, as the daemon begins it when it serves."""
     with db.session() as s:
-        term = terms.begin(s, os.getpid(), listen)
+        term = terms.begin(s, terms.newest(s) + 1, os.getpid(), listen)
         s.commit()
         return daemon_state(term)
 

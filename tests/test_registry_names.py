@@ -88,6 +88,7 @@ HOST_CONTRACTS = {
     'MCP server provider': 'looks the program of a stdio server up on PATH',
     'campaign type': 'owns tables of the database, which the daemon migrates',
     'archive provider': 'owns tables of the database, which the daemon migrates',
+    'leader provider': "reads the home's database, and keeps the term in a bucket",
     'lineage provider': 'graph(s, campaign) reads the database through a Session',
     'notifier': "reads the home's secrets, and posts to a service",
     'escalation policy': 'reads and returns a form of any JSON shape, which only it knows',

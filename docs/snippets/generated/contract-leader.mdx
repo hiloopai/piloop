@@ -1,0 +1,13 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/leader/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `LeaderConfig.open(host: LeaderHost) -> Leader` | Open the record of the home's terms. The daemon calls it once, before it takes a term. |
+| `Leader.take(holder: str, url: str \| None, stop: threading.Event) -> Term \| None` | Take the next term for `holder`, waiting as long as another holds one. None once `stop` is set. |
+| `Leader.renew(term: Term) -> Term` | `term` again, ending later. |
+| `Leader.release(term: Term) -> None` | End `term` now: the holder wrote its last. Another daemon may take the next one at once. |
+| `Leader.current() -> Term \| None` | The term that a daemon holds now, or None. |
+| `Term.epoch: int` | Higher than every term's before it: what fences a stale writer. |
+| `Term.holder: str` | The daemon that holds it: `<host>/<pid>`. |
+| `Term.url: str \| None` | Where the holder serves other machines, when it does. |
+| `Term.until: datetime \| None` | When it ends unless renewed, by the holder's clock. None: it lasts until it is released. |

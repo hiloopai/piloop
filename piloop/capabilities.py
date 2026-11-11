@@ -203,6 +203,11 @@ from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, SecretKey,
 from piloop.plugins.secrets.contract import SecretReader
 from piloop.plugins.secrets.local import LocalSecrets
 
+from piloop.plugins.leader.contract import LEADERS, Leader, LeaderConfig, LeaderHost, Term, LostTerm, Unreachable
+from piloop.plugins.leader.contract import Renewal
+from piloop.plugins.leader.local import LocalLeader
+from piloop.plugins.leader.bucket import BucketLeader
+
 from piloop.ids import CommentKind
 from piloop.plugins.notifier.contract import NOTIFIERS, Notifier, Notice, NoticeKind, NotDelivered
 from piloop.plugins.notifier.contract import MessageRef, Listens, ListenHost, Inbound, Receipt, Act

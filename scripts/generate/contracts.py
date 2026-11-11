@@ -26,6 +26,7 @@ from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.harness_choice.contract import HarnessCase, HarnessChoice
 from piloop.plugins.launch_policy.contract import LaunchCase, LaunchPolicy, Share
+from piloop.plugins.leader.contract import Leader, LeaderConfig, Term
 from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
 from piloop.plugins.network.contract import Network, NetworkConfig
 from piloop.plugins.notifier.contract import Notice, Notifier
@@ -69,6 +70,7 @@ CONTRACTS: dict[str, Contract] = {
         '`piloop/plugins/lineage/contract.py`',
     ),
     'archive': Contract((ArchiveConfig, Archiver), '`piloop/plugins/archive/contract.py`'),
+    'leader': Contract((LeaderConfig, Leader, Term), '`piloop/plugins/leader/contract.py`'),
     'vcs': Contract((Vcs, Repository), '`piloop/plugins/vcs/contract.py`'),
     'secrets': Contract((SecretsProvider,), '`piloop/plugins/secrets/contract.py`'),
     'escalation': Contract((EscalationPolicy, EscalationView), '`piloop/plugins/escalation/contract.py`'),

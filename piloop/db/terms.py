@@ -9,9 +9,16 @@ from sqlalchemy.orm import Session
 from piloop.db.models import Term, utcnow
 
 
-def begin(s: Session, pid: int, listen: str | None) -> Term:
-    """Add the next term, of the daemon ``pid``, which serves other machines on ``listen``. The caller commits."""
-    epoch = (s.scalar(select(func.max(Term.epoch))) or 0) + 1
+def newest(s: Session) -> int:
+    """The newest term's epoch, or 0 before any daemon served this home."""
+    return s.scalar(select(func.max(Term.epoch))) or 0
+
+
+def begin(s: Session, epoch: int, pid: int, listen: str | None) -> Term:
+    """Add term ``epoch`` of the daemon ``pid``, which serves other machines on ``listen``. The caller commits.
+
+    The leader provider gave the epoch (``piloop.plugins.leader``).
+    """
     term = Term(epoch=epoch, pid=pid, listen=listen, started_at=utcnow())
     s.add(term)
     s.flush()

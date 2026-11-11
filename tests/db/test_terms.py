@@ -6,13 +6,13 @@ def test_each_term_takes_the_next_epoch_and_a_stop_marks_only_the_current_one_on
     with db.session() as s:
         assert (terms.current(s), terms.stopping(s)) == (None, False), 'before any daemon served'
         terms.stop(s)  # nothing to stop
-        first = terms.begin(s, 10, None)
+        first = terms.begin(s, terms.newest(s) + 1, 10, None)
         terms.stop(s)
         s.commit()
         s.expire_all()
         stopped_at = first.stopping_at
         assert stopped_at is not None
-        second = terms.begin(s, 11, 'https://h:1')
+        second = terms.begin(s, terms.newest(s) + 1, 11, 'https://h:1')
         s.commit()
         assert (first.epoch, second.epoch) == (1, 2)
         assert terms.stopping(s) is False, 'the new term serves'

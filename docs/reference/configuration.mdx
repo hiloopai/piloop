@@ -694,6 +694,22 @@ With `provider = "fewest_live"`:
 | `startup_breaker` | integer | `3` | How many of a campaign's agents can fail at startup within `startup_window` before its launches pause. A host that is too loaded to start agents makes every new agent fail, and each failure costs a start window. |
 | `startup_window` | duration | `"PT10M"` | How far back `startup_breaker` counts. Launches resume when fewer failures are that recent. |
 
+#### `[plugins.leader]`
+
+The leader provider. Without a table: `local`.
+
+With `provider = "bucket"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | `s3://<bucket>[/<prefix>]`: the term is `term.json` there. One per home. |
+| `ttl` | duration | `"PT30S"` | How long a term lasts past its take or its latest renewal. |
+| `renew` | duration | `"PT5S"` | How often the holder renews, and a standby tries to take the term. |
+| `deadline` | duration | `"PT20S"` | How long after its latest renewal the holder begins to stop, while it cannot renew. |
+| `max_skew` | duration | `"PT2S"` | The most that two hosts' clocks differ by. A standby takes a term this long after its `until`. |
+
+With `provider = "local"`, the table has no other key.
+
 #### `[plugins.network]`
 
 The network. Without a table: `https`.

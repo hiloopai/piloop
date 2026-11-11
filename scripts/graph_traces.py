@@ -97,7 +97,8 @@ def _cover(initial: list[str], edges: list[Edge], kind: Callable[[Edge], object]
     """Walks from an initial state that take each kind of transition at least once.
 
     Each walk goes, by a shortest path, to the nearest state with a kind of transition that no walk took yet, takes it,
-    and goes on from there. It ends when none is reachable, and the next walk starts again at an initial state.
+    and goes on from there. It ends when none is reachable, and the next walk starts again at the first initial state
+    that reaches one.
     """
     out: dict[str, list[Edge]] = {}
     for edge in edges:
@@ -111,29 +112,33 @@ def _cover(initial: list[str], edges: list[Edge], kind: Callable[[Edge], object]
     left = {kind(edge) for edge in edges if edge[0] in reachable}
     traces = []
     while left:
-        node, trace = initial[0], []
-        while True:
-            parent: dict[str, Edge | None] = {node: None}
-            queue, found = deque([node]), None
-            while queue:
-                here = queue.popleft()
-                if any(kind(e) in left for e in out.get(here, [])):
-                    found = here
+        trace: list[Edge] = []
+        for node in initial:  # the first initial state that reaches a kind that no walk took: not all reach each
+            while True:
+                parent: dict[str, Edge | None] = {node: None}
+                queue, found = deque([node]), None
+                while queue:
+                    here = queue.popleft()
+                    if any(kind(e) in left for e in out.get(here, [])):
+                        found = here
+                        break
+                    for edge in out.get(here, []):
+                        if edge[1] not in parent:
+                            parent[edge[1]] = edge
+                            queue.append(edge[1])
+                if found is None:
                     break
-                for edge in out.get(here, []):
-                    if edge[1] not in parent:
-                        parent[edge[1]] = edge
-                        queue.append(edge[1])
-            if found is None:
+                path, here = [], found
+                while (edge := parent[here]) is not None:
+                    path.append(edge)
+                    here = edge[0]
+                step = next(e for e in out[found] if kind(e) in left)
+                trace += [*path[::-1], step]
+                left.difference_update(kind(e) for e in trace)
+                node = step[1]
+            if trace:
                 break
-            path, here = [], found
-            while (edge := parent[here]) is not None:
-                path.append(edge)
-                here = edge[0]
-            step = next(e for e in out[found] if kind(e) in left)
-            trace += [*path[::-1], step]
-            left.difference_update(kind(e) for e in trace)
-            node = step[1]
+        assert trace, 'every kind left is reachable from an initial state'
         traces.append(trace)
     return traces
 
@@ -156,7 +161,8 @@ def main() -> None:
         of = [json.dumps({k: v for k, v in states[n].items() if k in by}, sort_keys=True) for n in edge[:2]]
         return of[0], edge[2], of[1]
 
-    traces = _cover(initial, edges, kind)
+    kinds = {edge: kind(edge) for edge in edges}  # the walks ask for each edge's kind many times
+    traces = _cover(initial, edges, kinds.__getitem__)
     if args.keep is not None:
         states = {n: {k: v for k, v in s.items() if k in args.keep} for n, s in states.items()}
     args.out.mkdir(parents=True, exist_ok=True)
@@ -169,8 +175,9 @@ def main() -> None:
         }
         (args.out / f'trace_{seq}.itf.json').write_text(json.dumps(itf) + '\n')
     steps = sum(len(t) for t in traces)
-    kinds = len({kind(e) for e in edges})
-    print(f'{len(states)} states, {len(edges)} transitions of {kinds} kinds, {len(traces)} traces, {steps} steps')
+    print(
+        f'{len(states)} states, {len(edges)} transitions of {len(set(kinds.values()))} kinds, {len(traces)} traces, {steps} steps'
+    )
 
 
 if __name__ == '__main__':

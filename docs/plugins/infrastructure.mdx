@@ -15,6 +15,7 @@ import ContractVcs from '/snippets/generated/contract-vcs.mdx';
 import ContractSecrets from '/snippets/generated/contract-secrets.mdx';
 import ContractNotifier from '/snippets/generated/contract-notifier.mdx';
 import ContractArchive from '/snippets/generated/contract-archive.mdx';
+import ContractLeader from '/snippets/generated/contract-leader.mdx';
 
 These capabilities are host capabilities: their providers get live objects of piloop. Most are the home's choice, in
 `$PILOOP_HOME/config.toml`, and take effect at `piloop restart`. The VCS is a campaign's, in `piloop.toml`.
@@ -368,6 +369,24 @@ daemon's loop. [The archive](/concepts/archive) describes what it does. `local`,
 the model for another provider.
 
 <ContractArchive />
+
+## Leader
+
+The **leader** decides which daemon writes a home, for how long, and with which epoch. `[plugins.leader]` in
+`config.toml` selects it. `local`, built in and the default, is for a home that one host serves: the daemon's lock on
+its pid file already makes it the only one. `bucket` keeps the term in an S3 object, for one home on several hosts. A
+second `piloop serve` waits as a standby until the term is free, and the holder stops writing when it cannot renew
+its term in time. A standby starts with its own home's files: it takes over the term, not the data. Run a standby with
+`piloop serve` (under systemd or Kubernetes): `piloop start` waits for a daemon that serves, and a standby does not
+serve until it holds the term.
+
+```toml
+[plugins.leader]
+provider = "bucket"
+url = "s3://my-bucket/piloop/cell-1"
+```
+
+<ContractLeader />
 
 ## Campaign types
 

@@ -106,6 +106,7 @@ section = "piloop.plugins.section.contract:SECTIONS"
 fact_source = "piloop.plugins.fact_source.contract:FACT_SOURCES"
 campaign_type = "piloop.plugins.campaign_type.contract:CAMPAIGN_TYPES"
 archive = "piloop.plugins.archive.contract:ARCHIVES"
+leader = "piloop.plugins.leader.contract:LEADERS"
 harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 lineage = "piloop.plugins.lineage.contract:LINEAGE"
@@ -231,6 +232,10 @@ optimization = "piloop.plugins.campaign_type.optimization.lineage.optimization:O
 
 [project.entry-points."piloop.archives"]
 local = "piloop.plugins.archive.local:LocalArchive"
+
+[project.entry-points."piloop.leaders"]
+local = "piloop.plugins.leader.local:LocalLeader"
+bucket = "piloop.plugins.leader.bucket:BucketLeader"
 
 [project.entry-points."piloop.mcp_servers"]
 http = "piloop.plugins.mcp_server.http:HttpServer"

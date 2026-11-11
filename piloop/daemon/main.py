@@ -2,12 +2,16 @@
 
 import os
 import signal
+import socket
 import sys
+import threading
+from collections.abc import Callable
 from functools import partial
 from types import FrameType
 
 from piloop.actor import System
 from piloop.daemon.api import daemon_state
+from piloop.daemon.holding import Holding
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
@@ -42,6 +46,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas import contract as cas
 from piloop.plugins.contribution import CONTRIBUTORS
 from piloop.plugins.executor.contract import EXECUTORS, JOB_KINDS
+from piloop.plugins.leader.contract import LEADERS, Leader, LeaderHost, LostTerm, Term, Unreachable
 from piloop.plugins.network import contract as network
 from piloop.plugins.runtime.contract import make_runtime, runtimes
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
@@ -156,9 +161,12 @@ class Daemon:
             except OlderDaemon, SchemaMismatch, BackupFailed:
                 self.db.close()
                 raise
+            self._leader: Leader = LEADERS.selected(cfg.providers).open(LeaderHost(self.db))
+            self._term = self._take()
+            """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
             with self.db.session() as s:
                 write_transaction(s)
-                epoch = terms.begin(s, os.getpid(), None).epoch
+                epoch = terms.begin(s, self._term.epoch, os.getpid(), None).epoch
                 s.commit()
             self._epoch = epoch
             """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
@@ -192,6 +200,15 @@ class Daemon:
                 plugins=cfg.providers,
                 defaults=cfg.campaign_defaults,
             )
+            renewal = self._leader.renewal
+            self._holding = (
+                None
+                if renewal is None or self._term.until is None
+                else Holding(self._leader, self._term, renewal, self._lost_term)
+            )
+            """What renews a term that ends, and ends the process at its end."""
+            if self._holding is not None:
+                self._holding.start()
             self._restart = False
         except BaseException:  # no file names a daemon that never served
             self._release()
@@ -280,6 +297,35 @@ class Daemon:
                 self._argv = serve_argv(self._address.model_copy(update={'port': port}))
             span.set(listen=listen)
 
+    def _take(self) -> Term:
+        """Take the home's term, waiting as a standby while another daemon holds it, until SIGTERM or Ctrl-C."""
+        stop = threading.Event()
+        handlers: dict[int, Callable[[int, FrameType | None], object] | int | None] = {}
+        if threading.current_thread() is threading.main_thread():  # only the main thread can handle signals
+            handlers = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            term = self._leader.take(f'{socket.gethostname()}/{os.getpid()}', None, stop)
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+        if term is None:
+            raise SystemExit('the daemon stopped while it waited, as a standby, for its term')
+        return term
+
+    def _lost_term(self, why: str) -> None:
+        """The term was not renewed in time: the daemon stops, as on SIGTERM, before the term ends."""
+        self.tracer.event('term.lost', error=why)
+        self.scheduler.interrupt()
+
+    def _release_term(self) -> None:
+        """Renew the term no more, and end it after the daemon's last write, so that another daemon may take the next."""
+        if self._holding is not None:
+            self._holding.stop()
+        try:
+            self._leader.release(self._holding.term if self._holding is not None else self._term)
+        except (LostTerm, Unreachable) as e:  # the next daemon waits for the term's end instead
+            self.tracer.event('term.not_released', error=str(e))
+
     def _wake(self, consumer: str) -> None:
         """Run ``consumer`` in the next turn of the loop: a thread of a provider that the daemon opened ended."""
         self.scheduler.loop.wake(consumer)
@@ -317,8 +363,9 @@ class Daemon:
             if self._served is not None:
                 self._served.close()
         self.controller.close()
-        self.tracer.shutdown()
         self.db.close()
+        self._release_term()
+        self.tracer.shutdown()
         plugins.close()
         # a stop that failed keeps the lock while its run threads may live on; a restart hands it to the next program
         if not self._restart:
