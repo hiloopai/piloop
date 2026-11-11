@@ -60,7 +60,7 @@ def all_tasks_held(campaign: Campaign, held_keys: set[str]) -> bool:
         return False
     try:
         task_ids = [line.strip() for line in roster.read_text(encoding='utf-8').splitlines() if line.strip()]
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         return False
     return all(f'task:{task_id}' in held_keys for task_id in task_ids)
 
