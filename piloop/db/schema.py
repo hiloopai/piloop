@@ -29,6 +29,7 @@ from piloop.db.models import (
     RepoTransfer,
     Term,
     Token,
+    WorkspaceSnapshot,
 )
 from piloop.db.triggers import Trigger, on
 from piloop.plugins.host import PluginError, Slot
@@ -73,6 +74,7 @@ CORE_TABLES = (
     Token,
     Migration,
     RepoTransfer,
+    WorkspaceSnapshot,
     KnownKind,
     KnownCommentKind,
 )
@@ -80,10 +82,10 @@ CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
-    internal=(Lease, Limit, Term, Token, Migration, RepoTransfer),
+    internal=(Lease, Limit, Term, Token, Migration, RepoTransfer, WorkspaceSnapshot),
     # an agent that could write a token could call the server as a worker; one that wrote a term, stop measurements; one
-    # that wrote what rebuilds a home on another host, the next writer's repos
-    protected=(Term, Token, Migration, RepoTransfer),
+    # that wrote what rebuilds a home on another host, the next writer's repos and workspaces
+    protected=(Term, Token, Migration, RepoTransfer, WorkspaceSnapshot),
 )
 
 

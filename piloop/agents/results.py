@@ -39,10 +39,11 @@ from piloop.db.models import (
     Event,
     EventModel,
     ReadBy,
+    WorkspaceSnapshot,
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
-from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
 from piloop.net.tokens import end_agent_token
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
@@ -72,7 +73,7 @@ from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, hidden, values
 from piloop.plugins.vcs.contract import Transfer
 from piloop.settings import TMP_DIR, AgentSettings
-from piloop.store.tree import Manifest, Staged, merge, stage, write_files
+from piloop.store.tree import Manifest, Seen, Staged, merge, put_tree, stage, write_files
 
 
 def never_worked(startup_seconds: float) -> str:
@@ -517,6 +518,8 @@ class CampaignResults:
         self._tracer = tracer
         self._home = home
         self._cas = cas
+        self._seen: Seen = {}
+        """The files of the workspaces that ``_snapshot`` stored already, by their stat."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
@@ -732,9 +735,12 @@ class CampaignResults:
         """
         with self._db.session() as s:
             w = s.get_one(AgentSession, job.agent_session)
-            suffix = f'{w.kind}-{w.id}'
+            suffix, campaign_id = f'{w.kind}-{w.id}', w.campaign_id
+        root = self._home / workspace.place
         with merging(self._home):
-            merged = merge(self._home / workspace.place, base, staged, suffix)
+            merged = merge(root, base, staged, suffix)
+            if campaign_id is not None and (merged.written or merged.removed or merged.beside):  # None: the home's
+                self._snapshot(campaign_id, root)
         if not (merged.beside or merged.blocked or merged.kept):
             return None
         blocked = {rel: blob for rel in merged.blocked if (blob := changed[rel]) is not None}
@@ -747,6 +753,17 @@ class CampaignResults:
             kept=len(merged.kept),
         )
         return conflict
+
+    def _snapshot(self, campaign_id: CampaignId, root: Path) -> None:
+        """Record the manifest of the campaign's workspace as it is now (``WorkspaceSnapshot``), under ``merging``.
+
+        Only the files that changed since the last one are read: ``put_tree`` remembers the others by their stat.
+        """
+        manifest = put_tree(self._cas, root, os.listdir(root), seen=self._seen).manifest.put(self._cas)
+        with self._db.session() as s:
+            write_transaction(s)
+            s.add(WorkspaceSnapshot(campaign_id=campaign_id, manifest=manifest))
+            s.commit()
 
     def _scratch(self) -> Path:
         """``<home>/tmp``, where the blobs of a merge wait: on the disk of the workspace, so that a move is a rename."""

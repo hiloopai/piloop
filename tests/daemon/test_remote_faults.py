@@ -25,7 +25,17 @@ from sqlalchemy import func, select
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseState, RepoTransfer
+from piloop.db.models import (
+    AgentSession,
+    AgentSessionState,
+    Campaign,
+    Comment,
+    Event,
+    Lease,
+    LeaseState,
+    RepoTransfer,
+    WorkspaceSnapshot,
+)
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
@@ -47,6 +57,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import PILOOP
 from piloop.proc import alive
 from piloop.settings import STORE_DIR, Settings
+from piloop.store.tree import Manifest, cid_of
 from tests.agents.test_launcher import MINTED_HARNESS, use_harness
 from tests.conftest import (
     END_RUN,
@@ -494,6 +505,15 @@ def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_work
         transfers = s.scalars(select(RepoTransfer).where(RepoTransfer.campaign_id == campaign.id)).all()
     assert scored.revision in {t.head for t in transfers}, 'what the repo of record received is named by a row'
     assert all(core.cas.get(t.blob) is not None for t in transfers), 'and is in the CAS'
+    with db.session() as s:
+        newest = s.scalars(
+            select(WorkspaceSnapshot)
+            .where(WorkspaceSnapshot.campaign_id == campaign.id)
+            .order_by(WorkspaceSnapshot.id.desc())
+        ).first()
+    assert newest is not None, 'each merge into the workspace records its manifest'
+    entries = {e.path: e.blob for e in Manifest.get(core.cas, newest.manifest).entries}
+    assert entries['idea1/submitted.txt'] == cid_of(workspace / 'idea1' / 'submitted.txt'), 'as the files are on disk'
 
 
 HARNESS_PROMPTED = (

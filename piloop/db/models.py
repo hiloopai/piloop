@@ -655,6 +655,22 @@ class RepoTransfer(Base):
     received_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 
+class WorkspaceSnapshot(Base):
+    """A campaign's shared workspace after a merge into it (``CampaignResults``): the manifest of its files in the CAS.
+
+    The newest one makes the workspace again on another host (``piloop.plugins.leader``).
+    """
+
+    __tablename__ = 'workspace_snapshots'
+    __table_args__ = (Index('ix_workspace_snapshots_campaign', 'campaign_id', 'id'),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[CampaignId]
+    """No foreign key: an agent deletes a campaign with ``piloop sql``, and this table is not its to write."""
+    manifest: Mapped[Cid] = mapped_column(CidText)
+    at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+
+
 class Limit(Base):
     """A live limit (``piloop limits set``): a value for one ``Live`` key of a provider's parameters, over ``config.toml``.
 
