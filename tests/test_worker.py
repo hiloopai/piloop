@@ -860,7 +860,7 @@ def test_a_worker_killed_between_the_start_and_its_record_leaves_no_worktree(
     )
     git.add_worktree(git.open_repo(repo), cwd, source.revision, {})
     with db.session() as s:
-        enqueue(s, home_cas(db), job)
+        enqueue(s, home_cas(db), job, None)
         s.commit()
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path))
     killed = Leases(db, results, disk(tmp_path))  # the killed worker's lease, which no worker watches
@@ -1033,7 +1033,7 @@ def test_a_stop_ends_a_queued_agent_lease_whose_row_is_settled_and_a_worker_star
     worker.join(0)  # nothing started yet: no loop to wait for
     job = agent_job(db, campaign, tmp_path)  # its row is requested, not live: settled for core
     with db.session() as s:
-        lease_id = enqueue(s, home_cas(db), job).id
+        lease_id = enqueue(s, home_cas(db), job, None).id
         s.commit()
     ex.stop(5)
     with db.session() as s:

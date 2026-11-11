@@ -227,12 +227,15 @@ class LeaseCancelled(EventModel):
 
 
 class LeaseQueued(EventModel):
-    """On the job's row, a message for every worker (``Work``): the lease waits for one."""
+    """On the job's row, a message (``Work``) for the one worker that it wakes: the lease waits for a worker."""
 
     kind: Literal['lease.queued'] = 'lease.queued'
     lease: int
     lease_kind: str
     """The kind of its job: ``agent``, or a job kind's name."""
+    worker: str | None = None
+    """The worker that it wakes (``Leases.submit``), or None: none had a free slot for it. Any worker may take the
+    lease: each acquires on every turn, so a lease whose worker is gone waits at most a renew period."""
 
 
 class LeasePrompted(EventModel):
@@ -301,7 +304,7 @@ MESSAGES = (Topic(LeaseQueued), Topic(LeasePrompted), Topic(LeaseRevoked), Topic
 def topics(worker: str) -> tuple[Topic, ...]:
     """The events that are messages of ``worker``."""
     return (
-        Topic(LeaseQueued),
+        Topic(LeaseQueued, to=worker),
         Topic(LeasePrompted, to=worker),
         Topic(LeaseRevoked, to=worker),
         Topic(LeaseExtended, to=worker),
@@ -502,10 +505,10 @@ def read_job(cas: Cas, lease: int, job_cid: Cid) -> Job:
     return job.model_copy(update={'place': f'{job.place}/lease-{lease}'})
 
 
-def enqueue(s: Session, cas: Cas, job: Job) -> Lease:
-    """Put ``job`` in ``cas``, then insert its ``queued`` lease, and its ``LeaseQueued``, in the caller's transaction.
+def enqueue(s: Session, cas: Cas, job: Job, wake: str | None) -> Lease:
+    """Put ``job`` in ``cas``, then insert its ``queued`` lease and its ``LeaseQueued``, in the caller's transaction.
 
-    The caller commits.
+    The message wakes the worker ``wake``, or none. The caller commits.
     """
     lease = Lease(kind=job.kind, job_cid=cas.put(JOB.dump_json(job)))
     if isinstance(job, AgentJob):
@@ -515,7 +518,7 @@ def enqueue(s: Session, cas: Cas, job: Job) -> Lease:
         lease.job_id, lease.runner = kind.id(job), kind.runner(job)
     s.add(lease)
     s.flush()
-    emit(s, LeaseQueued(lease=lease.id, lease_kind=lease.kind), _target(cas, lease), System.DAEMON)
+    emit(s, LeaseQueued(lease=lease.id, lease_kind=lease.kind, worker=wake), _target(cas, lease), System.DAEMON)
     return lease
 
 
@@ -1260,10 +1263,53 @@ class Leases:
             emit(s, LeaseWorkerJoined(worker=row.id, pool=row.pool), HOME, System.DAEMON)
 
     def submit(self, job: Job) -> None:
-        """Queue ``job`` on a new lease, which tells every worker (``Work``)."""
+        """Queue ``job`` on a new lease, which wakes one worker that can run it (``Work``).
+
+        A scheduler binds a pod to one node in the same way. A wake of every worker would make each of them read and
+        acquire at once for one lease: at 1,000 workers that fills the GILs of the API's processes, and the writes that
+        follow hold the write lock while they wait for the GIL.
+        """
         with self._db.session() as s:
-            enqueue(s, self._cas, job)
+            with read_transaction(s):  # the choice only wakes: a stale one costs a renew period, never the lease
+                wake = self._wakee(s, job)
+            enqueue(s, self._cas, job, wake)
             s.commit()
+
+    def _wakee(self, s: Session, job: Job) -> str | None:
+        """The worker that a new lease of ``job`` wakes, or None when there is none.
+
+        It is the first by id that ``capacity`` counts, whose pool admits the job now, and that no other queued lease
+        woke.
+        """
+        kind = job.kind
+        runner = None if isinstance(job, AgentJob) else kind_of(job).runner(job)
+        queued = select(Lease.id).where(Lease.state == LeaseState.QUEUED)
+        woken = set(
+            s.scalars(
+                select(func.json_extract(Event.payload, '$.worker')).where(
+                    has(LeaseQueued), func.json_extract(Event.payload, '$.lease').in_(queued)
+                )
+            )
+        )
+        live = Counter(
+            (w, k) for w, k in s.execute(select(Lease.worker, Lease.kind).where(Lease.state.in_(LIVE_LEASES)))
+        )
+        pools = self._pools_in(s)
+        since = utcnow() - self.timing.silence
+        workers = select(LeaseWorker.id, LeaseWorker.pool, LeaseWorker.sample, LeaseWorker.runners).where(
+            LeaseWorker.seen_at > since, LeaseWorker.drained_at.is_(None)
+        )
+        for worker, pool_name, sample, runners in s.execute(workers.order_by(LeaseWorker.id)):
+            if (
+                worker in woken
+                or (pool := pools.get(pool_name)) is None
+                or (runner is not None and runner not in runners)
+            ):
+                continue
+            running = counted({k: n for (w, k), n in live.items() if w == worker})
+            if admits(pool, HostSample.model_validate(sample), running, kind) is None:
+                return worker
+        return None
 
     def revoke(self, key: Key) -> None:
         """Ask the worker of the job's live lease to stop it (``revoke``). Its job still reports.

@@ -399,7 +399,7 @@ def test_launch_runs_the_row_through_its_lifecycle(
         (1, AgentSessionRequested(role=AUDITOR, campaign=campaign.id, reason='test')),
         (1, LeaseWorkerJoined(worker=SERVE, pool=SERVE)),
         (1, AgentSessionStarted(role=AUDITOR, harness='script', model='auditor-model', reason='test')),
-        (1, LeaseQueued(lease=1, lease_kind=AGENT)),
+        (1, LeaseQueued(lease=1, lease_kind=AGENT, worker=SERVE)),
         (1, LeaseAcquired(lease=1, worker=SERVE)),
         (1, LeaseStarted(lease=1, worker=SERVE)),
         (1, AgentSessionRunning(machine=None)),

@@ -260,7 +260,7 @@ def test_a_worker_gets_the_values_of_the_secrets_that_its_agents_job_names_and_i
     assert Tokens(db).verify(again) is None, 'the token ends with its agent session'
 
 
-def test_a_worker_reads_work_for_every_worker_and_only_its_own_prompts_and_revokes(
+def test_a_worker_reads_the_work_that_wakes_it_and_only_its_own_prompts_and_revokes(
     connect: Connect, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases, recorder: Recorder
 ) -> None:
     """The GitHub Actions runner's long-poll: it returns at once when a message waits. Each message is an event."""
@@ -271,9 +271,11 @@ def test_a_worker_reads_work_for_every_worker_and_only_its_own_prompts_and_revok
     job = agent_job(db, campaign, tmp_path)
     leases.submit(job)
     leases.submit(agent_job(db, campaign, tmp_path))
-    works = w1.messages(start, 5)
-    assert [type(m) for m in works] == [Work, Work] and w2.messages(start, 5) == works, 'one Work for each job, to each'
-    assert w1.messages(works[-1].id, 0.01) == [], 'read past'
+    [work] = w1.messages(start, 5)
+    [other] = w2.messages(start, 5)
+    assert isinstance(work, Work) and isinstance(other, Work) and work.id < other.id, 'each job wakes one worker'
+    works = [work, other]
+    assert w1.messages(work.id, 0.01) == [], 'read past'
     grant = w1.acquire(uuid4().hex, HOST)
     assert isinstance(grant, Grant)
     w1.started(grant.lease, HANDLE, None)

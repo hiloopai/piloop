@@ -236,9 +236,10 @@ def evaluation_job(db: Database, campaign: Campaign, tmp_path: Path, runner: str
     )
 
 
-def queue(db: Database, job: Job) -> int:
+def queue(db: Database, job: Job, wake: str | None = None) -> int:
+    """Queue ``job`` on a new lease whose message wakes ``wake``: a test that needs no wake lets the turns take it."""
     with db.session() as s:
-        lease = enqueue(s, home_cas(db), job)
+        lease = enqueue(s, home_cas(db), job, wake)
         s.commit()
         return lease.id
 
@@ -794,7 +795,7 @@ def test_a_prompt_handed_over_again_is_not_written_again_and_survives_the_proces
     job = agent_job(db, campaign, tmp_path)
     first = Leases(db, recorder, home_cas(db), TIMING, POOLS)
     start = join(first, 'w1', []).cursor
-    queue(db, job)
+    queue(db, job, 'w1')
     grant = Local(first, 'w1').acquire(uuid4().hex, HOST)
     assert isinstance(grant, Grant)
     first.prompt(AgentKey(job.agent_session), Prompt(CommentId(7), 'try lzma'))
@@ -811,7 +812,7 @@ def test_a_worker_that_restarts_resumes_from_its_cursor(
     """Its last read stored the cursor that it gave: its ack floor. It gets again only what lies after it."""
     job = agent_job(db, campaign, tmp_path)
     start = join(leases, 'w1', []).cursor
-    queue(db, job)
+    queue(db, job, 'w1')
     w1 = Local(leases, 'w1')
     grant = w1.acquire(uuid4().hex, HOST)
     assert isinstance(grant, Grant)
@@ -837,7 +838,7 @@ def test_a_change_that_rolls_back_leaves_no_message(
     lease_id = queue(db, agent_job(db, campaign, tmp_path))
     take(leases, 'w1', [])
     with db.session() as s:
-        enqueue(s, home_cas(db), agent_job(db, campaign, tmp_path))
+        enqueue(s, home_cas(db), agent_job(db, campaign, tmp_path), None)
         revoke(s, home_cas(db), s.get_one(Lease, lease_id))
         s.rollback()
     assert lease_row(db, lease_id).revoked_at is None
@@ -879,7 +880,11 @@ def test_a_poll_that_waits_for_nothing_reads_again_only_after_a_message_of_some_
         assert w1.messages(start - 1, 0) == [] and statements == []
         assert leases._messages is not None
         woken = leases._messages.generation
-        queue(db, agent_job(db, campaign, tmp_path))  # a message for every worker
+        queue(db, agent_job(db, campaign, tmp_path), 'w2')  # a message of another worker
+        wait_until(lambda: leases._messages is not None and leases._messages.generation > woken, 'the wake')
+        assert w1.messages(start - 1, 0) == [] and statements, 'it read, and found nothing of its own'
+        woken = leases._messages.generation
+        queue(db, agent_job(db, campaign, tmp_path), 'w1')  # its own
         wait_until(lambda: leases._messages is not None and leases._messages.generation > woken, 'the wake')
         assert [type(m) for m in w1.messages(start - 1, 0)] == [Work]
         assert statements, 'it read'
