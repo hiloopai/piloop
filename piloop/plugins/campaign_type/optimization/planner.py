@@ -22,6 +22,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import status
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_if_exhausted
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
@@ -175,8 +176,10 @@ class OptimizationPlanner:
         someone asked to measure again.
         """
         held_tasks = task_holds.held_keys(s, campaign.id)
+        if hold_if_exhausted(s, campaign, held_tasks):
+            return
         for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
-            if task_holds.CAMPAIGN in held_tasks or task_holds.key(submission) in held_tasks:
+            if task_holds.key(submission) in held_tasks:
                 continue
             mine = (CANDIDATE, submission.id)
             if (busy := self._scoring.get(mine)) is None or busy.done():

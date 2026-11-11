@@ -236,7 +236,8 @@ A full disk while piloop stores a campaign's linked inputs is no longer the cand
 in the evaluate command: the evaluation runs again after `[evaluation] infra_retry`, and after `stop_after_tries`
 failures in a row for the same committed `TASK` ID, that task's evaluations pause. Retry the task with
 `piloop candidate remeasure <id>`. Submissions without a task ID share one count and pause the entire campaign at
-the same limit. After repair, use `piloop resume <campaign>`.
+the same limit. A tagged campaign also pauses when all tasks in its registered `TASKS.txt` are held, or when an
+inventory fact source reports `available_eval_images = 0`. Restore an eligible evaluation, then run `piloop resume <campaign>`.
 
 ### An agent that took a few turns worked
 

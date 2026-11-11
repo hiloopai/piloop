@@ -15,10 +15,11 @@ import pytest
 from sqlalchemy import select, update
 
 from piloop.campaign.campaigns import sync
+from piloop.campaign.ops import resume
 from piloop.campaign.stop import check, gather
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
+from piloop.db.models import AgentSession, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins import host
@@ -72,6 +73,36 @@ def billing(file: Path) -> list[str]:
 
 def read(command: list[str], repo: Path, *names: str) -> dict[str, float]:
     return Command(command=command, metrics=list(names or ['spend'])).read(repo)
+
+
+def test_zero_usable_eval_images_pauses_a_tagged_swarm_before_it_launches_work(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    inventory = tmp_path / 'images'
+    inventory.write_text('{"metrics":{"available_eval_images":0}}')
+    (Path(campaign.path) / 'TASKS.txt').write_text('A\nB\n')
+    set_config(
+        db, campaign, plugins={'fact_source': spending(command=billing(inventory), metrics=['available_eval_images'])}
+    )
+    add_ideas(db, campaign, 'first idea')
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    assert run_all(scheduler) == []
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        assert proj.paused is Pause.ALL
+        assert proj.paused_reason and 'zero usable eval images' in proj.paused_reason
+        resume(s, campaign.id)
+        s.commit()
+    assert run_all(scheduler) == [], 'the image is still unavailable'
+    source = Command(command=['true'], metrics=['available_eval_images'])
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        source.record(s, proj, {'available_eval_images': 1})
+        assert proj.paused is Pause.ALL
+        resume(s, campaign.id)
+        s.commit()
+    assert run_all(scheduler) == [1]
+    scheduler.stop(timeout=10)
 
 
 def test_a_hold_on_a_fact_needs_a_source_of_it_and_a_source_keeps_its_own_facts(campaign: Campaign) -> None:

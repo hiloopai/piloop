@@ -53,6 +53,18 @@ def held_keys(s: Session, campaign_id: CampaignId) -> set[str]:
     )
 
 
+def all_tasks_held(campaign: Campaign, held_keys: set[str]) -> bool:
+    """Whether every route in the operator's TASKS.txt is held, including an explicitly empty roster."""
+    roster = Path(campaign.path) / 'TASKS.txt'
+    if roster.is_symlink() or not roster.is_file():
+        return False
+    try:
+        task_ids = [line.strip() for line in roster.read_text(encoding='utf-8').splitlines() if line.strip()]
+    except (OSError, UnicodeError):
+        return False
+    return all(f'task:{task_id}' in held_keys for task_id in task_ids)
+
+
 def reset(s: Session, candidate: Candidate, *, resume: bool = False) -> None:
     """A completed evaluation breaks a streak. Only an explicit resume lifts an established hold."""
     if resume and not candidate.task_id:

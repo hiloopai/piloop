@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.campaign import escalations
 from piloop.campaign.ops import Refused, existing, hold
-from piloop.campaign.stop import held
+from piloop.campaign.stop import gather, held
 from piloop.config import CampaignConfig
-from piloop.db.models import Campaign, Pause
+from piloop.db.models import Campaign, Pause, utcnow
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -23,6 +23,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, track_of
 from piloop.plugins.escalation.contract import Choice, EscalationView
+from piloop.plugins.fact_source.facts import reading
 
 
 def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None) -> None:
@@ -61,6 +62,49 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
     )
 
 
+AVAILABLE_EVAL_IMAGES = reading('available_eval_images')
+
+
+def hold_if_exhausted(s: Session, campaign: Campaign, held_keys: set[str]) -> bool:
+    """Hold a campaign whose evaluator inventory is zero or whose entire task roster is held."""
+    if task_holds.CAMPAIGN in held_keys:
+        return True
+    images = gather(s, campaign, campaign.config, [AVAILABLE_EVAL_IMAGES], utcnow()).get(AVAILABLE_EVAL_IMAGES)
+    if images == 0:
+        reason = 'the evaluator inventory reports zero usable eval images'
+        repair = 'Restore an eval image and verify the inventory reports it.'
+    elif task_holds.all_tasks_held(campaign, held_keys):
+        reason = 'no task in the campaign TASKS.txt is available for evaluation'
+        repair = (
+            'Restore an eligible task in TASKS.txt or retry a repaired task with `piloop candidate remeasure <id>`.'
+        )
+    else:
+        return False
+    resume = f'`piloop resume {campaign.name}`'
+    hold(campaign, Pause.ALL, f'{reason}. {repair} Then run {resume}.')
+    table = EvaluationTaskFailure
+    s.execute(
+        insert(table)
+        .values(campaign_id=campaign.id, task_key=task_holds.CAMPAIGN, held=True, failures=0)
+        .on_conflict_do_update(index_elements=[table.campaign_id, table.task_key], set_={'held': True})
+    )
+    s.execute(
+        delete(Evaluation).where(Evaluation.started_at.is_(None), Evaluation.candidate.has(campaign_id=campaign.id))
+    )
+    escalation = EscalationView(
+        headline=f'Campaign {campaign.name} paused because {reason}.',
+        why='New workers and evaluations wait until an eligible task has a usable evaluator.',
+        choices=(
+            Choice(id='A', label=f'{repair} Then run {resume}.', result='The campaign can schedule work again.'),
+            Choice(id='B', label='Leave the campaign paused.', result='Queued work waits.'),
+        ),
+        recommended='A',
+        details=reason,
+    )
+    escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), escalation, priority=1)
+    return True
+
+
 def hold_on_infra_errors(
     s: Session, candidate_id: CandidateId, evaluation: int, evaluator_id: EvaluatorId, error: str, limit: int
 ) -> None:
@@ -83,6 +127,9 @@ def hold_on_infra_errors(
         return
     affected = Candidate.campaign_id == candidate.campaign_id
     if candidate.task_id:
+        campaign = s.get_one(Campaign, candidate.campaign_id)
+        if hold_if_exhausted(s, campaign, task_holds.held_keys(s, campaign.id)):
+            return
         affected &= Candidate.task_id == candidate.task_id
         scope = f'task {candidate.task_id!r}'
         resume = f'`piloop candidate remeasure {candidate_id}`'

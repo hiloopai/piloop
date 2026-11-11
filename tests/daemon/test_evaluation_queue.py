@@ -3,6 +3,7 @@
 import json
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from sqlalchemy import delete, select
 from piloop.actor import System
 from piloop.campaign import ops as campaign_ops
 from piloop.config import CampaignConfig
-from piloop.db.events import in_order, latest
+from piloop.db.events import emit, in_order, latest
 from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, Revision, TargetRef
@@ -36,6 +37,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_infra_errors
+from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.pool.api import remeasure as ask_remeasure
 from piloop.plugins.campaign_type.kit.pool.due import due
@@ -43,7 +45,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.pool.wire import RemeasureBody
 from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, left
-from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.escalation.contract import ESCALATION
@@ -780,10 +782,51 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
     assert still_scoring(db, run_id)
 
 
+def tagged_reference(db: Database, campaign: Campaign, task: str, revision: str) -> CandidateId:
+    path = Path(campaign.path)
+    with Repo(path) as repo, db.session() as s:
+        (path / 'TASK').write_text(task + '\n')
+        (path / 'variant').write_text(revision)
+        repo.git.add('TASK', 'variant')
+        repo.git.commit('-qm', revision)
+        candidate = import_reference(
+            s, s.get_one(Campaign, campaign.id), GitRepository(repo, PILOOP), 'HEAD', summary=None, actor=System.HUMAN
+        )
+        s.commit()
+        return candidate.id
+
+
+@pytest.mark.parametrize('tasks', [('A',), ('A', 'B')])
+def test_last_tagged_task_pauses_the_campaign_after_three_failures(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, tasks: tuple[str, ...]
+) -> None:
+    (Path(campaign.path) / 'TASKS.txt').write_text('\n'.join(tasks) + '\n')
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=3 * len(tasks)))
+    ex = queued_executor(db, runtime, tmp_path, 1)
+    for i, task in enumerate(tasks):
+        # B has never submitted when A reaches its limit. Its place on the roster keeps the campaign running.
+        candidate = tagged_reference(db, campaign, task, task)
+        args = measuring(db, campaign, candidate)
+        for attempt in range(3):
+            assert isinstance(ex._request(None, *args, tmp_path / 'eval', 1, None, Split.VISIBLE, None), InfraFailed)
+            with db.session() as s:
+                last = i == len(tasks) - 1 and attempt == 2
+                assert s.get_one(Campaign, campaign.id).paused is (Pause.ALL if last else None)
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        assert proj.paused_reason and 'TASKS.txt' in proj.paused_reason
+        assert task_holds.CAMPAIGN in task_holds.held_keys(s, campaign.id)
+        ask_remeasure(s, System.HUMAN, s.get_one(Candidate, candidate), RemeasureBody(repeats=1))
+        assert proj.paused is Pause.ALL
+        campaign_ops.resume(s, campaign.id)
+        s.commit()
+        assert task_holds.held_keys(s, campaign.id) == {f'task:{t}' for t in tasks[:-1]}
+    assert ex._request(None, *args, tmp_path / 'eval', 1, None, Split.VISIBLE, None) is Measuring.MEASURED
+
+
 def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    path = Path(campaign.path)
     broken = tmp_path / 'broken'
     broken.touch()
     infra = json.dumps({'status': 'infra_error', 'feedback': 'task A resource unavailable'})
@@ -797,24 +840,7 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
         ],
     )
 
-    def reference(task: str, revision: str) -> CandidateId:
-        with Repo(path) as repo, db.session() as s:
-            (path / 'TASK').write_text(task + '\n')
-            (path / 'variant').write_text(revision)
-            repo.git.add('TASK', 'variant')
-            repo.git.commit('-qm', revision)
-            candidate = import_reference(
-                s,
-                s.get_one(Campaign, campaign.id),
-                GitRepository(repo, PILOOP),
-                'HEAD',
-                summary=None,
-                actor=System.HUMAN,
-            )
-            s.commit()
-            return candidate.id
-
-    a1, a2, sibling, b = (reference(task, str(i)) for i, task in enumerate(('A', 'A', 'A', 'B')))
+    a1, a2, sibling, b = (tagged_reference(db, campaign, task, str(i)) for i, task in enumerate(('A', 'A', 'A', 'B')))
     ex = queued_executor(db, runtime, tmp_path, 1)
 
     def attempt(candidate: CandidateId) -> Measuring | InfraFailed:
@@ -824,6 +850,7 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
     assert attempt(b) is Measuring.MEASURED
     assert isinstance(attempt(a2), InfraFailed)
     evaluator = measuring(db, campaign, a1)[-1]
+    run_id = make_run(db, campaign)
     with db.session() as s:
         # A queued sibling, and an old candidate whose migration left its task to be resolved at first use.
         pending, _ = queue.request(s, sibling, evaluator)
@@ -836,10 +863,17 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
         assert s.get_one(Campaign, campaign.id).paused is None
         assert left(s, pending_id, sibling, evaluator, None) is Measuring.ABANDONED
         assert task_holds.held_keys(s, campaign.id) == {'task:A'}
+        # Pending submissions from an active run must skip A while its sibling task is still schedulable.
+        for cid in (sibling, b):
+            candidate = s.get_one(Candidate, cid)
+            emit(s, Submitted(candidate=cid, revision=candidate.revision), TargetRef(RUN, run_id), System.HUMAN)
+        planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, lambda _: Future()))
+        planner.remeasure(s, s.get_one(Campaign, campaign.id))
+        assert f'candidate#{sibling}' not in planner.in_flight() and f'candidate#{b}' in planner.in_flight()
         assert not {a1, a2, sibling}.intersection(c.id for c in due(s, s.get_one(Campaign, campaign.id)))
     # A new controller sees the same hold, even for a new revision.
     ex = queued_executor(db, runtime, tmp_path, 1)
-    later = reference('A', 'later')
+    later = tagged_reference(db, campaign, 'A', 'later')
     assert attempt(later) is Measuring.ABANDONED
     assert attempt(b) is Measuring.MEASURED
     with db.session() as s:
@@ -912,6 +946,14 @@ def test_untagged_ideas_share_one_budget_and_only_campaign_resume_reopens_the_ev
     assert isinstance(attempt(b), InfraFailed)
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).paused is None
+
+
+def test_an_unreadable_roster_is_unknown_and_an_empty_roster_has_no_eligible_task(campaign: Campaign) -> None:
+    roster = Path(campaign.path) / 'TASKS.txt'
+    roster.write_bytes(b'\xff')
+    assert not task_holds.all_tasks_held(campaign, {'task:A'})
+    roster.write_text('')
+    assert task_holds.all_tasks_held(campaign, set())
 
 
 def test_a_stale_evaluation_refusal_never_spends_the_task_retry_budget_twice(
