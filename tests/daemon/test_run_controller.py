@@ -42,7 +42,7 @@ from piloop.cli.plugins import selections
 from piloop.config import ConfigError, load_campaign_config
 from piloop.db.events import has, in_order, latest
 from piloop.db.machine import Refused, transition
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, RepoTransfer, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignStatus, Ending, Revision, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
@@ -491,6 +491,9 @@ def test_successful_run_scores_the_commit(
         f'refs/piloop/demo/r{run_id}/s0',
     ], 'its version, and its submission'
     assert repo.head.commit.summary == 'baseline', 'the campaign checkout never moves'
+    with db.session() as s:
+        heads = s.scalars(select(RepoTransfer.head).where(RepoTransfer.campaign_id == campaign.id)).all()
+    assert heads == [repo.commit(f'refs/piloop/demo/r{run_id}/0').hexsha], 'its end names what the repo received'
     log_dir = tmp_path / 'runs' / str(run_id)
     assert (
         (log_dir / 'brief.md').is_file()

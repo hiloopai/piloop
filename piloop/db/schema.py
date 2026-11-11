@@ -26,6 +26,7 @@ from piloop.db.models import (
     Lease,
     Limit,
     Migration,
+    RepoTransfer,
     Term,
     Token,
 )
@@ -71,6 +72,7 @@ CORE_TABLES = (
     Term,
     Token,
     Migration,
+    RepoTransfer,
     KnownKind,
     KnownCommentKind,
 )
@@ -78,9 +80,10 @@ CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
-    internal=(Lease, Limit, Term, Token, Migration),
-    # an agent that could write a token could call the server as a worker; one that wrote a term, stop measurements
-    protected=(Term, Token, Migration),
+    internal=(Lease, Limit, Term, Token, Migration, RepoTransfer),
+    # an agent that could write a token could call the server as a worker; one that wrote a term, stop measurements; one
+    # that wrote what rebuilds a home on another host, the next writer's repos
+    protected=(Term, Token, Migration, RepoTransfer),
 )
 
 

@@ -57,6 +57,7 @@ from piloop.db.models import (
     Event,
     EventModel,
     ReadBy,
+    RepoTransfer,
     utcnow,
 )
 from piloop.db.requests import RequestAnswered
@@ -722,7 +723,8 @@ class RunController:
     ) -> list[Version]:
         """Take the run's versions into the repo of record (``Repository.receive``), and return them, oldest first.
 
-        They are recorded (``RunReceived``), for ``resume``. The worker saved the unsaved work first, as a version of
+        They are recorded (``RunReceived``), for ``resume``, and the transfer with them (``RepoTransfer``), for a home
+        made again on another host. The worker saved the unsaved work first, as a version of
         its own: a run that ends keeps it ``skipped`` (``_unsubmitted``), and one that a stop cut keeps it ``recovered``
         (``_keep_cut_work``).
         """
@@ -730,6 +732,11 @@ class RunController:
         with self._db.session() as s:
             received = RunReceived(revisions=[v.revision for v in versions])
             emit(s, received, TargetRef(RUN, run_id), System.DAEMON)
+            if work is not None:
+                transfer = RepoTransfer(
+                    campaign_id=s.get_one(Run, run_id).campaign_id, base=base_revision, head=work.head, blob=work.blob
+                )
+                s.add(transfer)
             s.commit()
         return versions
 

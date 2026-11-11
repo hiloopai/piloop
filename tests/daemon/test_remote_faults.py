@@ -25,7 +25,7 @@ from sqlalchemy import func, select
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseState
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseState, RepoTransfer
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
@@ -490,6 +490,10 @@ def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_work
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     queued = f'candidate#{scored.id} is queued: where it stands comes as a [piloop] message\n'
     assert (workspace / 'idea1' / 'submitted.txt').read_text() == queued
+    with db.session() as s:
+        transfers = s.scalars(select(RepoTransfer).where(RepoTransfer.campaign_id == campaign.id)).all()
+    assert scored.revision in {t.head for t in transfers}, 'what the repo of record received is named by a row'
+    assert all(core.cas.get(t.blob) is not None for t in transfers), 'and is in the CAS'
 
 
 HARNESS_PROMPTED = (

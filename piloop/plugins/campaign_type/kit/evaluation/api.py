@@ -13,7 +13,7 @@ from piloop.api.contract import (
 from piloop.campaign.campaigns import repository
 from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Api, Reading, Writing, actor_access, reader
 from piloop.db import feed as db_feed
-from piloop.db.models import Campaign
+from piloop.db.models import Campaign, RepoTransfer
 from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate, ViewedCandidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -120,7 +120,7 @@ def submit(s: Writing, me: Acting, api: Api, body: SubmitBody) -> Submission:
             return _submission(s, own)
         submissions.refuse(s, run)
         if version is None:
-            version = _received(repo, api.cas, run, body)
+            version = _received(s, repo, api.cas, run, body)
         candidate = submissions.submit(s, run, version, repo, me)
     s.commit()
     return _submission(s, candidate)
@@ -134,8 +134,8 @@ def _version(repo: Repository, revision: str) -> Version | None:
         return None
 
 
-def _received(repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version:
-    """Take the version of ``body`` into the repo of record from its blob, and return it.
+def _received(s: Session, repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version:
+    """Take the version of ``body`` into the repo of record from its blob, record the transfer, and return the version.
 
     Raises:
         Refusal: there is no blob, it is no address, the CAS lacks it, or the repo cannot take it.
@@ -149,9 +149,11 @@ def _received(repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version
         raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{body.blob} is no blob address: {e}') from e
     try:
         repo.receive(cas, sent, run.base.revision)
-        return repo.version(body.revision)
+        version = repo.version(body.revision)
     except (Missing, VcsError) as e:  # UnknownRevision is one: the blob lacked the version
         raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{body.revision} did not come: {e}') from e
+    s.add(RepoTransfer(campaign_id=run.campaign_id, base=run.base.revision, head=sent.head, blob=sent.blob))
+    return version
 
 
 def _submission(s: Session, candidate: Candidate) -> Submission:

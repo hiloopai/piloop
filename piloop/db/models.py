@@ -635,6 +635,26 @@ class Term(Base):
     """When the daemon began to stop: what a job measured since may be cut short (``Applying.stopping``)."""
 
 
+class RepoTransfer(Base):
+    """Versions that a campaign's repo of record received (``Repository.receive``): a run's at its end, or a submission.
+
+    In the CAS, in the vcs's own format, in the order received. With the campaign's clone, they make the repo of record
+    again on another host (``piloop.plugins.leader``): nothing else on the disk of the home holds them.
+    """
+
+    __tablename__ = 'repo_transfers'
+    __table_args__ = (Index('ix_repo_transfers_campaign', 'campaign_id', 'id'),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[CampaignId]
+    """No foreign key: an agent deletes a campaign with ``piloop sql``, and this table is not its to write."""
+    base: Mapped[Revision]
+    """The version that the transfer is relative to: one that the repo had already."""
+    head: Mapped[Revision]
+    blob: Mapped[Cid] = mapped_column(CidText)
+    received_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+
+
 class Limit(Base):
     """A live limit (``piloop limits set``): a value for one ``Live`` key of a provider's parameters, over ``config.toml``.
 
