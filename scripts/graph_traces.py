@@ -1,11 +1,13 @@
 """Write ITF traces that cover every transition of a TLC state graph (`-dump dot,actionlabels`).
 
-Usage: python3 -I graph_traces.py GRAPH.dot OUT_DIR [--record s] [--keep a,b,...]
+Usage: python3 -I graph_traces.py GRAPH.dot OUT_DIR [--record s] [--keep a,b,...] [--by a,b,...]
 
-Each trace starts at an initial state and takes the shortest path to a transition no trace has
-covered yet, then keeps walking along uncovered transitions until none leaves its state. The
-states are written as one record variable (`--record`), in the shape Quint's `--out-itf` gives,
-so drivers written for Quint traces read them unchanged. `--keep` writes only the variables a
+Each trace starts at an initial state and walks, by shortest paths, from one kind of transition that no trace took yet
+to the nearest next one, until none is reachable from where it is. A kind is one transition of the graph, or, with
+`--by`, an action between two states that agree on the variables `--by` names: what a driver can tell apart. Replays of
+a graph whose states hold counters and the last action's name then take each step that the code can show once, not
+each of its interleavings. The states are written as one record variable (`--record`), in the shape Quint's
+`--out-itf` gives, so drivers written for Quint traces read them unchanged. `--keep` writes only the variables a
 driver reads, which keeps a large graph's traces under the repo's 3 MiB file limit.
 """
 
@@ -15,6 +17,7 @@ import argparse
 import json
 import re
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 
 type Itf = bool | str | list[Itf] | dict[str, Itf]
@@ -90,35 +93,47 @@ def read_graph(path: Path) -> tuple[dict[str, State], list[str], list[Edge]]:
     return states, initial, sorted(edges)
 
 
-def _cover(initial: list[str], edges: list[Edge]) -> list[list[Edge]]:
+def _cover(initial: list[str], edges: list[Edge], kind: Callable[[Edge], object]) -> list[list[Edge]]:
+    """Walks from an initial state that take each kind of transition at least once.
+
+    Each walk goes, by a shortest path, to the nearest state with a kind of transition that no walk took yet, takes it,
+    and goes on from there. It ends when none is reachable, and the next walk starts again at an initial state.
+    """
     out: dict[str, list[Edge]] = {}
     for edge in edges:
         out.setdefault(edge[0], []).append(edge)
-    parent: dict[str, Edge | None] = dict.fromkeys(initial)
-    queue = deque(initial)
+    reachable, queue = set(initial), deque(initial)
     while queue:
-        node = queue.popleft()
-        for edge in out.get(node, []):
-            if edge[1] not in parent:
-                parent[edge[1]] = edge
+        for edge in out.get(queue.popleft(), []):
+            if edge[1] not in reachable:
+                reachable.add(edge[1])
                 queue.append(edge[1])
-
-    def path_to(node: str) -> list[Edge]:
-        steps = []
-        while (edge := parent[node]) is not None:
-            steps.append(edge)
-            node = edge[0]
-        return steps[::-1]
-
-    covered: set[Edge] = set()
+    left = {kind(edge) for edge in edges if edge[0] in reachable}
     traces = []
-    for edge in edges:
-        if edge in covered or edge[0] not in parent:
-            continue
-        trace = [*path_to(edge[0]), edge]
-        while step := next((e for e in out.get(trace[-1][1], []) if e not in covered and e not in trace), None):
-            trace.append(step)
-        covered.update(trace)
+    while left:
+        node, trace = initial[0], []
+        while True:
+            parent: dict[str, Edge | None] = {node: None}
+            queue, found = deque([node]), None
+            while queue:
+                here = queue.popleft()
+                if any(kind(e) in left for e in out.get(here, [])):
+                    found = here
+                    break
+                for edge in out.get(here, []):
+                    if edge[1] not in parent:
+                        parent[edge[1]] = edge
+                        queue.append(edge[1])
+            if found is None:
+                break
+            path, here = [], found
+            while (edge := parent[here]) is not None:
+                path.append(edge)
+                here = edge[0]
+            step = next(e for e in out[found] if kind(e) in left)
+            trace += [*path[::-1], step]
+            left.difference_update(kind(e) for e in trace)
+            node = step[1]
         traces.append(trace)
     return traces
 
@@ -130,11 +145,20 @@ def main() -> None:
     parser.add_argument('out', type=Path)
     parser.add_argument('--record', default='s')
     parser.add_argument('--keep', type=lambda text: set(text.split(',')), default=None)
+    parser.add_argument('--by', type=lambda text: set(text.split(',')), default=None)
     args = parser.parse_args()
     states, initial, edges = read_graph(args.graph)
+    by = args.by
+
+    def kind(edge: Edge) -> object:
+        if by is None:
+            return edge
+        of = [json.dumps({k: v for k, v in states[n].items() if k in by}, sort_keys=True) for n in edge[:2]]
+        return of[0], edge[2], of[1]
+
+    traces = _cover(initial, edges, kind)
     if args.keep is not None:
         states = {n: {k: v for k, v in s.items() if k in args.keep} for n, s in states.items()}
-    traces = _cover(initial, edges)
     args.out.mkdir(parents=True, exist_ok=True)
     for seq, trace in enumerate(traces):
         nodes = [trace[0][0], *(edge[1] for edge in trace)]
@@ -145,7 +169,8 @@ def main() -> None:
         }
         (args.out / f'trace_{seq}.itf.json').write_text(json.dumps(itf) + '\n')
     steps = sum(len(t) for t in traces)
-    print(f'{len(states)} states, {len(edges)} transitions, {len(traces)} traces, {steps} steps')
+    kinds = len({kind(e) for e in edges})
+    print(f'{len(states)} states, {len(edges)} transitions of {kinds} kinds, {len(traces)} traces, {steps} steps')
 
 
 if __name__ == '__main__':

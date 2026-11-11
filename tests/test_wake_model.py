@@ -1,7 +1,8 @@
 """Replay the state graph of the wake model (``tests/models/wake.tla``) against the real ``Leases``.
 
 TLC wrote the graph of ``wake_fixed.cfg`` (``-dump dot,actionlabels``), and ``scripts/graph_traces.py`` turned it into
-traces that cover every transition (``tests/traces/wake``). Each step runs the call that the model's action cites, on a
+traces that take every kind of transition that the driver checks, once at least (``--by
+st,holder,target,up,seen``; ``tests/traces/wake``). Each step runs the call that the model's action cites, on a
 real database: a queue ``Leases.submit``, a wake the woken worker's ``messages`` then its ``acquire``, a turn an
 ``acquire``, a finish a ``report``, a silence a ``seen_at`` older than the silence. After each step the leases' rows,
 and the worker that each ``LeaseQueued`` wakes, are the model's.
@@ -15,8 +16,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 
 from piloop.db import feed
-from piloop.db.events import in_order
-from piloop.db.models import Campaign, Lease, LeaseState, utcnow
+from piloop.db.models import Campaign, Event, Lease, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob
 from piloop.plugins.executor.kit.capacity import Pool
@@ -48,6 +48,8 @@ class Replay:
     seq: int
     ids: dict[int, int] = field(default_factory=dict)
     """The real lease of each lease of the model."""
+    events: dict[int, int] = field(default_factory=dict)
+    """The ``LeaseQueued`` of each lease of the model: the newest event once ``submit`` returned."""
     starts: dict[str, int] = field(default_factory=dict)
     """Each worker's cursor at its registration: a read after it gets every message that it ever had."""
 
@@ -69,6 +71,7 @@ class Replay:
                 self.leases.submit(self.jobs[lease])
                 with self.db.session() as s:
                     self.ids[lease] = s.scalars(select(Lease.id).order_by(Lease.id.desc()).limit(1)).one()
+                    self.events[lease] = feed.newest(s)
                 target = _at(state, 'target', lease)
                 assert self._woken(lease) == (None if target == '-' else self.name(str(target)))
                 for other in {'w1', 'w2'} - {target}:
@@ -94,8 +97,9 @@ class Replay:
     def _queued(self, lease: int) -> tuple[int, LeaseQueued]:
         """The ``LeaseQueued`` of the model's ``lease``, and its event id."""
         with self.db.session() as s:
-            [(event, queued)] = [(e.id, q) for e, q in in_order(s, LeaseQueued) if q.lease == self.ids[lease]]
-        return event, queued
+            event = s.get_one(Event, self.events[lease])
+            assert isinstance(event.payload, LeaseQueued) and event.payload.lease == self.ids[lease]
+            return event.id, event.payload
 
     def _woken(self, lease: int) -> str | None:
         return self._queued(lease)[1].worker

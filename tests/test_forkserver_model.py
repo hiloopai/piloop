@@ -113,7 +113,9 @@ def test_a_call_queued_in_a_template_that_dies_runs_once_as_a_process_of_its_own
 def test_a_call_that_runs_past_its_deadline_is_killed_with_its_group_and_never_runs_again(
     forks: Forks, home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Path ``start_send, fork, child_start, started, timeout_after``."""
+    """Path ``start_send, fork, child_start, started, timeout_after``. The template runs first: the deadline must pass
+    after the child started, and a template's start within the call's 2 s can use them all on a loaded machine."""
+    assert call(forks, home, ['sql', 'SELECT 1']).returncode == 0
     pids: list[int | None] = []
     received = forks_module._received
 

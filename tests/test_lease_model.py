@@ -1,7 +1,8 @@
 """Replay the state graph of the lease model (``tests/models/lease.tla``) against the real ``Leases``.
 
 TLC wrote the graphs of ``lease_replay_*.cfg`` (``-dump dot,actionlabels``), and ``scripts/graph_traces.py`` turned
-each into traces that cover every transition (``tests/traces/lease_*``). Each step runs the call of the code that the
+each into traces that take every kind of transition that the replay can tell apart, once at least (``--by`` all
+but ``arg``; ``tests/traces/lease_*``). Each step runs the call of the code that the
 model's action cites, on a real database, with the time moved by hand (a model tick is one renew, 10 s). The workers'
 own state (what runs, the spool, the open request id) is the model's: only the calls that reach the server are real.
 After each step the leases' rows must be the model's: their state, holder and time left. So TLC's verdicts on the

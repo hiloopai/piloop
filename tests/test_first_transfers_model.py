@@ -1,9 +1,10 @@
 """Replay the traces of ``tests/models/first_transfers.tla`` against the real first transfers.
 
-The traces come from TLC's state graph of the model's fixed configuration (``scripts/graph_traces.py``): together
-they take every transition of it. Each request, the daemon's ``run`` and each build thread is a real thread that runs
-to its next boundary (a write transaction, ``run``'s lock, the build itself), and waits there for the trace's next
-step. Only the build, the clock and a restart of the daemon are stand-ins. After each step the real row, the real
+The traces come from TLC's state graph of the model's fixed configuration (``scripts/graph_traces.py``, ``--by``
+the variables that it keeps): together they take every kind of transition that the replay can tell apart. Each
+request, the daemon's ``run`` and each build thread is a real thread that runs to its next boundary (a write
+transaction, ``run``'s lock, the build itself), and waits there for the trace's next step. Only the build, the clock and
+a restart of the daemon are stand-ins. After each step the real row, the real
 threads and the consumer's memory must be the model's.
 """
 

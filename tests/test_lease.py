@@ -870,6 +870,9 @@ def test_a_poll_that_waits_for_nothing_reads_again_only_after_a_message_of_some_
     def counted(_conn: object, _cursor: object, statement: str, *_: object) -> None:
         statements.append(statement)
 
+    rung = db.generation
+    assert w1.messages(start, 0) == []  # it opens the watch of the messages, and starts the doorbell
+    wait_until(lambda: db.generation > rung, "the doorbell's first read, which wakes every waiter once")
     assert w1.messages(start, 0) == []
     event.listen(db.engine, 'before_cursor_execute', counted)
     try:
