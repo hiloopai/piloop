@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import delete
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
@@ -14,9 +16,10 @@ from piloop.db.models import Campaign, Pause
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import task_holds
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured, Reading
 from piloop.plugins.campaign_type.kit.evaluation.measure import record, status
-from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, EvaluationTaskFailure, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, track_of
 from piloop.plugins.escalation.contract import Choice, EscalationView
@@ -59,37 +62,45 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
 
 
 def hold_on_infra_errors(
-    s: Session, candidate_id: CandidateId, evaluation: int, evaluator_id: EvaluatorId, error: str, tries: int
+    s: Session, candidate_id: CandidateId, evaluation: int, evaluator_id: EvaluatorId, error: str, limit: int
 ) -> None:
-    """Hold the measurements of the candidate's campaign (``hold``), and escalate: its evaluation failed for the machine.
-
-    It failed ``tries`` times in a row for a cause that is not the candidate's (``[evaluation] stop_after_tries``). That
-    cause is the machine's or the evaluator's: the next evaluations would fail too, and the daemon would ask for this
-    one again. Nothing is recorded, so the candidate waits as it was, and a resume evaluates it again. The escalation
-    names the candidate, the evaluation, the evaluator and the last error. The caller commits.
-    """
+    """Count one failed evaluation attempt, in the transaction that removed it. Escalate once at the threshold."""
     candidate = s.get_one(Candidate, candidate_id)
-    campaign = s.get_one(Campaign, candidate.campaign_id)
-    failed = f'evaluation#{evaluation} of candidate#{candidate_id} under evaluator#{evaluator_id} failed {tries} times'
-    resume = f'`piloop resume {campaign.name}`'
-    hold(campaign, Pause.ALL, f'{failed} for a cause that is not its own: {error}; fix it, then {resume}')
+    table = EvaluationTaskFailure
+    count = table.failures + 1
+    attempt = (
+        insert(table)
+        .values(campaign_id=candidate.campaign_id, task_key=task_holds.key(candidate), failures=1, held=limit == 1)
+        .on_conflict_do_update(
+            index_elements=[table.campaign_id, table.task_key],
+            set_={'failures': count, 'held': count >= limit},
+            where=table.held.is_(False),
+        )
+        .returning(table.failures, table.held)
+    )
+    changed = s.execute(attempt).one_or_none()
+    if changed is None or not changed.held:
+        return
+    same = (Candidate.campaign_id == candidate.campaign_id) & (Candidate.task_id == candidate.task_id)
+    affected = Evaluation.candidate.has(same) if candidate.task_id else Evaluation.candidate_id == candidate_id
+    s.execute(delete(Evaluation).where(Evaluation.started_at.is_(None), affected))
+    scope = f'task {candidate.task_id!r}' if candidate.task_id else f'candidate#{candidate_id}'
+    resume = f'`piloop candidate remeasure {candidate_id}`'
     asked = EscalationView(
-        headline=f"Evaluations of {campaign.name} fail for a cause that is not their candidate's: fix it, then resume.",
+        headline=f'Evaluations paused for {scope} after {changed.failures} consecutive infrastructure failures.',
         why=(
-            f"{failed} in a row for a cause that is not the candidate's, such as a lost machine or a retired"
-            f' evaluator. piloop recorded no measurement, does not retry it, and paused the measurements of'
-            f' {campaign.name}.'
+            f'The evaluator could not measure {scope}. Its pending submissions can be evaluated after the cause is fixed.'
         ),
         choices=(
             Choice(
                 id='A',
                 label=f'Fix the cause, then {resume}.',
-                result=f'piloop evaluates candidate#{candidate_id} again.',
+                result=f'PiLoop resumes evaluations for {scope} and measures candidate#{candidate_id} again.',
             ),
             Choice(
                 id='B',
-                label=f'Change the evaluator in piloop.toml, then `piloop campaign sync` and {resume}.',
-                result=f'The new evaluator measures candidate#{candidate_id}.',
+                label='Leave these evaluations on hold.',
+                result='Other tasks can continue.',
             ),
         ),
         recommended='A',

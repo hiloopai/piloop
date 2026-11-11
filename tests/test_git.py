@@ -27,6 +27,28 @@ from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, comm
 from tests.conftest import disk, git_processes
 
 
+def test_task_identity_comes_from_a_short_regular_file_in_the_selected_commit(campaign_path: Path) -> None:
+    task = campaign_path / 'TASK'
+    with Repo(campaign_path) as repo:
+        vcs = GitRepository(repo, PILOOP)
+        task.write_text('suite/entry-5\n')
+        repo.git.add('TASK')
+        repo.git.commit('-qm', 'select the task')
+        revision = vcs.head().revision
+        task.write_text('other')
+        assert vcs.version(revision).task_id == 'suite/entry-5'
+
+        for content in (b'', b'two\nlines', b'x' * 1025, b'\xff'):
+            task.write_bytes(content)
+            repo.git.commit('-qam', 'invalid task selector')
+            assert vcs.head().task_id is None
+        task.unlink()
+        task.symlink_to('solve.txt')
+        repo.git.add('TASK')
+        repo.git.commit('-qm', 'a symlink is not a task selector')
+        assert vcs.head().task_id is None
+
+
 def test_pin_all_raises_on_a_commit_the_repo_does_not_have(campaign_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError, match='update-ref'):
         git.pin_all(Repo(campaign_path), {'refs/piloop/gone': 'f' * 40})

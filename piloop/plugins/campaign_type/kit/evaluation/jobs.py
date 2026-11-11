@@ -20,7 +20,7 @@ from piloop.ids import TargetRef
 from piloop.otel import Span
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import measure as ledger, queue
+from piloop.plugins.campaign_type.kit.evaluation import measure as ledger, queue, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     EvalResult,
@@ -41,7 +41,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, save_units
-from piloop.plugins.campaign_type.kit.evaluation.ops import sealed_refused
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_infra_errors, sealed_refused
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
@@ -87,6 +87,7 @@ class EvaluationJob(Job):
     model_config = ConfigDict(frozen=True)
 
     kind: Literal['evaluation'] = EVALUATION
+    stop_after_tries: int = Field(default=3, ge=1)
     evaluation: int
     candidate: CandidateId
     run: RunId | None = None
@@ -213,19 +214,23 @@ def not_started(s: Session, job: EvaluationJob, error: str) -> None:
 
     Nothing ran, so nothing is the candidate's: its request asks again, after its backoff. The caller commits.
     """
-    queue.done(s, job.evaluation)  # None when a restart cleared the queue in between: the event says it all the same
+    ended = queue.done(s, job.evaluation)
     failed = InfraFailed(evaluation=job.evaluation, error=f'the executor refused it: {error}')
     emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
+    if ended is not None and ended.cancelled_by is None:
+        hold_on_infra_errors(s, job.candidate, ended.id, ended.evaluator_id, failed.error, job.stop_after_tries)
 
 
-def unmade(s: Session, evaluation: Evaluation, error: str) -> InfraFailed:
+def unmade(s: Session, evaluation: Evaluation, error: str, limit: int) -> InfraFailed:
     """Its request could not make the job of a waiting evaluation: it leaves the queue as an infra error.
 
     Nothing ran, so nothing is the candidate's: its request asks again, after its backoff. The caller commits.
     """
-    queue.unmade(s, evaluation.id)
+    if not queue.unmade(s, evaluation.id):
+        raise Settled(f'evaluation#{evaluation.id} is not waiting')
     failed = InfraFailed(evaluation=evaluation.id, error=error)
     emit(s, failed, TargetRef(CANDIDATE, evaluation.candidate_id), System.DAEMON)
+    hold_on_infra_errors(s, evaluation.candidate_id, evaluation.id, evaluation.evaluator_id, error, limit)
     return failed
 
 
@@ -244,9 +249,13 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
     if (infra := report.infra_error) is not None:
         failed = InfraFailed(evaluation=evaluation.id, error=infra.error)
         emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
+        hold_on_infra_errors(
+            s, job.candidate, evaluation.id, evaluation.evaluator_id, infra.error, job.stop_after_tries
+        )
         if infra.why is Infra.SEALED:
             sealed_refused(s, s.get_one(Campaign, s.get_one(Candidate, job.candidate).campaign_id), infra.error)
         return
+    task_holds.reset(s, s.get_one(Candidate, job.candidate))
     for sample in report.samples:
         record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluation.evaluator_id, sample)
     if evaluation.ask is not None:

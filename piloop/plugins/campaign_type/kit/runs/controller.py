@@ -82,7 +82,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import queue, submissions
+from piloop.plugins.campaign_type.kit.evaluation import queue, submissions, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import (
@@ -104,7 +104,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     sealed_evaluator,
     status,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, hold_on_infra_errors
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted, submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import firsts
@@ -216,7 +216,7 @@ class Measuring(StrEnum):
     measures it instead."""
     ABANDONED = 'abandoned'
     """It failed ``[evaluation] stop_after_tries`` times in a row for a cause that is not its candidate's: no measurement,
-    and its campaign's measurements wait for a human (``hold_on_infra_errors``)."""
+    and evaluations of its task wait for an explicit remeasure."""
 
 
 type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED, Measuring.ABANDONED]
@@ -1002,8 +1002,7 @@ class RunController:
         cancel`` cancels it, and runs again after ``[evaluation] infra_retry``, twice as long after each failure up to
         ``infra_retry_max``. Each failure is an event. It ends once it measures, someone cancels it, the daemon stops, a new evaluator of its split replaces
         ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``), or it
-        failed ``stop_after_tries`` times in a row: then the campaign's measurements pause, and piloop escalates
-        (``hold_on_infra_errors``).
+        its task reached ``stop_after_tries`` consecutive infra failures. Only that task's evaluations pause.
         """
         failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
         request = partial(
@@ -1025,20 +1024,15 @@ class RunController:
             match ended:
                 case InfraFailed(error=error):
                     failures += 1
-                    if failures >= self._evaluation.stop_after_tries:
-                        self._tracer.event(
-                            'evaluation.abandoned', candidate=candidate_id, evaluation=ended.evaluation, error=error
-                        )
-                        with self._db.session() as s:
-                            hold_on_infra_errors(s, candidate_id, ended.evaluation, evaluator_id, error, failures)
-                            s.commit()
-                        return Measuring.ABANDONED
                     self._tracer.event(
                         ended.kind, candidate=candidate_id, error=error, failures=failures, retry=retry.total_seconds()
                     )
                     # waits in the queue meanwhile, so a cancel finds it; the lock as in ``_request``: the runs that
                     # shared the evaluation all put it back
                     with self.launcher.lock, self._db.session() as s:
+                        write_transaction(s)
+                        if task_holds.held(s, s.get_one(Candidate, candidate_id)):
+                            return Measuring.ABANDONED
                         waiting, _ = queue.request(s, candidate_id, evaluator_id, ask)
                         s.commit()
                         row, before = waiting.id, _last_measurement(s, candidate_id, evaluator_id)
@@ -1095,6 +1089,12 @@ class RunController:
             if self.launcher.cancelled.is_set():
                 return Measuring.STOPPED
             with self._db.session() as s:  # two requests for one tree must not both insert it
+                write_transaction(s)
+                candidate = s.get_one(Candidate, candidate_id)
+                task_holds.identify(s, candidate)
+                if task_holds.held(s, candidate):
+                    s.commit()  # keep the task identity learned above for later scheduling passes
+                    return Measuring.ABANDONED
                 before = _last_measurement(s, candidate_id, evaluator_id)
                 evaluation, created = queue.request(s, candidate_id, evaluator_id, ask)
                 # a row that waits with no job of this daemon is one that an infra error put back (``_measure``): a
@@ -1105,11 +1105,12 @@ class RunController:
                 job = None
                 if mine:
                     if isinstance(artifact, str):
-                        failed = unmade(s, evaluation, artifact)
+                        failed = unmade(s, evaluation, artifact, self._evaluation.stop_after_tries)
                         s.commit()
                         return failed
                     score = Score.of(cfg.all_tracks[0].primary)
                     job = EvaluationJob(
+                        stop_after_tries=self._evaluation.stop_after_tries,
                         evaluation=evaluation.id,
                         candidate=candidate_id,
                         run=run_id,

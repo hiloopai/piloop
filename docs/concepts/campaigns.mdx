@@ -81,8 +81,12 @@ code gets the same score.
 
 An `infra_error` is never a score. Report it for a fault that is not the candidate's, such as a rate limit or a lost
 GPU. The evaluation waits in `piloop eval queue` and runs again later. After `[evaluation] stop_after_tries` failures
-in a row (3 by default, in `config.toml`), piloop stops the campaign's measurements and escalates. Fix the cause, then
-run `piloop resume`.
+in a row (3 by default, in `config.toml`), piloop holds evaluations of the affected task and escalates.
+In a campaign with independent tasks, commit a short, single-line task ID in a regular file named `TASK` at the
+root of each submission. Candidates with the same ID share a failure count within the campaign. A completed
+evaluation of that task breaks the streak. Once held, new evaluations of the task wait while other tasks continue.
+Without a task ID, only the failing candidate is held. After fixing the cause, run
+`piloop candidate remeasure <id>` on a candidate of the held task to retry it and release its siblings.
 
 `[evaluator] dev` names a fast check that the implementers run in their own checkouts. piloop never runs it:
 

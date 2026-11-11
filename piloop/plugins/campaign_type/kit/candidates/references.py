@@ -61,6 +61,7 @@ def resolve(
         parent_id=parent.id if parent else None,
         tree_sha=version.tree,
         revision=version.revision,
+        task_id=version.task_id or '',
         summary=version.summary,
         origin=origin,
     )

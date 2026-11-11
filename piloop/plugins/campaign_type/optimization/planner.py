@@ -20,7 +20,7 @@ from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
-from piloop.plugins.campaign_type.kit.evaluation import submissions
+from piloop.plugins.campaign_type.kit.evaluation import submissions, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import status
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
@@ -174,7 +174,10 @@ class OptimizationPlanner:
         the change are measured first, and runs wait until both have a score (``queue``). Then the candidates that
         someone asked to measure again.
         """
+        held_tasks = task_holds.held_keys(s, campaign.id)
         for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
+            if task_holds.key(submission) in held_tasks:
+                continue
             mine = (CANDIDATE, submission.id)
             if (busy := self._scoring.get(mine)) is None or busy.done():
                 self._tracer.event('candidate.submission', campaign=campaign.name, candidate=submission.id)
