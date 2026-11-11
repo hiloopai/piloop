@@ -1376,13 +1376,18 @@ class Leases:
         found: list[Work | PromptMessage | Revoke | Extend | Drain] = []
 
         def read(s: Session) -> bool:
-            if _registered(s, worker).cursor != after:
+            # A cursor past the newest event: the database was restored from a backup, and the events that take the
+            # ids up to the cursor again are new to the worker. It reads after the cursor that it stored before the
+            # backup instead, and gets again what came after it: a prompt that the worker answered has its outcome.
+            newest, stored = feed.newest(s), _registered(s, worker).cursor
+            cursor = after if after <= newest else min(stored, newest)
+            if stored != cursor:
                 # a statement, not a change of the loaded row: a drain may delete the row after the read
-                moved = update(LeaseWorker).where(LeaseWorker.id == worker).values(cursor=after)
+                moved = update(LeaseWorker).where(LeaseWorker.id == worker).values(cursor=cursor)
                 if s.scalar(moved.returning(LeaseWorker.id)) is None:
                     raise _gone(worker)
                 s.commit()
-            page = feed.after(s, after, topics(worker), limit=PAGE, where=[_unanswered()])
+            page = feed.after(s, cursor, topics(worker), limit=PAGE, where=[_unanswered()])
             found[:] = [_message(e) for e in s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id))]
             return bool(found)
 

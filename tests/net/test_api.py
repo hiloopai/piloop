@@ -139,6 +139,9 @@ def test_a_refusal_says_why_and_what_to_do(db: Database, campaign: Campaign, cfg
         with pytest.raises(Refused, match='^cursor 99 is ahead of the feed') as ahead:
             client.events(EventsQuery(after=99))
         assert ahead.value.error == Problem.CURSOR_AHEAD
+        with pytest.raises(Refused, match='^cursor 99 is ahead of the feed') as news_ahead:
+            client.news(NewsQuery(after=99))
+        assert news_ahead.value.error == Problem.CURSOR_AHEAD, 'a database restored from a backup'
         with pytest.raises(Refused, match='^limit: Input should be less than or equal to 1000$') as invalid:
             client.events(EventsQuery.model_construct(limit=1001))
         assert invalid.value.error is None

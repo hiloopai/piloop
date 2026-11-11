@@ -870,7 +870,10 @@ def _narrowed(db: Database, query: Located) -> CampaignId | None:
 def _news_after(db: Database, campaign: CampaignId | None, me: Actor, after: int | None) -> tuple[list[NewsItem], int]:
     with db.session() as s:
         cursor = db_feed.newest(s) if after is None else after
-        return inbox_module.news_after(s, cursor, campaign_id=campaign, party=me.party)
+        try:
+            return inbox_module.news_after(s, cursor, campaign_id=campaign, party=me.party)
+        except db_feed.CursorAhead as e:  # a database restored from a backup: the events up to the cursor come again
+            raise Refusal(HTTPStatus.CONFLICT, Problem.CURSOR_AHEAD, str(e)) from e
 
 
 def _changes(db: Database, after: int) -> inbox_module.Change:

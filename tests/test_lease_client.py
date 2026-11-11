@@ -21,6 +21,7 @@ from sqlalchemy import delete, event
 
 from piloop.actor import Agent, System
 from piloop.api.contract import MAX_POLL_SECONDS, Access
+from piloop.db import feed
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId, Revision
@@ -391,6 +392,8 @@ def test_a_worker_whose_row_a_drain_deletes_while_its_messages_are_read_is_dismi
     that it is gone, never a 500 of a stale row."""
     w1 = connect('w1')
     w1.register(INFO)
+    with db.session() as s:
+        after = feed.newest(s)  # past the cursor that the registration stored (its join event), within the feed
 
     loads: list[str] = []
 
@@ -404,7 +407,7 @@ def test_a_worker_whose_row_a_drain_deletes_while_its_messages_are_read_is_dismi
     event.listen(LeaseWorker, 'load', drained)
     try:
         with pytest.raises(Dismissed, match='worker w1 is not registered'):
-            w1.messages(7, 0)
+            w1.messages(after, 0)
     finally:
         event.remove(LeaseWorker, 'load', drained)
     assert loads == ['w1'], 'the row was read once, then the drain deleted it'

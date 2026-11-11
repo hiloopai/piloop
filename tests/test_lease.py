@@ -831,6 +831,23 @@ def test_a_worker_that_restarts_resumes_from_its_cursor(
     assert join(leases, 'w1', []).cursor == end, 'a cursor past the feed starts again at its newest event'
 
 
+def test_a_worker_whose_cursor_is_past_the_feed_gets_the_messages_that_take_those_ids_again(
+    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
+) -> None:
+    """A database restored from a backup lost its newest events. Without a new registration, the worker polls on with
+    a cursor past them: the next events take those ids, and it must not skip them. It reads after the cursor that its
+    row kept from before the backup."""
+    w1 = Local(leases, 'w1')
+    end = join(leases, 'w1', []).cursor
+    ahead = end + 100
+    assert w1.messages(ahead, 0.01) == [], 'nothing after the newest yet'
+    leases.submit(agent_job(db, campaign, tmp_path))
+    [work] = w1.messages(ahead, 5)
+    assert isinstance(work, Work) and end < work.id <= ahead, 'an id at or below the cursor'
+    with db.session() as s:
+        assert s.get_one(LeaseWorker, 'w1').cursor == end, 'its stored cursor stays: the one that it read after'
+
+
 def test_a_change_that_rolls_back_leaves_no_message(
     db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:
