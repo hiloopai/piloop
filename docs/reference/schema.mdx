@@ -291,6 +291,14 @@ CREATE TABLE first_transfers (
 ## optimization
 
 ```sql
+CREATE TABLE evaluation_task_failures (
+	campaign_id INTEGER NOT NULL,
+	task_key VARCHAR NOT NULL,
+	failures INTEGER NOT NULL,
+	held BOOLEAN NOT NULL,
+	PRIMARY KEY (campaign_id, task_key),
+	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+);
 CREATE TABLE evaluators (
 	id INTEGER NOT NULL,
 	campaign_id INTEGER NOT NULL,
@@ -392,6 +400,7 @@ CREATE TABLE candidates (
 	parent_id INTEGER,
 	tree_sha VARCHAR NOT NULL,
 	revision VARCHAR NOT NULL,
+	task_id VARCHAR,
 	summary VARCHAR,
 	origin VARCHAR(16) DEFAULT 'run' NOT NULL,
 	excluded_reason VARCHAR,

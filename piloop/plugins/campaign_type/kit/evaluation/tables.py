@@ -105,6 +105,17 @@ def read(error: str | None, rung: RungName | None, stopped: str | None) -> Readi
     return Reading.CLIMB if stopped is None else Reading.STOP
 
 
+class EvaluationTaskFailure(Base):
+    """Consecutive infrastructure failures of one task in a campaign. A held task waits for an explicit remeasure."""
+
+    __tablename__ = 'evaluation_task_failures'
+
+    campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'), primary_key=True)
+    task_key: Mapped[str] = mapped_column(primary_key=True)
+    failures: Mapped[int]
+    held: Mapped[bool]
+
+
 class Cancel(Base):
     """Someone cancelled the evaluation of a candidate under one evaluator: the daemon does not evaluate it there unasked.
 

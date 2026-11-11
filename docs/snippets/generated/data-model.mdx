@@ -126,6 +126,12 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
+    evaluation_task_failures {
+        integer campaign_id PK,FK
+        varchar task_key PK
+        integer failures
+        boolean held
+    }
     evaluators {
         integer id PK
         integer campaign_id FK
@@ -241,6 +247,7 @@ erDiagram
         integer parent_id FK
         varchar tree_sha
         varchar revision
+        varchar task_id
         varchar summary
         Origin origin
         varchar excluded_reason
@@ -283,6 +290,7 @@ erDiagram
     target_kinds ||--o{ comments : "target_kind"
     comments |o--o{ comments : "in_reply_to"
     comment_kinds ||--o{ comments : "kind"
+    campaigns ||--o{ evaluation_task_failures : "campaign_id"
     campaigns ||--o{ evaluators : "campaign_id"
     target_kinds ||--o{ events : "target_kind"
     campaigns ||--o{ first_transfers : "campaign_id"

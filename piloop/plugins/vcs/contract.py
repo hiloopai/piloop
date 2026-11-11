@@ -39,6 +39,8 @@ class Version:
     """The first line of what the version says about itself."""
     recovered: bool = False
     """It holds what an agent left unsaved, which ``Repository.capture`` saved for it."""
+    task_id: str | None = None
+    """The independent evaluation task selected by this version, if it declares one."""
 
 
 @dataclass(frozen=True)

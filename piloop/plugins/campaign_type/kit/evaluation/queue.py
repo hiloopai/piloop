@@ -30,7 +30,7 @@ from piloop.db.models import NOT_RETIRED, Campaign, Event, utcnow
 from piloop.ids import CampaignId, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
+from piloop.plugins.campaign_type.kit.evaluation import measure as ledger, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluation
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
@@ -150,7 +150,7 @@ def withdraw(s: Session) -> int:
     The caller commits. Return how many. Each of its requests finds it gone with no measurement, and asks the current
     evaluator. One that runs finishes under its own evaluator, and its measurement keeps it.
     """
-    gone = [e for e in _unstarted(s) if ledger.retired(s, e.evaluator_id)]
+    gone = [e for e in _unstarted(s) if ledger.retired(s, e.evaluator_id) or task_holds.held(s, e.candidate)]
     for evaluation in gone:
         s.delete(evaluation)
     return len(gone)

@@ -12,7 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from covalence import Cid
-from git import Repo
+from git import Blob, Repo
 from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
 from pydantic import SecretStr
 
@@ -90,7 +90,22 @@ class GitRepository(Repository):
             tree=git.tree_sha(self.repo, sha),
             summary=git.subject_line(self.repo, sha),
             recovered=bool(git.trailers(text, RECOVERED)),
+            task_id=self._task_id(sha),
         )
+
+    def _task_id(self, sha: str) -> str | None:
+        """Read a short, single-line TASK from the committed tree, without following links."""
+        tree = self.repo.commit(sha).tree
+        if 'TASK' not in tree:
+            return None
+        blob = tree / 'TASK'
+        if not isinstance(blob, Blob) or blob.mode not in (0o100644, 0o100755) or blob.size > 1024:
+            return None
+        try:
+            name = blob.data_stream.read().decode('utf-8').strip()
+        except UnicodeDecodeError:
+            return None
+        return name if name and name.isprintable() else None
 
     def update(self, credential: SecretStr | None) -> Version:
         """``git pull --ff-only --tags``."""

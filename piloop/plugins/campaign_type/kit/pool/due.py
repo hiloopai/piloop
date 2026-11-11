@@ -10,6 +10,7 @@ from piloop.db.models import Campaign
 from piloop.ids import CampaignStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import requested, status
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, baseline, carried, confirm_runs
 
@@ -40,7 +41,10 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     unasked: after an evaluator change, a candidate keeps the scores of the old evaluator until it is submitted again or
     someone asks (``request_remeasure``).
     """
-    asked = [c for c, _ in requested(s, campaign)]
+    held = task_holds.held_keys(s, campaign.id)
+    if task_holds.CAMPAIGN in held:
+        return []
+    asked = [c for c, _ in requested(s, campaign) if task_holds.key(c) not in held]
     if campaign.status is not CampaignStatus.ACTIVE:
         return list(dict.fromkeys(asked))
     confirm = confirm_runs(s, campaign, campaign.evaluator_id)
@@ -53,4 +57,5 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     )
     pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
     sealing = [s.get_one(Candidate, c) for c in pool.ranked_all() if pool.seal_due(c)]
-    return list(dict.fromkeys([*unconfirmed, *asked, *sealing, *s.scalars(new.order_by(Candidate.id))]))
+    candidates = dict.fromkeys([*unconfirmed, *asked, *sealing, *s.scalars(new.order_by(Candidate.id))])
+    return [c for c in candidates if task_holds.key(c) not in held]

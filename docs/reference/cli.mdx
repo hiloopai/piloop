@@ -249,7 +249,8 @@ Ask the daemon to evaluate a candidate `--repeats` more times, with the current 
 Use it when a fault of the host spoiled a measurement (a full disk, a lost GPU), or when load made it noisy. The
 candidate's mean includes the new evaluations, so the pool and its best follow. It measures soon, after the
 baseline, also when the campaign is stopped: not while it is paused with `--evals`, or held by its stop rule. A
-commit that the daemon never measured, `skipped` or `recovered`, gets its first evaluations.
+commit that the daemon never measured, `skipped` or `recovered`, gets its first evaluations. If infrastructure
+failures paused this candidate's task, the request also resumes evaluations of that task.
 
 **Arguments**:
 

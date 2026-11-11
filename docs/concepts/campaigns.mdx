@@ -81,8 +81,42 @@ code gets the same score.
 
 An `infra_error` is never a score. Report it for a fault that is not the candidate's, such as a rate limit or a lost
 GPU. The evaluation waits in `piloop eval queue` and runs again later. After `[evaluation] stop_after_tries` failures
-in a row (3 by default, in `config.toml`), piloop stops the campaign's measurements and escalates. Fix the cause, then
-run `piloop resume`.
+in a row (3 by default, in `config.toml`), piloop holds evaluations of the affected task and escalates.
+In a campaign with independent tasks, commit a short, single-line task ID in a regular file named `TASK` at the
+root of each submission. Candidates with the same ID share a failure count within the campaign. A completed
+evaluation of that task breaks the streak. Once held, new evaluations of the task wait while other tasks continue.
+After fixing the cause, run `piloop candidate remeasure <id>` on a candidate of the held task to retry it and release its siblings.
+
+Submissions without a usable `TASK` ID share one failure count per campaign. For example, if three different untagged
+ideas each hit the same broken evaluator once, the third consecutive infrastructure failure pauses the entire campaign
+at the default limit. Queued evaluations wait, including tagged ones. Work already running can finish. After fixing
+the evaluator, run `piloop resume <campaign>` to resume with a fresh count.
+
+A tagged campaign can declare its full set of eligible tasks in `TASKS.txt` at the root of the registered campaign
+checkout, one ID per line. PiLoop pauses the whole campaign when its last listed task goes on hold, or when the
+list is empty. An eligible task keeps the campaign open even before its first submission. After repair, request a
+remeasure for a held task or add an eligible task to the list, then run `piloop resume <campaign>`.
+
+For images managed outside PiLoop, a campaign fact source can publish `available_eval_images`, the current number
+of distinct usable evaluator images. A reading of zero pauses the campaign before it schedules more work, including
+when several healthy task IDs depend on the same unavailable image. Report a failed inventory lookup as unknown.
+After the source reports a usable image, run `piloop resume <campaign>`. Without a roster or an inventory reading,
+a failure on one tagged submission establishes only that task's hold.
+
+For example, add a trusted inventory command to the campaign's active fact sources in `piloop.toml`:
+
+```toml
+[plugins.fact_source]
+use = ["campaign", "optimization", "image_inventory"]
+
+[plugins.fact_source.image_inventory]
+provider = "command"
+command = ["/srv/evaluator/count-usable-images"]
+metrics = ["available_eval_images"]
+```
+
+The command writes a line such as `{"metrics":{"available_eval_images":1}}` to `$PILOOP_RESULT_FILE`.
+Count usable images even while their workers are busy. Exit with a failure if the provider cannot confirm the count.
 
 `[evaluator] dev` names a fast check that the implementers run in their own checkouts. piloop never runs it:
 

@@ -66,6 +66,8 @@ class Candidate(Tracked, Base):
     """The hash of the contents. Two commits with the same tree are the same candidate."""
     revision: Mapped[Revision]
     """The vcs provider's name for one version that has this tree, which it keeps (``Repository.keep``)."""
+    task_id: Mapped[str | None]
+    """The task selected by this revision. Empty when unlabelled, NULL until an older candidate is first evaluated."""
     summary: Mapped[str | None]
     """The first line of what the version says about itself."""
     origin: Mapped[Origin] = mapped_column(default=Origin.RUN, server_default=Origin.RUN.value)

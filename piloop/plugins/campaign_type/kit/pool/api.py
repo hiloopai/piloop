@@ -8,7 +8,7 @@ from piloop.db.models import Campaign
 from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate
 from piloop.plugins.campaign_type.kit.candidates.views import candidate_view
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
-from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops
+from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.pool import ops as pool_ops
 from piloop.plugins.campaign_type.kit.pool.wire import ExcludeBody, RemeasureBody, Remeasured
@@ -20,6 +20,8 @@ router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUS
 @router.post('/candidates/{candidate}/remeasure', operation_id='remeasure', dependencies=[Depends(actor_access)])
 def remeasure(s: Writing, me: Acting, candidate: AddressedCandidate, body: RemeasureBody) -> Remeasured:
     """Ask the daemon to evaluate a candidate more times, with the current evaluator. Its mean includes them."""
+    task_holds.identify(s, candidate)
+    task_holds.reset(s, candidate, resume=True)
     request_remeasure(s, candidate, me, body.repeats)
     s.commit()
     campaign = s.get_one(Campaign, candidate.campaign_id)

@@ -6,6 +6,17 @@ read another row, so the rule is a trigger.
 
 from piloop.db.triggers.ddl import Trigger
 
+EVALUATIONS_RESUMED = Trigger(
+    'campaigns_resume_untagged_evaluations',
+    'campaigns',
+    'AFTER UPDATE',
+    of=('paused',),
+    when="OLD.paused = 'all' AND NEW.paused IS NOT 'all'",
+    body="DELETE FROM evaluation_task_failures WHERE campaign_id = NEW.id AND task_key = 'campaign' AND held",
+    requires='evaluation_task_failures',
+)
+"""Release the shared evaluator hold when its campaign resumes, including a resume through SQL."""
+
 
 def acyclic() -> tuple[Trigger, Trigger]:
     """Persistent: refuse a ``campaigns.parent_id`` that is the campaign itself or one of its descendants.
