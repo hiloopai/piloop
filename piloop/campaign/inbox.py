@@ -20,7 +20,7 @@ from sqlalchemy import ColumnElement, ScalarSelect, Select, case, exists, litera
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, Session, aliased, selectinload
 
-from piloop.actor import Actor, System, by_a_person, party_of
+from piloop.actor import SEAT_SIGNATURE, Actor, System, by_a_person, party_of
 from piloop.api.views import (
     AckOutcome,
     AckResult,
@@ -67,9 +67,22 @@ READERS: Final = (HUMAN, System.ORCHESTRATOR.party)
 """The parties that read the inbox: the people, and the orchestrator."""
 
 
+ALL_SEATS: Final = 'all orchestrator seats'
+"""The acknowledgement party for withdrawing an item from current and future seats at once."""
+
+
 def seer(party: str) -> str:
     """The party that ``party`` acknowledges for (``Ack.party``): ``human`` for every person, else ``party``."""
     return HUMAN if by_a_person(party) else party
+
+
+def addressed_to(kind: str, body: str, party: str) -> bool:
+    """A leading @seat-N on a message directs it to that seat. The human can still read every message."""
+    seat = SEAT_SIGNATURE.fullmatch(party)
+    if seat is None or kind != CommentKind.MESSAGE:
+        return True
+    recipient = re.match(r'@seat-([1-9][0-9]*)(?:\s|$)', body)
+    return recipient is None or recipient[1] == seat[1]
 
 
 def items(
@@ -89,7 +102,10 @@ def items(
     """
     query = _items(campaign_id)
     if not acked:
-        query = query.where(~exists().where(Ack.comment_id == Comment.id, Ack.party == seen_by))
+        seen = Ack.party == seen_by
+        if SEAT_SIGNATURE.fullmatch(seen_by):
+            seen |= Ack.party.in_((ALL_SEATS, System.ORCHESTRATOR.party)) & (Ack.acked_by == System.DAEMON.signature)
+        query = query.where(~exists().where(Ack.comment_id == Comment.id, seen))
     if kinds:
         query = query.where(Comment.kind.in_(kinds))
     found: list[tuple[Comment, Campaign | None]] = [(c, p) for c, p in s.execute(query)]
@@ -126,7 +142,7 @@ def waiting_for(
     what an earlier orchestrator wrote.
     """
     found = items(s, seer(party), campaign_id=campaign_id, kinds=kinds, acked=acked)
-    return [(c, p) for c, p in found if party_of(c.author) != party]
+    return [(c, p) for c, p in found if party_of(c.author) != party and addressed_to(c.kind, c.body, party)]
 
 
 def answers(s: Session, asked: Sequence[Comment]) -> dict[CommentId, Comment]:
@@ -143,7 +159,11 @@ def answers(s: Session, asked: Sequence[Comment]) -> dict[CommentId, Comment]:
     for answer in s.scalars(select(Comment).where(on_roots).order_by(Comment.id)):
         to = by_id.get(answer.in_reply_to if answer.in_reply_to is not None else CommentId(answer.target_id))
         party = party_of(answer.author)
-        if to is not None and seer(party) in READERS and party != party_of(to.author):
+        if (
+            to is not None
+            and (seer(party) in READERS or SEAT_SIGNATURE.fullmatch(party))
+            and party != party_of(to.author)
+        ):
             found[to.id] = answer
     return found
 
@@ -165,8 +185,16 @@ class Line:
     seen_by: frozenset[str] = frozenset()
     """The parties (``seer``) that acknowledged it."""
 
+    withdrawn: bool = False
+
     def news_to(self, party: str, campaign_id: CampaignId | None) -> bool:
         """Whether it is news to ``party`` in campaign ``campaign_id``, None for every campaign."""
+        if isinstance(self.item, CommentNews):
+            comment = self.item.comment
+            if (self.withdrawn and SEAT_SIGNATURE.fullmatch(party)) or not addressed_to(
+                comment.kind, comment.body, party
+            ):
+                return False
         return campaign_id in (None, self.campaign_id) and party != self.author and seer(party) not in self.seen_by
 
 
@@ -214,6 +242,10 @@ def changes(s: Session, after: int) -> Change:
             item=CommentNews(comment=comment_view(c), campaign_name=None if campaign is None else campaign.name),
             author=party_of(c.author),
             seen_by=frozenset(a.party for a in c.acks),
+            withdrawn=any(
+                a.party in (ALL_SEATS, System.ORCHESTRATOR.party) and a.acked_by == System.DAEMON.signature
+                for a in c.acks
+            ),
         )
         for c, campaign in found
         if c.id not in settled
@@ -267,6 +299,8 @@ def ack(s: Session, ids: Sequence[CommentId], actor: Actor) -> list[AckResult]:
     results = []
     for comment_id in ids:
         match comment := s.get(Comment, comment_id):
+            case Comment() if not addressed_to(comment.kind, comment.body, actor.party):
+                results.append(AckResult(id=comment_id, outcome=AckOutcome.NOT_IN_INBOX, acked_by=None))
             case None | Comment(priority=None):
                 results.append(AckResult(id=comment_id, outcome=AckOutcome.NOT_IN_INBOX, acked_by=None))
             case Comment(author=author) if party_of(author) == actor.party:
@@ -294,7 +328,7 @@ def withdraw(s: Session, item_id: CommentId) -> None:
     would come from another party, and nobody answers what nothing asks. An item that is gone (a raw DELETE) takes
     nothing.
     """
-    for party in READERS:
+    for party in (*READERS, ALL_SEATS):
         row = select(Comment.id, literal(party), literal(System.DAEMON.signature), literal(utcnow())).where(
             Comment.id == item_id
         )

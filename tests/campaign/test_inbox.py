@@ -587,3 +587,36 @@ def test_an_escalation_takes_one_answer_whoever_writes_the_second(db: Database, 
     with db.session() as s:
         decisions = s.scalars(select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == DECISION)).all()
         assert [d.author for d in decisions] == ['orchestrator']
+
+
+def test_peer_seats_share_escalations_and_read_their_own_inboxes(db: Database, campaign: Campaign) -> None:
+    first, second = (Orchestrating(by=Service(name=f'seat-{n}')) for n in (1, 2))
+    with db.session() as s:
+        broadcast = inbox.message(s, campaign.id, 'status?', author=System.HUMAN, priority=2)
+        inbox.ack(s, [broadcast.id], first)
+        directed = inbox.message(s, campaign.id, '@seat-2 review this', author=System.HUMAN, priority=2)
+        assert not inbox.waiting_for(s, first.party)
+        assert bodies(inbox.waiting_for(s, second.party)) == ['status?', '@seat-2 review this']
+        assert not news_lines(s, 0, me=first)[1]
+        assert len(news_lines(s, 0, me=second)[1]) == 2
+        assert inbox.ack(s, [directed.id], first)[0].outcome == AckOutcome.NOT_IN_INBOX
+
+        ask = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            author='implementer#1',
+            kind=ESCALATION,
+            priority=1,
+            body='Which idea?',
+        )
+        s.add(ask)
+        s.commit()
+        decision = inbox.reply(s, ask.id, 'Try idea 12', author=second, priority=2)
+        with pytest.raises(inbox.Answered, match='seat-2'):
+            inbox.reply(s, ask.id, 'Try idea 4', author=first, priority=2)
+        assert bodies(inbox.waiting_for(s, first.party)) == [decision.body]
+        assert news_lines(s, 0, me=first)[1][0].endswith('by orchestrator via service:seat-2: Try idea 12')
+        inbox.ack(s, [broadcast.id], System.ORCHESTRATOR)
+        inbox.withdraw(s, broadcast.id)
+        s.commit()
+        assert bodies(inbox.waiting_for(s, second.party)) == [directed.body]
+        assert len(news_lines(s, 0, me=second)[1]) == 1

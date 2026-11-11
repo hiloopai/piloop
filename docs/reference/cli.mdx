@@ -840,6 +840,7 @@ The orchestrator answers with `piloop inbox reply`, and the answer is in your in
 
 **Parameters**:
 
+* `--seat INT`: Address a numbered orchestrator seat.
 * `--priority INT`: From 0 (urgent) to 4 (someday). *[default: 2]*
 
 ### piloop migrate
@@ -853,6 +854,22 @@ Migrate the database to the schema of this piloop, and print what changed and wh
 Before it migrates, it copies the database next to it (`migration_backups` in config.toml). Only this command, `piloop serve` when it starts and `piloop upgrade` migrate. Every other command
 refuses a database at another schema revision, and says what to run. It refuses to migrate under the running
 daemon of an older piloop, and refuses an agent that the daemon launched.
+
+### piloop orchestrate
+
+```text
+piloop orchestrate SEAT COMMAND [ARGS...]
+```
+
+Run COMMAND with the stable identity of numbered SEAT. Use one process per seat in the campaign repo.
+
+Pass the agent command after --. Each seat shares the campaign board and workers and reads its own inbox.
+
+**Arguments**:
+
+* `SEAT`: **[required]**
+* `COMMAND`: **[required]**
+* `ARGS`:
 
 ### piloop pause
 

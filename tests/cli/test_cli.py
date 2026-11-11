@@ -2763,3 +2763,23 @@ def db_campaign(db: Database) -> Campaign:
 def run_candidate(db: Database, run_id: RunId) -> CandidateId | None:
     with db.session() as s:
         return s.scalar(select(Candidate.id).where(Candidate.run_id == run_id))
+
+
+@pytest.mark.usefixtures('api')
+def test_message_to_numbered_seat(campaign_path: Path, out) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    run_cli(['message', str(campaign_path), 'review this', '--seat', '2'])
+    out()
+    run_cli(['inbox', 'show', '1'])
+    assert '@seat-2 review this' in out()
+
+
+def test_numbered_orchestrator_executes_the_supplied_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = []
+    monkeypatch.setattr('os.execvpe', lambda cmd, argv, env: captured.append((cmd, argv, env)))
+    run_cli(['orchestrate', '2', '--', 'agent', '--model', 'test'])
+    cmd, argv, env = captured[0]
+    assert (cmd, argv) == ('agent', ['agent', '--model', 'test'])
+    assert env['PILOOP_SEAT_NUM'] == '2'
+    assert env['PILOOP_ACTOR'] == env['PILOOP_INBOX_ID'] == 'orchestrator via service:seat-2'

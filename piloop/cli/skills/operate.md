@@ -12,7 +12,9 @@ The database is the contract. Everything below is a `piloop` command in your she
   expands `$VAR`, before piloop sees it. Give other commands short values in single quotes, without a `'` in them,
   and write anything longer as a comment through `piloop sql -`.
 - Read `piloop schema` once before your first write. It gives the conventions and every table.
-- Run every piloop command as `PILOOP_ACTOR=orchestrator piloop …`. When the human runs a second install under
+- In a numbered seat, use the inherited `PILOOP_ACTOR` for every command and SQL signature. Substitute
+  `"$PILOOP_INBOX_ID"` for the literal `orchestrator` actor in the examples below.
+- In a single unnumbered session, run every piloop command as `PILOOP_ACTOR=orchestrator piloop …`. When the human runs a second install under
   another command, such as `piloop-canary` next to a release, use that command wherever this skill says `piloop`.
   - The rows you change, the items you acknowledge and their events are then signed `orchestrator`.
   - `piloop inbox wait` then skips what you wrote yourself.
@@ -86,7 +88,10 @@ Steps:
 Run the loop yourself, or give it to a background subagent so that the human's session stays free. Give the subagent
 this skill and the campaign name. Tell it to report decisions and status back.
 
-Run one orchestrator per campaign. Two loops do the same work twice, and an escalation takes only one answer.
+In multi-orchestrator mode, each seat keeps its own wait cursor and acknowledgements. Read the current board and
+consult peers before overlapping changes. Coordinate through campaign messages, or use `piloop message <name>
+'<text>' --seat N` to address seat N. Workers and ideas are shared. Answer escalations before acting on them.
+The first accepted decision wakes the other seats. If a peer answered first, read that decision before acting.
 
 ## Status
 
