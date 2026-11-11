@@ -27,6 +27,7 @@ from piloop.actor import System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
     AGENT_SESSION_STATES,
+    JOB_FILES,
     Ended,
     Lost,
     NotStarted,
@@ -42,7 +43,7 @@ from piloop.cli.plugins import selections
 from piloop.config import ConfigError, load_campaign_config
 from piloop.db.events import has, in_order, latest
 from piloop.db.machine import Refused, transition
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, RepoTransfer, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, JobFiles, RepoTransfer, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignStatus, Ending, Revision, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
@@ -99,7 +100,7 @@ from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from piloop.plugins.vcs.git.commands import pin as git_pin
 from piloop.settings import AgentSettings, Settings
-from piloop.store.tree import FICLONE
+from piloop.store.tree import FICLONE, cid_of
 from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
@@ -500,6 +501,13 @@ def test_successful_run_scores_the_commit(
         and (log_dir / 'transcript.txt').is_file()
         and not (log_dir / 'worktree').exists()
     )
+    with db.session() as s:
+        placed = {
+            path: blob
+            for row in s.scalars(select(JobFiles).where(JobFiles.place == f'runs/{run_id}'))
+            for path, blob in JOB_FILES.validate_json(ex.cas.get(row.files) or b'{}').items()
+        }
+    assert placed['transcript.txt'] == cid_of(log_dir / 'transcript.txt'), 'its logs are named by a row, in the CAS'
     assert runtime.killed, 'the runtime is told to release the implementer'
 
 

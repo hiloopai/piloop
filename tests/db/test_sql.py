@@ -92,6 +92,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
             'first_transfers',
             'idea_links',
             'ideas',
+            'job_files',
             'lease_workers',
             'leases',
             'limits',

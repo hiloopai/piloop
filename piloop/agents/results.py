@@ -38,6 +38,7 @@ from piloop.db.models import (
     Comment,
     Event,
     EventModel,
+    JobFiles,
     ReadBy,
     WorkspaceSnapshot,
     utcnow,
@@ -82,6 +83,10 @@ def never_worked(startup_seconds: float) -> str:
     It did not start to work: a crash, broken tools, no quota.
     """
     return f'it ended within {startup_seconds:g}s and left nothing'
+
+
+JOB_FILES: TypeAdapter[dict[str, BlobAddress]] = TypeAdapter(dict[str, BlobAddress])
+"""What a ``JobFiles`` row names: a report's files by relative path."""
 
 
 class AgentSessionStarted(EventModel):
@@ -597,6 +602,8 @@ class CampaignResults:
                 else:
                     kind_of(job).apply(s, job, report, Applying(self._home, terms.stopping(s), self._cas))
                 write_files(self._cas, report.files, self._home / job.place)
+                if report.files:
+                    s.add(JobFiles(place=job.place, files=self._cas.put(JOB_FILES.dump_json(report.files))))
 
             self._apply(guard, change)
         if isinstance(job, AgentJob) and isinstance(report, AgentFinished):

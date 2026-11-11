@@ -99,6 +99,7 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'ideas_fts_data',
             'ideas_fts_docsize',
             'ideas_fts_idx',
+            'job_files',
             'lease_workers',
             'leases',
             'limits',

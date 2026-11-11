@@ -671,6 +671,22 @@ class WorkspaceSnapshot(Base):
     at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 
+class JobFiles(Base):
+    """The log files that a job's report put under its place in the home (``Report.files``), by path.
+
+    A JSON blob in the CAS, one row per report, in the order applied. They make the job's place again on another host
+    (``piloop.store.tree.write_files``).
+    """
+
+    __tablename__ = 'job_files'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    place: Mapped[str]
+    """Where they went, relative to the home (``runs/12``)."""
+    files: Mapped[Cid] = mapped_column(CidText)
+    """The files by relative path, each a blob address (``piloop.agents.results.JOB_FILES``)."""
+
+
 class Limit(Base):
     """A live limit (``piloop limits set``): a value for one ``Live`` key of a provider's parameters, over ``config.toml``.
 
