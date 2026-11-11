@@ -113,6 +113,7 @@ from tests.conftest import (
     Gate,
     ScriptRuntime,
     baseline,
+    disk,
     escalation_sql,
     events,
     example,
@@ -2115,6 +2116,9 @@ def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
         s.flush()
         assert rows[2].units is None, 'none stored for a measurement without per-unit results'
         assert units(cas, c, evaluator_id) == {'score': {'a': 2.0, 'b': 0.0}}, 'a crashed measurement does not count'
+        rows[0].units = disk(tmp_path / 'elsewhere').put(b'{}')  # a blob that this CAS lacks
+        with pytest.raises(LookupError, match=f'per-unit results {rows[0].units} are not in the CAS'):
+            units(cas, c, evaluator_id)
 
 
 def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | None, int, int | None]]:
