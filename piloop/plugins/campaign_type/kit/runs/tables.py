@@ -81,6 +81,7 @@ class Run(Tracked, Base):
             name='runs.end is set once a run is finished',
         ),
         CheckConstraint(f'"end" IS NULL OR status = {_end_status()}', name='runs.status follows from runs.end'),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[RunId] = mapped_column(primary_key=True)

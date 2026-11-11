@@ -7,6 +7,8 @@ take never waits. Its epoch is one above the newest of the home's terms (``piloo
 import socket
 import threading
 
+from sqlalchemy.orm import Session
+
 from piloop.db import terms
 from piloop.db.session import Database
 from piloop.plugins.leader.contract import LeaderConfig, LeaderHost, Renewal, Term
@@ -36,6 +38,9 @@ class LocalTerms:
 
     def release(self, term: Term) -> None:
         pass
+
+    def begin(self, s: Session, term: Term) -> None:
+        pass  # one host, whose database is never restored under it: its ids stay small
 
     def current(self) -> Term | None:
         with self._db.session() as s:

@@ -7,6 +7,7 @@
 | `Leader.renew(term: Term) -> Term` | `term` again, ending later. |
 | `Leader.release(term: Term) -> None` | End `term` now: the holder wrote its last. Another daemon may take the next one at once. |
 | `Leader.current() -> Term \| None` | The term that a daemon holds now, or None. |
+| `Leader.begin(s: Session, term: Term) -> None` | Write what the provider needs in `term`'s first transaction, before the daemon writes anything else. |
 | `Term.epoch: int` | Higher than every term's before it: what fences a stale writer. |
 | `Term.holder: str` | The daemon that holds it: `<host>/<pid>`. |
 | `Term.url: str \| None` | Where the holder serves other machines, when it does. |

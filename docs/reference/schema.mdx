@@ -129,7 +129,7 @@ CREATE TABLE agent_sessions (
 CREATE INDEX ix_agent_sessions_campaign_kind_state ON agent_sessions (campaign_id, kind, state);
 CREATE INDEX ix_agent_sessions_subject ON agent_sessions (subject_kind, subject_id);
 CREATE TABLE comments (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	target_kind VARCHAR(16) NOT NULL,
 	target_id INTEGER NOT NULL,
 	in_reply_to INTEGER,
@@ -141,7 +141,6 @@ CREATE TABLE comments (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
-	PRIMARY KEY (id),
 	CONSTRAINT escalation_needs_priority CHECK (kind != 'escalation' OR priority IS NOT NULL),
 	CONSTRAINT reply_is_on_a_comment CHECK (in_reply_to IS NULL OR target_kind = 'comment'),
 	CONSTRAINT comment_not_on_home CHECK (target_kind != 'home'),
@@ -154,14 +153,13 @@ CREATE TABLE comments (
 CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL;
 CREATE INDEX ix_comments_target ON comments (target_kind, target_id);
 CREATE TABLE events (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	kind VARCHAR NOT NULL GENERATED ALWAYS AS (json_extract(payload, '$.kind')),
 	actor VARCHAR NOT NULL,
 	target_kind VARCHAR(16) NOT NULL,
 	target_id INTEGER NOT NULL,
 	payload JSON NOT NULL,
-	PRIMARY KEY (id),
 	CONSTRAINT targetkind FOREIGN KEY(target_kind) REFERENCES target_kinds (id)
 );
 CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
@@ -305,7 +303,7 @@ CREATE TABLE evaluators (
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
 );
 CREATE TABLE ideas (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	campaign_id INTEGER NOT NULL,
 	title VARCHAR NOT NULL,
 	hypothesis VARCHAR NOT NULL,
@@ -318,7 +316,6 @@ CREATE TABLE ideas (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
-	PRIMARY KEY (id),
 	UNIQUE (campaign_id, title),
 	CONSTRAINT "ideas.title must be a text value" CHECK (typeof(title) IN ('text')),
 	CONSTRAINT "ideas.hypothesis must be a text value" CHECK (typeof(hypothesis) IN ('text')),
@@ -358,7 +355,7 @@ CREATE TABLE idea_links (
 );
 CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind);
 CREATE TABLE runs (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	campaign_id INTEGER NOT NULL,
 	idea_id INTEGER,
 	role VARCHAR DEFAULT 'implementer' NOT NULL,
@@ -377,7 +374,6 @@ CREATE TABLE runs (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
-	PRIMARY KEY (id),
 	UNIQUE (idea_id, attempt),
 	CONSTRAINT "runs.scoring needs a finished status" CHECK (scoring = 0 OR status IN ('succeeded', 'failed', 'timed_out')),
 	CONSTRAINT "runs.end is set once a run is finished" CHECK (("end" IS NULL) = (status IN ('queued', 'running'))),
@@ -390,7 +386,7 @@ CREATE TABLE runs (
 CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
 CREATE INDEX ix_runs_status ON runs (status);
 CREATE TABLE candidates (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	campaign_id INTEGER NOT NULL,
 	run_id INTEGER,
 	parent_id INTEGER,
@@ -403,7 +399,6 @@ CREATE TABLE candidates (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
-	PRIMARY KEY (id),
 	UNIQUE (campaign_id, tree_sha),
 	CONSTRAINT "candidates.summary must be a text value" CHECK (typeof(summary) IN ('text', 'null')),
 	CONSTRAINT "candidates.excluded_reason must be a text value" CHECK (typeof(excluded_reason) IN ('text', 'null')),
@@ -441,7 +436,7 @@ CREATE TABLE evaluations (
 	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id)
 );
 CREATE TABLE measurements (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	candidate_id INTEGER NOT NULL,
 	evaluator_id INTEGER NOT NULL,
 	metrics JSON DEFAULT '{}' NOT NULL,
@@ -450,7 +445,6 @@ CREATE TABLE measurements (
 	rung VARCHAR,
 	stopped VARCHAR,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	PRIMARY KEY (id),
 	CONSTRAINT "measurements.a stop is at a rung, with no error" CHECK (stopped IS NULL OR (rung IS NOT NULL AND error IS NULL)),
 	CONSTRAINT "measurements.rung must be a text value" CHECK (typeof(rung) IN ('text', 'null')),
 	CONSTRAINT "measurements.stopped must be a text value" CHECK (typeof(stopped) IN ('text', 'null')),

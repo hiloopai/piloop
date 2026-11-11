@@ -5,14 +5,17 @@ import os
 import signal
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 import pytest
 from moto import mock_aws
+from sqlalchemy import text
 
 from piloop.daemon.main import Daemon
 from piloop.db import terms
+from piloop.db.ids import EXACT, SHIFT
 from piloop.plugins.leader.contract import Term, Unreachable
 from piloop.settings import Settings
 
@@ -66,6 +69,9 @@ def test_a_second_daemon_waits_as_a_standby_and_takes_the_next_term_when_the_fir
     second = standby[0]
     try:
         assert epochs(second) == 2, 'its own home counts on from the epoch in the bucket'
+        with second.db.session() as s:
+            lifted = s.scalar(text("SELECT min(seq) FROM sqlite_sequence WHERE name IN ('leases', 'events', 'runs')"))
+        assert lifted is not None and lifted >= 2 << SHIFT, 'its first transaction lifted the ids past those of term 1'
     finally:
         second.shutdown(timeout=5)
 
@@ -100,3 +106,11 @@ def test_a_standby_stops_on_sigterm_and_a_holder_that_cannot_release_says_so(
         monkeypatch.setattr(first._leader, 'release', unreachable)
         first.shutdown(timeout=5)
     assert ('term.not_released', {'error': 'as the test says'}) in events
+
+
+def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_path: Path, bucket: None) -> None:
+    last = EXACT // (1 << SHIFT) - 1
+    ended = Term(epoch=last, holder='old/1', until=datetime(2026, 1, 1, tzinfo=UTC))
+    boto3.client('s3').put_object(Bucket=BUCKET, Key='cell/term.json', Body=ended.model_dump_json().encode())
+    with pytest.raises(SystemExit, match=f'the daemon does not start: term {last + 1} would hand out ids past 2'):
+        Daemon(home(tmp_path, 'a'))

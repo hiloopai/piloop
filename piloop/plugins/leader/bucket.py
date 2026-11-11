@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Self
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
+from sqlalchemy.orm import Session
 
-from piloop.db import terms
+from piloop.db import ids, terms
 from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.plugins.leader.contract import LeaderConfig, LeaderHost, LostTerm, Renewal, Term, Unreachable
@@ -131,6 +132,14 @@ class BucketTerms:
     def release(self, term: Term) -> None:
         self._again(term, self._clock())
         self._held = None
+
+    def begin(self, s: Session, term: Term) -> None:
+        """Lift the id sequences past every id of an earlier term: a restore may have lost some (decision 17).
+
+        Raises:
+            IdsExhausted: The term's ids would pass 2^53.
+        """
+        ids.lift(s, ids.floor(term.epoch))
 
     def current(self) -> Term | None:
         record, _ = self._read()

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
 from piloop.db.session import Database
 from piloop.plugins.host import Capability, One, Parameters, Scope
@@ -97,6 +98,17 @@ class Leader(Protocol):
 
     def current(self) -> Term | None:
         """The term that a daemon holds now, or None."""
+        ...
+
+    def begin(self, s: Session, term: Term) -> None:
+        """Write what the provider needs in ``term``'s first transaction, before the daemon writes anything else.
+
+        A provider whose term may follow a restore lifts the id sequences there (``piloop.db.ids.lift``). The caller
+        commits.
+
+        Raises:
+            IdsExhausted: The term's ids would pass 2^53 (``piloop.db.ids.floor``): the daemon does not start.
+        """
         ...
 
 

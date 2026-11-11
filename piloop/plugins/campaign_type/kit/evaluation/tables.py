@@ -70,6 +70,7 @@ class Measurement(Base):
             name='measurements.a stop is at a rung, with no error',
         ),
         *text_checks('measurements', nullable=('rung', 'stopped')),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[MeasurementId] = mapped_column(primary_key=True)

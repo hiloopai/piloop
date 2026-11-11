@@ -53,6 +53,7 @@ class Idea(Tracked, Base):
         # the queue: the pass and the widget read the ``ready`` ideas of one campaign in priority order
         Index('ix_ideas_campaign_status_priority', 'campaign_id', 'status', 'priority'),
         *text_checks('ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'provenance')),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[IdeaId] = mapped_column(primary_key=True)

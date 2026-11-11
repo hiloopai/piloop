@@ -54,6 +54,7 @@ class Candidate(Tracked, Base):
         CheckConstraint(
             '(excluded_reason IS NULL) = (excluded_by IS NULL)', name='candidates.an exclusion has its author'
         ),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[CandidateId] = mapped_column(primary_key=True)

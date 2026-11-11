@@ -673,6 +673,7 @@ class Comment(Tracked, Base):
         CheckConstraint("in_reply_to IS NULL OR target_kind = 'comment'", name='reply_is_on_a_comment'),
         CheckConstraint("target_kind != 'home'", name='comment_not_on_home'),
         *text_checks('comments', 'author', 'body'),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[CommentId] = mapped_column(primary_key=True)
@@ -814,6 +815,7 @@ class Event(Base):
         Index('ix_events_target', 'target_kind', 'target_id', 'id'),
         # the asks of a kind and whether a newer one exists (``piloop.db.requests.pending``)
         Index('ix_events_kind', 'kind', 'target_kind', 'target_id', 'id'),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

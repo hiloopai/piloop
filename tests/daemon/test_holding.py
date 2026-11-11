@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.orm import Session
 
 from piloop.daemon import holding as module
 from piloop.daemon.holding import ENDED_EXIT, Holding, deadline
@@ -46,6 +47,9 @@ class Fake:
 
     def current(self) -> Term | None:
         return None
+
+    def begin(self, s: Session, term: Term) -> None:
+        pass
 
 
 @dataclass

@@ -1773,3 +1773,76 @@ def test_executor_0002_keeps_each_built_first_transfer_and_downgrades_to_the_bui
     command.downgrade(chain, '0001')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert con.execute('SELECT campaign_id, revision, blob FROM first_transfers').fetchall() == [(1, 'r1', 'b1')]
+
+
+def _schema_of(path: Path, table: str) -> tuple[str, list[str], list[str], int | None]:
+    """The table's SQL, its indexes' and triggers' SQL, and its AUTOINCREMENT sequence."""
+    with closing(sqlite3.connect(path)) as con:
+        sql = con.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()[0]
+        indexes = [
+            r[0]
+            for r in con.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+                (table,),
+            )
+        ]
+        triggers = [
+            r[0]
+            for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' AND sql LIKE '%' || ? || '%' ORDER BY name",
+                (table,),
+            )
+        ]
+        seq = con.execute('SELECT seq FROM sqlite_sequence WHERE name = ?', (table,)).fetchone()
+    return sql, indexes, triggers, None if seq is None else seq[0]
+
+
+def test_0090_counts_events_and_comments_with_autoincrement_keeps_rows_indexes_triggers_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0089')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human', 'home', 0, '{\"kind\": \"x.y\"}')"
+        )
+        con.execute(
+            "INSERT INTO comments (target_kind, target_id, author, body, priority) VALUES ('campaign', 1, 'human', 'hm', 1)"
+        )
+    before = {t: _schema_of(path, t) for t in ('events', 'comments')}
+    command.upgrade(cfg, '0090')
+    for table, (sql, indexes, triggers, seq) in {t: _schema_of(path, t) for t in ('events', 'comments')}.items():
+        assert 'id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT' in sql and 'PRIMARY KEY (id)' not in sql, table
+        assert (indexes, triggers, seq) == (before[table][1], before[table][2], 1), f'{table}: its indexes and triggers'
+    assert any('WHERE priority IS NOT NULL' in i for i in before['comments'][1]), 'the partial index is kept'
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, kind FROM events').fetchall() == [(1, 'x.y')], (
+            'the generated kind still computes'
+        )
+        assert con.execute('SELECT id, body FROM comments').fetchall() == [(1, 'hm')]
+        assert con.execute("SELECT rowid FROM comments_fts WHERE comments_fts MATCH 'hm'").fetchall() == [(1,)]
+    command.downgrade(cfg, '0089')
+    for table in ('events', 'comments'):
+        sql, indexes, triggers, _ = _schema_of(path, table)
+        assert 'AUTOINCREMENT' not in sql and 'PRIMARY KEY (id)' in sql
+        assert (indexes, triggers) == (before[table][1], before[table][2]), table
+
+
+def test_optimization_0013_counts_runs_candidates_ideas_and_measurements_with_autoincrement_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, 'head')
+    tables = ('runs', 'candidates', 'ideas', 'measurements')
+    head = {t: _schema_of(path, t) for t in tables}
+    command.downgrade(chain, '0012')
+    for table in tables:
+        sql, indexes, triggers, _ = _schema_of(path, table)
+        assert 'AUTOINCREMENT' not in sql and (indexes, triggers) == head[table][1:3], table
+    command.upgrade(chain, '0013')
+    assert {t: _schema_of(path, t)[:3] for t in tables} == {t: v[:3] for t, v in head.items()}, (
+        'as the models make them'
+    )

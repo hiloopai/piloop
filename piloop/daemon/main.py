@@ -25,6 +25,7 @@ from piloop.daemon.serve import (
 from piloop.daemon.served import Served
 from piloop.daemon.tier import CLOSE_SECONDS as API_CLOSE_SECONDS, ApiProcesses, NotServing
 from piloop.db import terms
+from piloop.db.ids import IdsExhausted
 from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import schemas
 from piloop.db.session import (
@@ -166,6 +167,10 @@ class Daemon:
             """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
             with self.db.session() as s:
                 write_transaction(s)
+                try:
+                    self._leader.begin(s, self._term)
+                except IdsExhausted as e:
+                    raise SystemExit(f'the daemon does not start: {e}') from e
                 epoch = terms.begin(s, self._term.epoch, os.getpid(), None).epoch
                 s.commit()
             self._epoch = epoch

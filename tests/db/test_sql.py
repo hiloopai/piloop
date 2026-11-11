@@ -436,18 +436,18 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
                 '{"kind":"comment.deleted","target_kind":"idea","target_id":1,"author":"me","comment_kind":"note","body":"hi"}',
             ),
             (
-                'candidate.deleted',
-                'human',
-                'candidate',
-                1,
-                '{"kind":"candidate.deleted","tree_sha":"tree","revision":"sha","origin":"run"}',
-            ),
-            (
                 'idea.deleted',
                 'human',
                 'idea',
                 1,
                 '{"kind":"idea.deleted","title":"t","status":"open","hypothesis":"h"}',
+            ),
+            (
+                'candidate.deleted',
+                'human',
+                'candidate',
+                1,
+                '{"kind":"candidate.deleted","tree_sha":"tree","revision":"sha","origin":"run"}',
             ),
         ]
     ), 'a cascade deletes the child rows too, and each one leaves a tombstone'
