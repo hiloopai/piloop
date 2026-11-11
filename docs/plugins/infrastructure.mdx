@@ -376,7 +376,7 @@ The **leader** decides which daemon writes a home, for how long, and with which 
 `config.toml` selects it. `local`, built in and the default, is for a home that one host serves: the daemon's lock on
 its pid file already makes it the only one. `bucket` keeps the term in an S3 object, for one home on several hosts. A
 second `piloop serve` waits as a standby until the term is free, and the holder stops writing when it cannot renew
-its term in time. A standby starts with its own home's files: it takes over the term, not the data. Run a standby with
+its term in time. A standby starts with its own home's files: it takes over the term, not the data. Under `bucket`, register campaigns by their URL (`piloop init <url>`): a checkout of your own is refused, since another host could not make it again. Run a standby with
 `piloop serve` (under systemd or Kubernetes): `piloop start` waits for a daemon that serves, and a standby does not
 serve until it holds the term.
 

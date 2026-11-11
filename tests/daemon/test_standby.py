@@ -3,8 +3,10 @@ next term once the first stops."""
 
 import os
 import signal
+import sqlite3
 import threading
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -114,3 +116,14 @@ def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_pat
     boto3.client('s3').put_object(Bucket=BUCKET, Key='cell/term.json', Body=ended.model_dump_json().encode())
     with pytest.raises(SystemExit, match=f'the daemon does not start: term {last + 1} would hand out ids past 2'):
         Daemon(home(tmp_path, 'a'))
+
+
+def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(tmp_path: Path, bucket: None) -> None:
+    """Another host could not make its repo again: the daemon refuses before it takes the term."""
+    first = home(tmp_path, 'a')
+    Daemon(first).shutdown(timeout=5)
+    with closing(sqlite3.connect(first.home / 'piloop.db')) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('mine', '/srv/mine', '{}')")
+        con.commit()
+    with pytest.raises(SystemExit, match='^the daemon does not start: /srv/mine is a checkout of your own'):
+        Daemon(first)

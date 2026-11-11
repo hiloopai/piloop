@@ -138,6 +138,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.escalation.contract import ESCALATION
+from piloop.plugins.leader.contract import LEADERS
 from piloop.plugins.limits import live_keys
 from piloop.plugins.secrets import contract as secrets
 from piloop.plugins.section.contract import Rendering, rendered
@@ -459,6 +460,8 @@ def register_campaign(api: Api, s: Writing, me: Acting, body: Registration) -> R
 def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tuple[Campaign, Candidate]:
     match body:
         case Checkout():
+            if (why := LEADERS.selected(api.cfg.providers).refuses(api.cfg.home, FilePath(body.path))) is not None:
+                raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, why)
             return register(s, FilePath(body.path), me, body.name)
         case Clone(clone=remote):
             vcs, credential = VCS.selected(api.cfg.providers), _credential(api, s, remote.credential)

@@ -580,3 +580,17 @@ def test_a_campaign_whose_stored_config_is_invalid_is_listed_as_such_and_the_oth
     status, paused = capsys.readouterr().out.split('campaign broken paused')
     assert 'demo #1' in status and 'broken #2' in status and 'fix: `piloop init /elsewhere`' in status, status
     assert paused.startswith('; its stored config is invalid, fix it with `piloop init /elsewhere`;'), paused
+
+
+def test_under_the_bucket_leader_a_checkout_of_ones_own_does_not_register(
+    db: Database, campaign_path: Path, cfg: Settings
+) -> None:
+    (cfg.home / 'config.toml').write_text('[plugins.leader]\nprovider = "bucket"\nurl = "s3://piloop-api/cell"\n')
+    bucket = Settings(home=cfg.home)
+    with (
+        serving_api(bucket),
+        EveryClient.on(bucket.socket_file, System.HUMAN) as client,
+        pytest.raises(Refused, match=f'^{campaign_path} is a checkout of your own') as refused,
+    ):
+        client.register_campaign(Checkout(path=str(campaign_path)))
+    assert refused.value.error == Problem.REFUSED

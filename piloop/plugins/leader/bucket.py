@@ -18,12 +18,14 @@ that name this provider. Credentials are boto3's own chain: the environment, a p
 import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Self
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
+from piloop.campaign.campaigns import REPOS
 from piloop.db import ids, terms
 from piloop.db.models import utcnow
 from piloop.db.session import Database
@@ -71,6 +73,14 @@ class BucketLeader(LeaderConfig):
         if not self.renew < self.deadline < self.ttl:
             raise ValueError(f'renew ({self.renew}) < deadline ({self.deadline}) < ttl ({self.ttl}) does not hold')
         return self
+
+    def refuses(self, home: Path, checkout: Path) -> str | None:
+        if checkout.resolve().is_relative_to((home / REPOS).resolve()):
+            return None
+        return (
+            f"{checkout} is a checkout of your own: under the bucket leader, another host makes a campaign's repo again"
+            ' from its clone, so register it by its URL (`piloop init <url>`)'
+        )
 
     def open(self, host: LeaderHost) -> BucketTerms:
         return BucketTerms(self, host.db)

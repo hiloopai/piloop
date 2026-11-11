@@ -466,3 +466,15 @@ def test_the_source_check_never_waits_for_a_password(
     with pytest.raises(upgrade.InstallError, match='failed: exit 128'):
         upgrade.newer(cfg.uv_tool_dir, git_install('main'))
     assert seen.read_text().strip() == 'stdin=[] prompt=0 askpass=[] ssh=ssh -o BatchMode=yes'
+
+
+def test_under_the_bucket_leader_a_campaign_with_a_checkout_of_its_own_fails_with_the_fix(
+    cfg: Settings, campaign: Campaign
+) -> None:
+    (cfg.home / 'config.toml').write_text('[plugins.leader]\nprovider = "bucket"\nurl = "s3://piloop-doctor/cell"\n')
+    check = by_name(Settings(home=cfg.home, uv_tool_dir=cfg.uv_tool_dir))['campaign demo checkout']
+    assert (check.severity, check.found.split(':')[0], check.fix) == (
+        Severity.FAIL,
+        f'{campaign.path} is a checkout of your own',
+        doctor.FIX_CHECKOUT,
+    )

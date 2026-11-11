@@ -4,6 +4,7 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import boto3
 import pytest
@@ -16,6 +17,7 @@ from piloop.db import terms
 from piloop.db.session import Database
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms
 from piloop.plugins.leader.contract import LostTerm, Term, Unreachable
+from piloop.plugins.leader.local import LocalLeader
 
 BUCKET = 'piloop-terms'
 URL = f's3://{BUCKET}/homes/one'
@@ -177,3 +179,13 @@ def test_only_s3_urls_and_timings_in_order(db: Database, client: S3Client) -> No
     with pytest.raises(ValidationError, match='renew'):
         BucketLeader(url=URL, renew=timedelta(seconds=20))
     assert BucketTerms(BucketLeader(url=f's3://{BUCKET}/'), db, client).key == 'term.json', 'at the root of the bucket'
+
+
+def test_a_checkout_that_piloop_did_not_clone_is_refused_and_local_refuses_none(tmp_path: Path) -> None:
+    """Another host makes a campaign's repo again from its clone: a checkout of one's own has none."""
+    bucket = BucketLeader(url=URL)
+    assert bucket.refuses(tmp_path, tmp_path / 'repos' / '3') is None
+    assert (why := bucket.refuses(tmp_path, tmp_path / 'mine')) is not None and why.startswith(
+        f'{tmp_path / "mine"} is'
+    )
+    assert LocalLeader().refuses(tmp_path, tmp_path / 'mine') is None

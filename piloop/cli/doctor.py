@@ -31,6 +31,7 @@ from piloop.db.models import utcnow
 from piloop.db.session import described, heads, schema_mismatch, stamps
 from piloop.ids import CampaignId, CampaignStatus
 from piloop.plugins.host import Check, PluginError, Scope, Severity, declared, in_use, refs
+from piloop.plugins.leader.contract import LEADERS
 from piloop.plugins.secrets.contract import SECRETS, SecretKey
 from piloop.settings import Settings
 from piloop.text import age
@@ -54,6 +55,13 @@ class StoredCampaign:
     def severity(self) -> Severity:
         """What a problem of the campaign's own means: a warning while it is stopped, as it runs nothing until then."""
         return Severity.WARN if self.status is CampaignStatus.STOPPED else Severity.FAIL
+
+
+FIX_CHECKOUT = (
+    '`piloop campaign retire` it and register it again by its URL (`piloop init <url>`), or choose another'
+    ' `[plugins.leader]`'
+)
+"""What fixes a campaign whose checkout the home's leader provider refuses: the daemon does not start until then."""
 
 
 def checks(cfg: Settings) -> list[Check]:
@@ -80,6 +88,11 @@ def checks(cfg: Settings) -> list[Check]:
             *first,
             *map(_campaign, campaigns),
             *(_digits(c) for c in campaigns if c.name.isdigit()),
+            *(
+                Check(f'campaign {c.name} checkout', why, FIX_CHECKOUT, Severity.FAIL)
+                for c in campaigns
+                if (why := LEADERS.selected(cfg.providers).refuses(cfg.home, Path(c.path))) is not None
+            ),
             *(
                 Check(f'campaign {c.name} brief', str(long), REWRITE_BRIEF, Severity.WARN)
                 for c in campaigns

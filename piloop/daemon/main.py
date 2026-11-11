@@ -7,7 +7,10 @@ import sys
 import threading
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from types import FrameType
+
+from sqlalchemy import select
 
 from piloop.actor import System
 from piloop.daemon.api import daemon_state
@@ -26,7 +29,7 @@ from piloop.daemon.served import Served
 from piloop.daemon.tier import CLOSE_SECONDS as API_CLOSE_SECONDS, ApiProcesses, NotServing
 from piloop.db import terms
 from piloop.db.ids import IdsExhausted
-from piloop.db.models import TARGET_KINDS
+from piloop.db.models import TARGET_KINDS, Campaign
 from piloop.db.schema import schemas
 from piloop.db.session import (
     BackupFailed,
@@ -38,6 +41,7 @@ from piloop.db.session import (
     write_transaction,
 )
 from piloop.db.triggers.changelog import COMMENT_KINDS
+from piloop.ids import CampaignStatus
 from piloop.net.server import GRACE_SECONDS, Server, listening, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
@@ -162,7 +166,13 @@ class Daemon:
             except OlderDaemon, SchemaMismatch, BackupFailed:
                 self.db.close()
                 raise
-            self._leader: Leader = LEADERS.selected(cfg.providers).open(LeaderHost(self.db))
+            leader = LEADERS.selected(cfg.providers)
+            with self.db.session() as s:
+                live = s.scalars(select(Campaign).where(Campaign.status != CampaignStatus.RETIRED)).all()
+                refused = [why for c in live if (why := leader.refuses(cfg.home, Path(c.path))) is not None]
+            if refused:
+                raise SystemExit(f'the daemon does not start: {"; ".join(refused)}')
+            self._leader: Leader = leader.open(LeaderHost(self.db))
             self._term = self._take()
             """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
             with self.db.session() as s:

@@ -3,6 +3,7 @@
 | Member | What it is |
 |---|---|
 | `LeaderConfig.open(host: LeaderHost) -> Leader` | Open the record of the home's terms. The daemon calls it once, before it takes a term. |
+| `LeaderConfig.refuses(home: Path, checkout: Path) -> str \| None` | Why this provider cannot serve a campaign whose checkout is `checkout`, or None: it can. |
 | `Leader.take(holder: str, url: str \| None, stop: threading.Event) -> Term \| None` | Take the next term for `holder`, waiting as long as another holds one. None once `stop` is set. |
 | `Leader.renew(term: Term) -> Term` | `term` again, ending later. |
 | `Leader.release(term: Term) -> None` | End `term` now: the holder wrote its last. Another daemon may take the next one at once. |
