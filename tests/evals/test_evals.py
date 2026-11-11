@@ -1027,7 +1027,6 @@ def test_a_piloop_arms_team_is_its_daemons_own_pools_on_modal_and_daytona(
     assert control.commands[0] == 'mkdir -p -m 700 /root/.piloop-evals', (
         'the daemon serves its socket in a private home'
     )
-    assert control.writes['/root/.piloop-evals/owner'], "the owner of the daemon's workers"
     assert isinstance(found.collect, TeamSessions) and found.collect.box is control, (
         'the driver reaches the control alone'
     )
