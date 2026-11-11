@@ -154,6 +154,10 @@ HOLDER: ContextVar[object | None] = ContextVar('piloop_db_holder', default=None)
 """Who holds the connections that the pool hands out now: a request that a server serves sets its own, else the
 thread holds them. A request's session can wait at a ``yield`` while its thread serves another request, so the thread
 is not its holder."""
+WRITER: ContextVar[Callable[[], str] | None] = ContextVar('piloop_db_writer', default=None)
+"""What runs the write transactions of the current context, as each ``WRITE_SPAN`` names it (``writer``): a request's
+route, which a server sets, or a consumer of the daemon's loop. Unset, the thread's name without its numbers."""
+_NUMBERED = re.compile(r'[-_]?\d+')
 POOL_SIZE, POOL_OVERFLOW = 5, 10
 """The pool's connections, SQLAlchemy's defaults: ``POOL_SIZE`` kept open, and up to ``POOL_OVERFLOW`` more."""
 POOL_CONNECTIONS = POOL_SIZE + POOL_OVERFLOW
@@ -176,7 +180,8 @@ class MeasuredConnection(sqlite3.Connection):
 
     A transaction asks for the write lock at its first write statement, or at ``BEGIN IMMEDIATE``, and waits for it up
     to the busy timeout. ``wait_ms`` lasts until that statement ends, with the lock or with ``database is locked``, and
-    ``hold_ms`` from then until the commit or the rollback ends. The span carries no SQL and no values.
+    ``hold_ms`` from then until the commit or the rollback ends. The span carries no SQL and no values: only ``writer``,
+    what ran the transaction (``WRITER``).
 
     It hooks the driver, not SQLAlchemy's events: one listener for each statement makes SQLAlchemy dispatch all of its
     connection events, which costs about 25 µs a transaction.
@@ -221,7 +226,15 @@ class MeasuredConnection(sqlite3.Connection):
         (start, held), self._write = self._write, None
         end = time.time_ns()
         if end - start >= self._slow_ns:
-            self._measures.record(WRITE_SPAN, start, end, wait_ms=(held - start) / 1e6, hold_ms=(end - held) / 1e6)
+            self._measures.record(
+                WRITE_SPAN, start, end, wait_ms=(held - start) / 1e6, hold_ms=(end - held) / 1e6, writer=writer()
+            )
+
+
+def writer() -> str:
+    """What runs the current context's write transactions (``WRITER``)."""
+    named = WRITER.get()
+    return named() if named is not None else _NUMBERED.sub('', threading.current_thread().name)
 
 
 class _MeasuredCursor(sqlite3.Cursor):

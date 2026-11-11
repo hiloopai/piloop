@@ -10,23 +10,26 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2 as httpx
 import pytest
 from covalence import Cid
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel, ValidationError
 
 from piloop.api.contract import Access, Polled
-from piloop.daemon.main import preflight
+from piloop.daemon.main import ACTOR, preflight
 from piloop.db.events import Topic
 from piloop.db.models import Campaign, Pause
-from piloop.db.session import Database
+from piloop.db.session import WRITE_SPAN, Database, WriteSpans
 from piloop.db.triggers.changelog import CampaignPausedChanged
 from piloop.net import Route, cas_server, tokens
 from piloop.net.cas import route
 from piloop.net.server import App, Server, app, executor_router, listening
 from piloop.net.tokens import Caller, Tokens
+from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.cas.contract import BLAKE3
 from piloop.plugins.cas.disk import DiskCas
@@ -291,6 +294,32 @@ def test_config_toml_selects_the_network_and_listen_overrides_its_address(tmp_pa
     (tmp_path / 'config.toml').write_text('[plugins.network]\nprovider = "https"\nlisten = "0.0.0.0:8443"\n')
     with pytest.raises(plugins.PluginError, match='is not loopback'):
         preflight(Settings(home=tmp_path))
+
+
+def test_a_write_in_a_request_names_its_route(
+    serving: Serving,
+    token: Callable[..., str],
+    dial: Dial,
+    db: Database,
+    campaign: Campaign,
+    tracer: Tracer,
+    spans: InMemorySpanExporter,
+) -> None:
+    assert tracer.measures is not None
+    measured = Database(str(db.engine.url), actor=ACTOR, writes=WriteSpans(tracer.measures, timedelta(0)))
+
+    def rename(caller: Caller, ask: Ask) -> Answer | None:
+        with measured.session() as s:
+            s.get_one(Campaign, campaign.id).name = ask.text
+            s.commit()
+        return None
+
+    with serving([Route('rename', Ask, rename)]) as server, dial(server.url, token()) as client:
+        assert client.post('/v1/executor/rename', json=HI).status_code == 204
+    measured.close()
+    assert {(s.attributes or {})['writer'] for s in spans.get_finished_spans() if s.name == WRITE_SPAN} == {
+        'POST /v1/executor/rename'
+    }
 
 
 class Poll(Polled):

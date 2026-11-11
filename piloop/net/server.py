@@ -14,6 +14,7 @@ import ssl
 import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated
@@ -32,7 +33,7 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from piloop.api.client import SOCKET_ACTOR_HEADER
 from piloop.api.contract import GRANTS, Access, Problem
-from piloop.db.session import HOLDER, Watch
+from piloop.db.session import HOLDER, WRITER, Watch
 from piloop.db.sql import BUSY_TIMEOUT_MS, busy
 from piloop.net import InvalidBody, Refusal, Route
 from piloop.net.acting import OWNER
@@ -110,17 +111,27 @@ def _peer(request: Request) -> Peer:
 
 
 class _HoldsItsConnections:
-    """Each request holds its own database connections (``HOLDER``), whichever threads run its parts."""
+    """Each request holds its own database connections (``HOLDER``), whichever threads run its parts.
+
+    Its route names its writes (``WRITER``).
+    """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        token = HOLDER.set(object())
+        token, named = HOLDER.set(object()), WRITER.set(partial(_route, scope))
         try:
             await self.app(scope, receive, send)
         finally:
+            WRITER.reset(named)
             HOLDER.reset(token)
+
+
+def _route(scope: Scope) -> str:
+    """The method and the path template of the route that serves ``scope``: the router sets it once it matched."""
+    route = scope.get('route')
+    return f'{scope.get("method", scope["type"])} {route.path if isinstance(route, APIRoute) else "?"}'
 
 
 class App(FastAPI):

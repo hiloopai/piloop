@@ -3,6 +3,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from piloop.db.session import (
     POOL_CONNECTIONS,
     POOL_WAIT_SPAN,
     WRITE_SPAN,
+    WRITER,
     Database,
     DatabaseClosed,
     MeasuredConnection,
@@ -108,7 +110,7 @@ def test_a_contended_write_records_its_wait_for_the_lock(
         s.commit()
 
     [span] = writes(spans)
-    assert dict(span.attributes or {}).keys() == {'wait_ms', 'hold_ms'}
+    assert dict(span.attributes or {}).keys() == {'wait_ms', 'hold_ms', 'writer'}
     assert ms(span, 'wait_ms') >= RELEASE_SECONDS * 1000
 
 
@@ -135,6 +137,27 @@ def test_a_long_write_records_its_hold_and_prints_nothing(
     [span] = writes(spans)
     assert ms(span, 'hold_ms') >= RELEASE_SECONDS * 1000
     assert WRITE_SPAN not in capsys.readouterr().err  # exported, never printed
+
+
+def test_a_write_names_its_thread_without_its_numbers_unless_its_context_names_the_writer(
+    measured: Database, campaign: Campaign, spans: InMemorySpanExporter
+) -> None:
+    def write() -> None:
+        with measured.session() as s:
+            explicit(s, campaign)
+            time.sleep(RELEASE_SECONDS)
+            s.commit()
+
+    agent = threading.Thread(target=write, name='agent_12')
+    agent.start()
+    agent.join()
+    named = WRITER.set(partial(str, 'wind_down'))
+    try:
+        write()
+    finally:
+        WRITER.reset(named)
+
+    assert [(s.attributes or {})['writer'] for s in writes(spans)] == ['agent', 'wind_down']
 
 
 @pytest.mark.parametrize(('slow', 'recorded'), [(timedelta(0), 1), (timedelta(days=1), 0)])

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from piloop.db.events import Topic
 from piloop.db.feed import newest
 from piloop.db.models import Event, EventModel, UnknownEvent, utcnow
-from piloop.db.session import Database
+from piloop.db.session import WRITER, Database
 from piloop.settings import settings
 
 type Kinds = frozenset[type[EventModel]]
@@ -192,7 +192,11 @@ class Loop:
 
     def _run(self, consumers: Sequence[Consumer], turn: Turn) -> None:
         for consumer in consumers:
-            self._due[consumer.name] = consumer.run(turn)
+            named = WRITER.set(partial(str, consumer.name))
+            try:
+                self._due[consumer.name] = consumer.run(turn)
+            finally:
+                WRITER.reset(named)
 
 
 def routes(consumers: Sequence[Consumer], models: Mapping[str, type[EventModel]]) -> dict[str, list[str]]:

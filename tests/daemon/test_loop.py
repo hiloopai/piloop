@@ -11,16 +11,18 @@ from pathlib import Path
 
 import pytest
 from inline_snapshot import snapshot
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 import piloop
 from piloop.actor import System
 from piloop.daemon.loop import Consumer, Loop, Phase, Turn, routes
+from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import Topic, emit
 from piloop.db.models import AgentSession, Campaign, EventModel, ReadBy, UnknownEvent, utcnow
-from piloop.db.session import Database
+from piloop.db.session import WRITE_SPAN, Database, WriteSpans
 from piloop.db.triggers.changelog import IdeaCreated, LimitSet
 from piloop.ids import TargetKind, TargetRef
 from piloop.otel import Tracer
@@ -253,6 +255,18 @@ def test_a_turn_runs_each_consumer_that_an_event_routes_to_or_whose_due_came_onc
     loop.wake('ideas')
     loop.turn()
     assert len(ideas.turns) == 3, 'woken without an event: a thread of the process ended'
+
+
+def test_the_writes_of_a_consumer_name_it(db: Database, tracer: Tracer, spans: InMemorySpanExporter) -> None:
+    assert tracer.measures is not None
+    measured = Database(str(db.engine.url), actor=ACTOR, writes=WriteSpans(tracer.measures, timedelta(0)))
+
+    def note(_turn: Turn) -> None:
+        add(measured, LimitSet(key='k', value=1))
+
+    Loop(measured, [Consumer('noter', frozenset(), note, Phase.PLAN)]).start()
+    measured.close()
+    assert {(s.attributes or {})['writer'] for s in spans.get_finished_spans() if s.name == WRITE_SPAN} == {'noter'}
 
 
 def test_a_turn_runs_the_phases_in_order_and_the_consumers_of_one_in_the_order_given(
