@@ -34,7 +34,7 @@ from piloop.plugins.executor.kit import scaling
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.client import Dismissed, Local
 from piloop.plugins.executor.kit.leases import Drain, Grant, Leases, WorkerDrained
-from piloop.plugins.executor.kit.scaling import InstanceEnded, InstanceRegistered, Scaler
+from piloop.plugins.executor.kit.scaling import InstanceEnded, InstanceRegistered, Scaler, owner
 from piloop.plugins.executor.kit.tables import (
     INSTANCE,
     InstanceEnd,
@@ -108,9 +108,7 @@ class Server:
 def server(db: Database, home: Path, found: Mapping[str, Pool]) -> Server:
     network = Https(url=URL).open(NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets())))
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, found)
-    scaler = Scaler.of(
-        db, leases.live_pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone, leases.forget
-    )
+    scaler = Scaler.of(db, leases.live_pools, network, Tracer(None), TIMING, _worker_argv, leases.gone, leases.forget)
     return Server(db, leases, scaler)
 
 
@@ -550,3 +548,9 @@ def test_a_restarted_daemon_gives_a_silent_worker_a_full_toleration_before_it_is
     again = server(db, tmp_path / 'home', pools(platform, min=1))
     again.scaler.reconcile(utcnow())
     assert [row.state for row in again.live()] == [WorkerInstanceState.RUNNING]
+
+
+def test_the_owner_id_is_made_once_and_lives_in_the_database(db: Database) -> None:
+    """A home restored on another host keeps it: its instances stay its own."""
+    first = owner(db)
+    assert len(first) == 32 and owner(db) == first

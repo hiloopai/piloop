@@ -178,5 +178,18 @@ class FirstTransfer(Base):
     error: Mapped[str | None]
 
 
-TABLES = (LeaseWorker, WorkerInstance, FirstTransfer)
+class Owner(Base):
+    """This server's owner id: what tags the instances that its provisioners start (``ProvisionerHost.owner``).
+
+    One row, made once. It is in the database, not a file of the home, so that a home restored on another host still
+    finds its instances as its own.
+    """
+
+    __tablename__ = 'owners'
+    __table_args__ = (*text_checks('owners'),)
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+
+
+TABLES = (LeaseWorker, WorkerInstance, FirstTransfer, Owner)
 SCHEMA = Schema(tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES), internal=TABLES)

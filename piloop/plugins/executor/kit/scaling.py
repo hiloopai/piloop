@@ -34,7 +34,6 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import ClassVar, Literal
 
 from sqlalchemy import func, select
@@ -64,7 +63,14 @@ from piloop.plugins.executor.kit.capacity import (
     times,
 )
 from piloop.plugins.executor.kit.leases import LeaseExpired, LeaseQueued, LeaseUnreachable, Timing, WorkerDrained
-from piloop.plugins.executor.kit.tables import INSTANCE, InstanceEnd, LeaseWorker, WorkerInstance, WorkerInstanceState
+from piloop.plugins.executor.kit.tables import (
+    INSTANCE,
+    InstanceEnd,
+    LeaseWorker,
+    Owner,
+    WorkerInstance,
+    WorkerInstanceState,
+)
 from piloop.plugins.network.contract import Network, NotEnrolled
 from piloop.plugins.provisioner.contract import (
     Instance,
@@ -84,8 +90,6 @@ doubling up to the most. The cluster autoscaler backs a node group off the same 
 REFUSALS = 3
 """The refused starts in a row after which the pool escalates to the inbox."""
 ESCALATION_PRIORITY = 1
-OWNER_FILE = 'owner'
-"""The file under the home that holds this server's owner id (``ProvisionerHost.owner``), made once."""
 DAY = timedelta(hours=24)
 
 
@@ -122,13 +126,16 @@ WAKES = (Topic(LeaseQueued), Topic(LeaseExpired), Topic(LeaseUnreachable), Topic
 """The events that start a pass: a job waits, a worker went silent or lost a lease, a worker was drained."""
 
 
-def owner(home: Path) -> str:
-    """This server's owner id, from ``<home>/owner``: made the first time."""
-    path = home / OWNER_FILE
-    if not path.is_file():
-        home.mkdir(parents=True, exist_ok=True)
-        path.write_text(uuid.uuid4().hex)
-    return path.read_text().strip()
+def owner(db: Database) -> str:
+    """This server's owner id (``Owner``): made the first time."""
+    with db.session() as s:
+        write_transaction(s)
+        found = s.scalar(select(Owner.id))
+        if found is None:
+            found = uuid.uuid4().hex
+            s.add(Owner(id=found))
+        s.commit()
+        return found
 
 
 @dataclass(frozen=True)
@@ -205,13 +212,12 @@ class Scaler:
         network: Network,
         tracer: Tracer,
         timing: Timing,
-        home: Path,
         argv: Callable[[str, str, Provisioner], list[str]],
         gone: Callable[[str, str], None],
         forget: Callable[[str], None],
     ) -> Scaler:
         """Open the provisioner of each pool that has one, for this server's owner (``owner``)."""
-        host = ProvisionerHost(owner(home), tracer)
+        host = ProvisionerHost(owner(db), tracer)
         opened = {
             name: pool.provisioner.compute.open(host) for name, pool in pools().items() if pool.provisioner is not None
         }

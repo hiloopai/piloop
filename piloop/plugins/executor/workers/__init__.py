@@ -182,7 +182,6 @@ class WorkersExecutor:
             host.network,
             host.tracer,
             timing,
-            host.home,
             _worker_argv,
             self.leases.gone,
             self.leases.forget,

@@ -1872,3 +1872,19 @@ def test_optimization_0014_preserves_candidates_and_scopes_task_failures_per_cam
         assert con.execute('SELECT revision FROM candidates').fetchall() == [('commit',)]
         assert 'task_id' not in {row[1] for row in con.execute('PRAGMA table_info(candidates)')}
         assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='evaluation_task_failures'").fetchall()
+
+
+def test_executor_0003_moves_the_owner_id_from_its_file_into_the_database_and_downgrades(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'executor/workers', disk(tmp_path))
+    command.upgrade(chain, '0002')
+    (tmp_path / 'owner').write_text('abc123\n')
+    command.upgrade(chain, '0003')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT id FROM owners').fetchall() == [('abc123',)]
+    (tmp_path / 'owner').unlink()
+    command.downgrade(chain, '0002')
+    assert (tmp_path / 'owner').read_text() == 'abc123', 'the file again, for the code before'
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'owners'").fetchone() is None

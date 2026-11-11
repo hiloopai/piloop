@@ -53,7 +53,6 @@ from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.campaign.dirs import PROJECTS, TEAM_DB
 from piloop.config import CampaignConfig
-from piloop.plugins.executor.kit.scaling import OWNER_FILE
 from piloop.plugins.harness.claude import Claude
 from piloop.plugins.harness.codex import Codex, toml
 from piloop.plugins.harness.contract import Harness, Usage
@@ -695,9 +694,7 @@ def on_team(
                     }
                 )
                 evaluator_rate = compute_rate(Resources(cpu=settings.score_cpu, memory_mb=memory), settings)
-        owner = uuid.uuid4().hex
         control.run(f'mkdir -p -m 700 {PILOOP_HOME}')  # a daemon serves its socket only in a home that is its own
-        control.write(f'{PILOOP_HOME}/{OWNER_FILE}', owner.encode())
         control.write(CREDENTIALS, credentials(settings))
         control.write(f'{PILOOP_HOME}/config.toml', daytona.home_config(api, n, agents, e, evaluate).encode())
     except Exception:
