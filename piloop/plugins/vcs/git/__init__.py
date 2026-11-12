@@ -154,18 +154,16 @@ class GitRepository(Repository):
             self.version(revision)
         argv = ('--write-tree', '--name-only', f'--merge-base={base}', ours, theirs)
         code, out, err = self.repo.git.merge_tree(*argv, with_extended_output=True, with_exceptions=False)
+        if code not in (0, 1):  # 1 is a conflict; any other code is a failure, with nothing on stdout
+            raise VcsError(f'git merge-tree of {theirs} onto {ours} failed: {err.strip()}')
         listed, _, messages = out.partition('\n\n')
         tree, *paths = listed.splitlines()
-        match code:
-            case 0:
-                sha = self.repo.git.commit_tree(
-                    tree, '-p', ours, '-p', theirs, '-m', summary, env=git.commit_env(self.committer, self.committer)
-                )
-                return self._version(sha)
-            case 1:
-                return Conflict(paths=tuple(paths), detail=messages.strip())
-            case _:
-                raise VcsError(f'git merge-tree of {theirs} onto {ours} failed: {err.strip()}')
+        if code == 1:
+            return Conflict(paths=tuple(paths), detail=messages.strip())
+        sha = self.repo.git.commit_tree(
+            tree, '-p', ours, '-p', theirs, '-m', summary, env=git.commit_env(self.committer, self.committer)
+        )
+        return self._version(sha)
 
     def checkout(self, revision: Revision, path: Path) -> None:
         """A detached worktree."""
