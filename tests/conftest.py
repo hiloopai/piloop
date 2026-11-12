@@ -864,7 +864,7 @@ def serving_api(
     listener = listening(network)
     listeners = [local_listener(cfg.socket_file), *([] if listener is None else [listener])]
     reached = None if listener is None else url(listener)
-    answers = DaemonState(pid=os.getpid(), started=iso(utcnow()), listen=reached)
+    answers = DaemonState(pid=os.getpid(), epoch=0, started=iso(utcnow()), listen=reached)
     api = Handlers(db, cfg, answers, disk(cfg.home))
     routes = routes_of(route_host(db, cfg.home), {})
     routers = [r.router for r in routes]

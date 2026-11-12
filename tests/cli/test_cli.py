@@ -1749,7 +1749,7 @@ def test_status_shows_where_the_daemon_listens_and_a_restart_keeps_a_free_port(
     run_cli(['status'])
     assert out().splitlines()[0].endswith(f', listening on {url}')
     run_cli(['status', '--json'])
-    assert json.loads(out())['daemon'] | {'started': None} == {'pid': pid, 'started': None, 'listen': url}
+    assert json.loads(out())['daemon'] | {'started': None} == {'pid': pid, 'epoch': 1, 'started': None, 'listen': url}
     run_cli(['restart', '--timeout', '300'])  # the suite loads the host: a restart takes longer than 30 s there
     out()
     wait_until(lambda: listening() is not None)

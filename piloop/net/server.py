@@ -7,6 +7,7 @@ next call outside it, so many long-polls never starve a heartbeat.
 """
 
 import asyncio
+import ipaddress
 import logging
 import math
 import socket
@@ -76,7 +77,7 @@ def asked(request: Request) -> str | None:
 
     A client on the socket sends ``SOCKET_ACTOR_HEADER``, and a network carries the ask its own way (``Network.actor``).
     """
-    if request.scope['state'].get(_LOCAL):
+    if on_socket(request.scope):
         return request.headers.get(SOCKET_ACTOR_HEADER)
     return served(request).network.actor(request.headers)
 
@@ -90,7 +91,7 @@ def _identified(tokens: Tokens, network: Network, request: Request) -> Caller | 
     """
     scheme, _, secret = request.headers.get('authorization', '').partition(' ')
     token = secret if scheme.lower() == 'bearer' and secret.startswith(PREFIX) else None
-    match token, bool(request.scope['state'].get(_LOCAL)):
+    match token, on_socket(request.scope):
         case str(), False if not network.takes_tokens:
             return Refused('this server takes no piloop token: its network authenticates every caller')
         case str() as known, _:
@@ -299,17 +300,7 @@ class Server:
 
     def __init__(self, app: App, listener: Listener) -> None:
         self.listener = listener
-        config = uvicorn.Config(
-            app,
-            log_config=None,
-            access_log=False,
-            lifespan='off',
-            http=_Protocol,
-            timeout_graceful_shutdown=GRACE_SECONDS,
-            timeout_keep_alive=KEEP_ALIVE_SECONDS,
-            ssl_context_factory=_tls(listener.tls) if listener.tls is not None else None,
-        )
-        self._server = _Uvicorn(config, app.closing)
+        self._server = _Uvicorn(uvicorn_config(app, listener), app.closing)
         self._thread = threading.Thread(target=self.run, name='piloop-server', daemon=True)
 
     @property
@@ -356,17 +347,41 @@ class Server:
         self._thread.join()
 
 
+def uvicorn_config(app: ASGIApp, listener: Listener) -> uvicorn.Config:
+    """How piloop's uvicorn serves ``app`` on ``listener``: with its TLS, each request marked by ``_Protocol``."""
+    return uvicorn.Config(
+        app,
+        log_config=None,
+        access_log=False,
+        lifespan='off',
+        http=_Protocol,
+        timeout_graceful_shutdown=GRACE_SECONDS,
+        timeout_keep_alive=KEEP_ALIVE_SECONDS,
+        ssl_context_factory=_tls(listener.tls) if listener.tls is not None else None,
+    )
+
+
 def listening(network: Network) -> Listener | None:
     """The network's listener in this process: its ``bind``, with its TLS. None when it listens nowhere."""
     sock = network.bind()
     return None if sock is None else network.listener(sock)
 
 
-def url(listener: Listener) -> str:
-    """The URL that a client on this machine calls on a TCP listener: the scheme, and the address with its port."""
-    host, port = listener.socket.getsockname()[:2]
+def url(listener: Listener, host: str | None = None) -> str:
+    """The URL that a client on this machine calls on a TCP listener: the scheme, and the address with its port.
+
+    ``host`` in place of the listener's own address: a name by which other machines reach it.
+    """
+    bound, port = listener.socket.getsockname()[:2]
+    host = host or bound
     scheme = 'https' if listener.tls is not None else 'http'
     return f'{scheme}://[{host}]:{port}' if ':' in host else f'{scheme}://{host}:{port}'
+
+
+def advertised(listener: Listener) -> str:
+    """The URL by which other machines reach ``listener``: ``url``, with this host's name for a wildcard address."""
+    bound = listener.socket.getsockname()[0]
+    return url(listener, socket.getfqdn() if ipaddress.ip_address(bound).is_unspecified else None)
 
 
 def _tls(context: ssl.SSLContext) -> Callable[[uvicorn.Config, Callable[[], ssl.SSLContext]], ssl.SSLContext]:
@@ -380,6 +395,11 @@ def _tls(context: ssl.SSLContext) -> Callable[[uvicorn.Config, Callable[[], ssl.
 
 _CERTIFICATE = 'piloop.peer_certificate'
 _LOCAL = 'piloop.local'
+
+
+def on_socket(scope: Scope) -> bool:
+    """Whether the request of ``scope`` came on the home's Unix socket (``_Protocol``)."""
+    return bool(scope['state'].get(_LOCAL))
 
 
 class _Protocol(H11Protocol):

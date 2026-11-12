@@ -59,10 +59,11 @@ def test_a_daemon_without_listen_serves_only_its_socket_and_replaces_one_that_a_
     tmp_path: Path,
 ) -> None:
     cfg = Settings(home=tmp_path / 'home')
-    daemon = Daemon(cfg)
+    cfg.home.mkdir(mode=0o700)
     stale = socket.socket(socket.AF_UNIX)
     stale.bind(str(cfg.socket_file))
     stale.close()
+    daemon = Daemon(cfg)
     with daemon.tracer.span('test') as span:
         daemon._listen(span)
     assert [s.listener.socket.family for s in daemon._servers if isinstance(s, Server)] == [socket.AF_UNIX]
@@ -72,15 +73,12 @@ def test_a_daemon_without_listen_serves_only_its_socket_and_replaces_one_that_a_
 
 
 def test_a_port_in_use_stops_the_start_with_the_reason(tmp_path: Path) -> None:
+    cfg = Settings(home=tmp_path / 'home')
     with socket.create_server(('127.0.0.1', 0)) as taken:
         port = taken.getsockname()[1]
-        daemon = Daemon(Settings(home=tmp_path / 'home'), listen=Address(host='127.0.0.1', port=port))
-        with (
-            daemon.tracer.span('test') as span,
-            pytest.raises(SystemExit, match='the daemon does not listen: .*in use'),
-        ):
-            daemon._listen(span)
-    daemon.shutdown(timeout=5)
+        with pytest.raises(SystemExit, match='the daemon does not listen: .*in use'):
+            Daemon(cfg, listen=Address(host='127.0.0.1', port=port))
+    assert not cfg.socket_file.exists() and not cfg.pid_file.exists(), 'a daemon that never served leaves nothing'
 
 
 def test_listen_must_be_host_colon_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,13 +131,8 @@ def test_a_socket_path_that_the_system_refuses_stops_the_start_with_the_reason(
 ) -> None:
     monkeypatch.setattr(settings_module, 'SUN_PATH', 1000)  # no short path: the system's own limit refuses it
     cfg = Settings(home=tmp_path / ('h' * 120))
-    daemon = Daemon(cfg)
-    with (
-        daemon.tracer.span('test') as span,
-        pytest.raises(SystemExit, match=f'the daemon does not listen on {re.escape(str(cfg.socket_file))}: '),
-    ):
-        daemon._listen(span)
-    daemon.shutdown(timeout=5)
+    with pytest.raises(SystemExit, match=f'the daemon does not listen on {re.escape(str(cfg.socket_file))}: '):
+        Daemon(cfg)
 
 
 def test_a_short_socket_directory_that_others_reach_is_refused(tmp_path: Path, short_sockets: Path) -> None:

@@ -159,6 +159,16 @@ class DaemonSettings(BaseModel):
     does not spin."""
     api_respawns: int = Field(default=3, gt=0)
     """How many API processes started again in a row may fail to serve before the daemon stops."""
+    advertise_url: str | None = None
+    """Where a standby on another host reaches this daemon while it holds the home's term, such as
+    ``http://piloop-0.piloop:8443``: what the term names (``piloop.plugins.leader``). None: the network's ``listen``,
+    with this host's name in place of a wildcard address. Never a load balancer's URL, which may lead to the standby."""
+    forward_refresh: timedelta = Field(default=timedelta(seconds=2), gt=timedelta(0))
+    """How often a standby reads which daemon holds the home's term, which it forwards each request to. Its 503s carry
+    a Retry-After of this, rounded up."""
+    forward_connect: timedelta = Field(default=timedelta(seconds=5), gt=timedelta(0))
+    """How long a standby waits to connect to the holder before it answers 503. Once connected, it waits as long as the
+    holder takes, a long-poll's wait too, until the client goes or the term ends."""
     agent_reread: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a
     close that adds no event, by ``piloop sql`` say, is seen this late."""

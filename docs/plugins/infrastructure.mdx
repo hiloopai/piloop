@@ -376,8 +376,12 @@ The **leader** decides which daemon writes a home, for how long, and with which 
 `config.toml` selects it. `local`, built in and the default, is for a home that one host serves: the daemon's lock on
 its pid file already makes it the only one.
 
-`bucket` keeps the term in an S3 object, for one home on several hosts. A second `piloop serve` waits as a standby until
-the term is free, and the holder stops writing when it cannot renew its term in time. Each term streams the home's
+`bucket` keeps the term in an S3 object, for one home on several hosts. A second `piloop serve` is a standby until the
+term is free, and the holder stops writing when it cannot renew its term in time. A standby serves on its own address
+meanwhile: it sends each request on to the holder, at the URL that the term names, with the caller's own credential, and
+passes the answer back. While no holder answers, it answers 503 with a `Retry-After`. `GET /v1/ready` needs no token:
+200 while the server serves requests, as the holder or as a standby that knows the holder, else 503. Use it as the
+readiness probe of a load balancer. Each term streams the home's
 database with [Litestream](https://litestream.io) 0.5 to `terms/<epoch>/` beside the object. The next term restores
 it, then makes the rest of the home again from the CAS: each campaign's repo from its URL and what it received, its
 workspace, and the jobs' logs. A takeover loses what the old holder wrote in its last second or so, which Litestream had
@@ -388,7 +392,9 @@ Under `bucket`:
 - `litestream` must be on `PATH`, and the CAS must be one that every host reaches (`s3`, `gcs`, `http`, or `cached` over one of them): the daemon does not start on a `disk` CAS.
 - A campaign cloned with a home's secret is cloned again with that secret. A token given with `piloop init <url>` is kept nowhere: give a secret instead.
 - Register campaigns by their URL (`piloop init <url>`): a checkout of your own is refused, since another host could not make it again.
-- Run a standby with `piloop serve` (under systemd or Kubernetes): `piloop start` waits for a daemon that serves, and a standby does not serve until it holds the term.
+- Each daemon must reach the holder's address: set `[daemon] advertise_url` to where the others reach this host, such as `http://piloop-0.piloop:8443`, never a load balancer's URL. Without it, the URL is the network's `listen`, with the host's name for `0.0.0.0`.
+- A standby forwards nothing that comes on the home's Unix socket: its caller is known on that host alone. Run commands on the holder's host, or through the server with a token.
+- A network that knows a caller by its connection (its address, or its TLS certificate), rather than by a header, does not reach the holder through a standby.
 
 ```toml
 [plugins.leader]

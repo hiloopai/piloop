@@ -18,9 +18,10 @@ from urllib.parse import quote
 import httpx2 as httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from piloop.actor import Actor
+from piloop.actor import Actor, System
 from piloop.api.contract import (
     MAX_POLL_SECONDS,
+    READY,
     AckBody,
     CancelBody,
     ChooseBody,
@@ -67,6 +68,7 @@ from piloop.api.views import (
     Overview,
     ProblemDetail,
     Prompted,
+    Readiness,
     Registered,
     Replied,
     Resumed,
@@ -122,6 +124,17 @@ class Client:
     def on(cls, socket: Path, actor: Actor, token: SecretStr | None = None) -> AbstractContextManager[Self]:
         """A client of the daemon on the Unix socket ``socket``, acting as ``actor`` with ``token`` (``socket_http``)."""
         return cls.connect(socket_http(socket, actor, token))
+
+    def ready(self) -> Readiness:
+        """What the server is to the home's term, whether it serves (200) or not (503): a probe needs no credential.
+
+        Raises:
+            Refused: It answered something else.
+        """
+        response = self._http.get(READY, timeout=TIMEOUT_SECONDS)
+        if response.status_code in (HTTPStatus.OK, HTTPStatus.SERVICE_UNAVAILABLE):
+            return Readiness.model_validate_json(response.content)
+        raise _refused(response)
 
     def status(self, query: Selection) -> Status:
         return self._get('/v1/status', query, Status)
@@ -287,6 +300,18 @@ def socket_http(socket: Path, actor: Actor, token: SecretStr | None = None) -> h
     if token is not None:
         headers['Authorization'] = f'Bearer {token.get_secret_value()}'
     return httpx.Client(transport=transport, base_url='http://piloop', headers=headers)
+
+
+def ready(socket: Path) -> bool:
+    """Whether the daemon on ``socket`` serves requests (``Client.ready``): as the holder of the term, or a standby.
+
+    A standby serves once it knows the holder. One that took the term and starts does not yet.
+    """
+    try:
+        with Client.on(socket, System.HUMAN) as client:
+            return client.ready().serves
+    except NoDaemon, httpx.TransportError:  # none listens, or it went away since it answered
+        return False
 
 
 def segment(name: str) -> str:

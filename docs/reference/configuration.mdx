@@ -547,6 +547,9 @@ candidate, `--base`), and its versions are scored into the pool. A new role of t
 | `api_start` | duration | `"PT1M"` | How long an API process may take to serve once it started. The daemon does not start when one of the first ones does not serve in time, or says why it cannot. |
 | `api_respawn` | duration | `"PT1S"` | How long the daemon waits before it starts an API process in place of one that exited: one that crashes at once does not spin. |
 | `api_respawns` | integer | `3` | How many API processes started again in a row may fail to serve before the daemon stops. |
+| `advertise_url` | string \| null | `null` | Where a standby on another host reaches this daemon while it holds the home's term, such as `http://piloop-0.piloop:8443`: what the term names (`piloop.plugins.leader`). None: the network's `listen`, with this host's name in place of a wildcard address. Never a load balancer's URL, which may lead to the standby. |
+| `forward_refresh` | duration | `"PT2S"` | How often a standby reads which daemon holds the home's term, which it forwards each request to. Its 503s carry a Retry-After of this, rounded up. |
+| `forward_connect` | duration | `"PT5S"` | How long a standby waits to connect to the holder before it answers 503. Once connected, it waits as long as the holder takes, a long-poll's wait too, until the client goes or the term ends. |
 | `agent_reread` | duration | `"PT1M"` | How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a close that adds no event, by `piloop sql` say, is seen this late. |
 
 ### `[agents]`

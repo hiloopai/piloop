@@ -14,7 +14,7 @@ import time
 import warnings
 from collections.abc import Iterable
 
-from piloop.api.client import answers
+from piloop.api.client import ready
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.network.contract import Address
 from piloop.proc import PILOOP_ARGV, child_env
@@ -171,8 +171,8 @@ def open_files(platform: str = sys.platform) -> tuple[int, int]:
 def spawn_detached(cfg: Settings, listen: Address | None = None) -> int:
     """Start ``piloop serve`` in its own session, append its output to the log file, and return its pid.
 
-    The child takes the lock itself (``acquire``). This function waits until the child holds the lock and answers on
-    the home's socket, so the next command reaches it. If the child was refused or died, it exits with the reason. Nothing ever waits for the daemon process, and ``Popen``'s
+    The child takes the lock itself (``acquire``). This function waits until the child holds the lock and serves on
+    the home's socket (``ready``), so the next command reaches it. If the child was refused or died, it exits with the reason. Nothing ever waits for the daemon process, and ``Popen``'s
     finaliser reports that as a leak. The handle is dropped on purpose, with that one warning silenced.
     """
     cfg.home.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -185,7 +185,7 @@ def spawn_detached(cfg: Settings, listen: Address | None = None) -> int:
             start_new_session=True,
             env=child_env() | {'PILOOP_HOME': str(cfg.home)},
         )
-    while running_pid(cfg) != daemon.pid or not answers(cfg.socket_file):
+    while running_pid(cfg) != daemon.pid or not ready(cfg.socket_file):
         if daemon.poll() is not None:
             if (holder := running_pid(cfg)) is not None:
                 raise SystemExit(_already_running(cfg, holder))
@@ -214,15 +214,15 @@ def terminate(cfg: Settings, pid: int, timeout: float) -> bool:
 def restart(cfg: Settings, pid: int, timeout: float) -> int | None:
     """Ask the lock holder to restart in place. Return the pid that holds the lock again, or None after ``timeout``.
 
-    The stop takes as long as a stop on SIGTERM. A rewritten pid file under a held lock, and an answer on the home's
-    socket, mean the new daemon started.
+    The stop takes as long as a stop on SIGTERM. A rewritten pid file under a held lock, and a daemon that serves on
+    the home's socket (``ready``), mean the new daemon started.
     The pid is usually the same. It differs if an old daemon without the signal handler died of the signal and the
     service manager started a new one.
     """
     before = _mtime_ns(cfg)
     os.kill(pid, RESTART_SIGNAL)
     deadline = time.monotonic() + timeout
-    while (holder := running_pid(cfg)) is None or _mtime_ns(cfg) == before or not answers(cfg.socket_file):
+    while (holder := running_pid(cfg)) is None or _mtime_ns(cfg) == before or not ready(cfg.socket_file):
         if time.monotonic() > deadline:
             return None
         time.sleep(POLL_SECONDS)

@@ -58,13 +58,6 @@ def begin(s: Session, epoch: int, pid: int, listen: str | None) -> Term:
     return term
 
 
-def listening(s: Session, epoch: int, listen: str | None) -> Term:
-    """Term ``epoch``, which serves other machines on ``listen`` from now. The caller commits."""
-    term = s.get_one(Term, epoch)
-    term.listen = listen
-    return term
-
-
 def current(s: Session) -> Term | None:
     """The newest term, or None before any daemon served this home."""
     return s.scalars(select(Term).order_by(Term.epoch.desc()).limit(1)).first()

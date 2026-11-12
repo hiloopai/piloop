@@ -2795,6 +2795,35 @@
         }
       }
     },
+    "/v1/ready": {
+      "get": {
+        "summary": "Ready",
+        "description": "Whether this server serves requests: here always, as the holder of its term.\n\nA standby answers it itself: 200 while it knows a holder to forward to, 503 while it does not, or while it starts\nits own term (``piloop.net.forward``).",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/campaigns/{campaign}/ideas": {
       "get": {
         "summary": "Ideas",
@@ -5715,6 +5744,11 @@
             "type": "integer",
             "title": "Pid"
           },
+          "epoch": {
+            "type": "integer",
+            "title": "Epoch",
+            "description": "Its term on the home (``piloop.plugins.leader``): a standby that forwarded the request names the same."
+          },
           "started": {
             "type": "string",
             "title": "Started",
@@ -5736,11 +5770,12 @@
         "type": "object",
         "required": [
           "pid",
+          "epoch",
           "started",
           "listen"
         ],
         "title": "DaemonState",
-        "description": "The daemon that answers: its process, and where it listens."
+        "description": "The daemon that answers: its process, its term, and where it listens."
       },
       "Delivered": {
         "properties": {
@@ -7934,6 +7969,38 @@
         "title": "QueuedEvaluation",
         "description": "One evaluation of the queue."
       },
+      "Readiness": {
+        "properties": {
+          "serves": {
+            "type": "boolean",
+            "title": "Serves",
+            "description": "Whether it serves requests now: the holder, or a standby that knows a holder to forward to."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epoch",
+            "description": "The term that it holds, or that it forwards to. Null for a standby that knows of no holder."
+          }
+        },
+        "type": "object",
+        "required": [
+          "serves",
+          "role",
+          "epoch"
+        ],
+        "title": "Readiness",
+        "description": "What ``GET /v1/ready`` answers, with no token: 200 while the server serves requests, else 503."
+      },
       "Reasoned": {
         "properties": {
           "reason": {
@@ -8226,6 +8293,16 @@
         "type": "string",
         "format": "password",
         "writeOnly": true
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "holder",
+          "starting",
+          "standby"
+        ],
+        "title": "Role",
+        "description": "What a ``piloop serve`` is to the home's term."
       },
       "RoleView": {
         "properties": {

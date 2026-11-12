@@ -43,7 +43,8 @@ from piloop.db.session import (
 )
 from piloop.db.triggers.changelog import COMMENT_KINDS
 from piloop.ids import CampaignStatus
-from piloop.net.server import GRACE_SECONDS, Server, listening, local_listener, url
+from piloop.net.forward import Forwarding
+from piloop.net.server import GRACE_SECONDS, Server, advertised, listening, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
@@ -54,6 +55,7 @@ from piloop.plugins.contribution import CONTRIBUTORS
 from piloop.plugins.executor.contract import EXECUTORS, JOB_KINDS
 from piloop.plugins.leader.contract import LEADERS, Leader, LeaderHost, LostTerm, Term, Unreachable
 from piloop.plugins.network import contract as network
+from piloop.plugins.network.contract import Listener
 from piloop.plugins.runtime.contract import make_runtime, runtimes
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
 from piloop.proc import Inherited
@@ -140,14 +142,38 @@ class Daemon:
         self._lock = acquire(cfg)
         """The lock of the home's only daemon, taken before the migration: another daemon may run an older schema."""
         self._holding: Holding | None = None
+        self._listeners: list[Listener] = []
+        """The home's Unix socket, then the network's listener when it has one: bound before the take, and the
+        servers' once the daemon serves (``_listen``)."""
+        self._forwarding: Forwarding | None = None
         try:
             self._inherited = inherited or Inherited(set())
             """The children an in-place restart handed over (``piloop.proc.Inherited``): reaped as each one exits."""
             self.tracer = tracer()
             leader = LEADERS.selected(cfg.providers)
             self._leader: Leader = leader.open(LeaderHost(cfg.home, cfg.database))
-            self._term = self._take()
+            measures = self.tracer.measures
+            self.db = Database(
+                cfg.database_url,
+                actor=ACTOR,
+                writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
+                strict=cfg.debug or None,
+            )
+            """Nothing connects before the restore, which replaces its file: the network only keeps it, and a standby
+            reads nothing of it."""
+            self._argv = serve_argv(listen)
+            """What an in-place restart execs."""
+            self._tokens = Tokens(self.db, cfg.daemon.token_trust.total_seconds())
+            self.network = served.open(
+                network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
+            )
+            remote = self._bind(served.listen)
+            self._forwarding = Forwarding(self._leader.current, self._listeners, cfg.daemon)
+            """What serves the sockets until the daemon serves: a standby forwards each request to the holder."""
+            self._forwarding.start()
+            self._term = self._take(cfg.daemon.advertise_url or (None if remote is None else advertised(remote)))
             """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
+            self._forwarding.hold(self._term.epoch)
             self._lost: str | None = None
             """Why the term's renewals failed, once they did."""
             self._stop_on_loss: Callable[[], None] = lambda: None
@@ -168,21 +194,6 @@ class Daemon:
                 """Whether the home's database came from the term before's replica: its files come from the CAS."""
             except LostTerm as e:  # it never served: it leaves the term to the newer daemon
                 raise SystemExit(f'the daemon does not start: {e}') from e
-            measures = self.tracer.measures
-            self.db = Database(
-                cfg.database_url,
-                actor=ACTOR,
-                writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
-                strict=cfg.debug or None,
-            )
-            self._argv = serve_argv(listen)
-            """What an in-place restart execs."""
-            self._address = served.listen
-            """Where the server listens, as asked."""
-            self._tokens = Tokens(self.db, cfg.daemon.token_trust.total_seconds())
-            self.network = served.open(
-                network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
-            )
             self._servers: list[Server | ApiProcesses] = []
             self._served: Served | None = None
             """What the daemon's own servers serve the API with, once they serve. None while API processes serve it."""
@@ -206,10 +217,9 @@ class Daemon:
                     self._leader.begin(s, self._term)
                 except IdsExhausted as e:
                     raise SystemExit(f'the daemon does not start: {e}') from e
-                epoch = terms.begin(s, self._term.epoch, os.getpid(), None).epoch
+                self._began = terms.begin(s, self._term.epoch, os.getpid(), None if remote is None else url(remote))
+                """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
                 s.commit()
-            self._epoch = epoch
-            """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
             if self._restored:
                 try:
                     rebuild(self.db, self._cas, cfg.home, SECRETS.selected(cfg.providers), self.tracer)
@@ -257,6 +267,8 @@ class Daemon:
         except BaseException:  # no file names a daemon that never served
             if self._holding is not None:  # nor does a daemon that never served keep renewing, or exit at the end
                 self._holding.stop()
+            self._unbind()
+            cfg.socket_file.unlink(missing_ok=True)
             self._release()
             raise
 
@@ -299,31 +311,49 @@ class Daemon:
                     sys.stderr.flush()
                     os.execv(self._argv[0], self._argv)
 
-    def _listen(self, span: Span) -> None:
-        """Serve the API on the home's Unix socket, and on the network's listener when it has one.
+    def _bind(self, address: network.Address | None) -> Listener | None:
+        """Bind the home's Unix socket, and the network's listener when it has one (``_listeners``), which it returns.
 
-        The daemon serves it itself, or its API processes do on the sockets that it bound (``[daemon] api_processes``).
-        The network's URL goes on the start span. An in-place restart listens on the port that port 0 took, so a worker
-        that has the URL keeps its server.
+        The daemon binds them before it takes the term, so that a standby serves them (``Forwarding``). An in-place
+        restart listens on the port that port 0 took, so a worker that has the URL keeps its server.
         """
         try:
-            local = local_listener(self._cfg.socket_file)
+            self._listeners.append(local_listener(self._cfg.socket_file))
         except OSError as e:
             raise SystemExit(f'the daemon does not listen on {self._cfg.socket_file}: {e}') from e
         try:
-            listener = listening(self.network)
+            remote = listening(self.network)
         except OSError as e:
-            local.socket.close()
             raise SystemExit(f'the daemon does not listen: {e}') from e
-        listeners = [local] if listener is None else [local, listener]
-        listen = None if listener is None else url(listener)
-        with self.db.session() as s:
-            write_transaction(s)
-            term = terms.listening(s, self._epoch, listen)
-            s.commit()
+        if remote is None:
+            return None
+        self._listeners.append(remote)
+        assert address is not None  # a network binds nothing without ``listen``
+        if address.port == 0:
+            port = remote.socket.getsockname()[1]
+            self._argv = serve_argv(address.model_copy(update={'port': port}))
+        return remote
+
+    def _unbind(self) -> None:
+        """Stop the standby's forwarding, and close the sockets that no server took."""
+        if self._forwarding is not None:
+            self._forwarding.close()
+        for each in self._listeners:
+            each.socket.close()
+        self._listeners = []
+
+    def _listen(self, span: Span) -> None:
+        """Serve the API on the sockets that the daemon bound, in place of the standby's forwarding.
+
+        The daemon serves it itself, or its API processes do (``[daemon] api_processes``). The network's URL goes on
+        the start span.
+        """
+        assert self._forwarding is not None
+        self._forwarding.close()  # its servers end; the sockets stay bound, and the next connections wait for these
+        listeners, self._listeners = self._listeners, []  # the servers own them from here: they close them
         if self._cfg.daemon.api_processes > 0:
-            remote = None if listener is None else listener.socket
-            processes = ApiProcesses(self._cfg, [local.socket, remote], self.tracer, self._api_failed)
+            local, *remote = (each.socket for each in listeners)
+            processes = ApiProcesses(self._cfg, [local, remote[0] if remote else None], self.tracer, self._api_failed)
             try:
                 processes.start()
             except NotServing as e:
@@ -331,26 +361,31 @@ class Daemon:
             self._servers = [processes]
         else:
             self._served = Served(
-                self.db, self._cfg, self._tokens, self.network, self.tracer, self.controller.cas, daemon_state(term)
+                self.db,
+                self._cfg,
+                self._tokens,
+                self.network,
+                self.tracer,
+                self.controller.cas,
+                daemon_state(self._began),
             )
             self._servers = [Server(self._served.app(), each) for each in listeners]
             for server in self._servers:
                 server.start()
-        if listener is not None:
-            assert self._address is not None  # a network binds nothing without ``listen``
-            if self._address.port == 0:
-                port = listener.socket.getsockname()[1]
-                self._argv = serve_argv(self._address.model_copy(update={'port': port}))
-            span.set(listen=listen)
+        if self._began.listen is not None:
+            span.set(listen=self._began.listen)
 
-    def _take(self) -> Term:
-        """Take the home's term, waiting as a standby while another daemon holds it, until SIGTERM or Ctrl-C."""
+    def _take(self, advertise: str | None) -> Term:
+        """Take the home's term, waiting as a standby while another daemon holds it, until SIGTERM or Ctrl-C.
+
+        The term names ``advertise``: where the standbys of other hosts forward to.
+        """
         stop = threading.Event()
         handlers: dict[int, Callable[[int, FrameType | None], object] | int | None] = {}
         if threading.current_thread() is threading.main_thread():  # only the main thread can handle signals
             handlers = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
         try:
-            term = self._leader.take(f'{socket.gethostname()}/{os.getpid()}', None, stop)
+            term = self._leader.take(f'{socket.gethostname()}/{os.getpid()}', advertise, stop)
         finally:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
@@ -410,6 +445,7 @@ class Daemon:
                 server.stop()
             for server in self._servers:
                 server.close()
+            self._unbind()  # what a daemon that stopped before it served still holds
             self._cfg.socket_file.unlink(missing_ok=True)
             if self._served is not None:
                 self._served.close()

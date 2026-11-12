@@ -237,6 +237,25 @@ def test_a_file_that_is_no_socket_is_no_daemon_as_macos_says_it(
         assert client_module.answers(tmp_path / 'piloop.sock') is answers
 
 
+def test_a_daemon_that_closes_before_it_answers_its_readiness_is_not_ready(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.sock'
+    assert not client_module.ready(path), 'none listens'
+    listener = local_listener(path)
+
+    def close_each() -> None:
+        for _ in range(2):  # the probe that ``answers`` makes, then the request
+            connection, _ = listener.socket.accept()
+            connection.close()
+
+    closing_server = threading.Thread(target=close_each)
+    closing_server.start()
+    try:
+        assert not client_module.ready(path), 'it went away since it answered'
+    finally:
+        closing_server.join()
+        listener.socket.close()
+
+
 def test_without_a_daemon_the_client_says_how_to_start_one(cfg: Settings) -> None:
     with (
         pytest.raises(NoDaemon, match='start it with `piloop serve --detach`'),
@@ -259,6 +278,7 @@ def test_each_method_of_the_client_calls_its_route_with_the_route_s_models() -> 
     http = httpx.Client(transport=httpx.MockTransport(record), base_url='http://piloop')
     clients: list[tuple[APIRouter, type[Client]]] = [
         (ROUTERS[0], Client),
+        (ROUTERS[1], Client),
         (backlog_api.router, BacklogClient),
         (candidates_api.router, CandidatesClient),
         (pool_api.router, PoolClient),

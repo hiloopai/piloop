@@ -24,6 +24,7 @@ from piloop.actor import ACTORS, Actor, Agent
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import (
     GRANTS,
+    READY,
     Access,
     AckBody,
     CancelBody,
@@ -84,9 +85,11 @@ from piloop.api.views import (
     ProblemDetail,
     Prompted,
     Queued,
+    Readiness,
     Registered,
     Replied,
     Resumed,
+    Role,
     SecretChanged,
     SecretList,
     SecretView,
@@ -131,6 +134,7 @@ from piloop.ids import (
 )
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
+from piloop.net.forward import TermCheck
 from piloop.net.server import App, asked, authorized, changed, served
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
@@ -310,8 +314,20 @@ router = APIRouter(
     responses=REFUSALS_DOCUMENTED,
 )
 """Core's routes: the views, the feed, the inbox, campaigns, agents and the home's settings. Every route reads."""
-ROUTERS = (router,)
+readiness = APIRouter()
+"""The route that a probe calls with no credential: a load balancer's, Kubernetes', ``piloop serve --detach``."""
+ROUTERS = (router, readiness)
 """The API: every router that ``with_api`` serves. A campaign type's routes are its contribution's."""
+
+
+@readiness.get(READY, operation_id='ready', responses={HTTPStatus.SERVICE_UNAVAILABLE: {'model': Readiness}})
+async def ready(api: Api) -> Readiness:
+    """Whether this server serves requests: here always, as the holder of its term.
+
+    A standby answers it itself: 200 while it knows a holder to forward to, 503 while it does not, or while it starts
+    its own term (``piloop.net.forward``).
+    """
+    return Readiness(serves=True, role=Role.HOLDER, epoch=api.daemon.epoch)
 
 
 @router.get('/status', operation_id='status')
@@ -901,6 +917,8 @@ def _events(db: Database, query: EventsQuery, campaign: CampaignId | None, after
 def with_api(server: App, api: Handlers) -> App:
     """``server`` with the API's routes, which read with ``api``. An operation's refusal answers 409, ``refused``.
 
+    A request that a standby forwarded for another term than this daemon's answers 409 ``term`` (``TermCheck``).
+
     Raises:
         PluginError: A contributed route has the method and path of one of the API's.
     """
@@ -909,6 +927,7 @@ def with_api(server: App, api: Handlers) -> App:
     for refused in REFUSALS:
         server.add_exception_handler(refused, _refused)
     server.add_exception_handler(ops.StillStopping, _still_stopping)
+    server.add_middleware(TermCheck, epoch=api.daemon.epoch)
     server.state.handlers = api
     return server
 
@@ -937,7 +956,7 @@ def _still_stopping(_request: Request, e: Exception) -> Response:
 
 def daemon_state(term: Term) -> DaemonState:
     """The daemon of ``term``, as the one that answers: whichever process serves the request."""
-    return DaemonState(pid=term.pid, started=iso(term.started_at), listen=term.listen)
+    return DaemonState(pid=term.pid, epoch=term.epoch, started=iso(term.started_at), listen=term.listen)
 
 
 def _cwd(query: Located) -> FilePath | None:

@@ -242,13 +242,36 @@ class Inbox(View):
 
 
 class DaemonState(View):
-    """The daemon that answers: its process, and where it listens."""
+    """The daemon that answers: its process, its term, and where it listens."""
 
     pid: int
+    epoch: int
+    """Its term on the home (``piloop.plugins.leader``): a standby that forwarded the request names the same."""
     started: str
     """When it started, ISO 8601 in UTC."""
     listen: str | None
     """The URL that it serves other machines on. Null when it serves only this machine."""
+
+
+class Role(StrEnum):
+    """What a ``piloop serve`` is to the home's term."""
+
+    HOLDER = 'holder'
+    """It holds the term, and serves the API."""
+    STARTING = 'starting'
+    """It took the term, and restores, migrates or rebuilds the home before it serves: it answers 503."""
+    STANDBY = 'standby'
+    """Another daemon holds the term: it forwards each request there (``piloop.net.forward``)."""
+
+
+class Readiness(View):
+    """What ``GET /v1/ready`` answers, with no token: 200 while the server serves requests, else 503."""
+
+    serves: bool
+    """Whether it serves requests now: the holder, or a standby that knows a holder to forward to."""
+    role: Role
+    epoch: int | None
+    """The term that it holds, or that it forwards to. Null for a standby that knows of no holder."""
 
 
 class Status(View):

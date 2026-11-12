@@ -60,7 +60,12 @@ def test_a_process_serves_the_api_and_the_workers_routes_from_the_rows_alone(
 ) -> None:
     with dial(served.url, secret(db, 'laptop', Access.READ)) as http:
         status = http.get('/v1/status').json()
-    assert status['daemon'] == {'pid': 4242, 'started': status['daemon']['started'], 'listen': 'https://elsewhere:7000'}
+    assert status['daemon'] == {
+        'pid': 4242,
+        'epoch': status['daemon']['epoch'],
+        'started': status['daemon']['started'],
+        'listen': 'https://elsewhere:7000',
+    }
     assert [c['name'] for c in status['campaigns']] == [campaign.name]
     with dial(served.url, secret(db, 'w1')) as http:
         worker = Remote(http, threading.Event(), Tracer(None))

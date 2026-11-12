@@ -157,6 +157,10 @@ class NewsQuery(Polled, Located):
     """The cursor to read after: the ``next`` of the last wait. Default: now."""
 
 
+READY = '/v1/ready'
+"""The route that says, with no credential, whether a server serves requests (``Readiness``)."""
+
+
 class Problem(StrEnum):
     """Why the API refuses a request: the ``error`` of its body."""
 
@@ -178,6 +182,15 @@ class Problem(StrEnum):
     """The caller may not act as the actor that it asks for (``piloop.net.acting``). The detail says why."""
     BUSY = 'busy'
     """Another connection held the database's write lock for the whole busy timeout: send it again after Retry-After."""
+    UNAVAILABLE = 'unavailable'
+    """No daemon serves the home's term here now: a standby knows no holder, or the holder did not answer, or this
+    daemon took the term and starts. Send it again after Retry-After."""
+    STANDBY = 'standby'
+    """The home's socket on a standby (421): its owner is known on this host only, and the holder of the term is
+    another daemon. The detail names it."""
+    TERM = 'term'
+    """A standby forwarded the request for a term that this daemon does not hold (409). The standby answers its client
+    503 ``unavailable`` instead: no client sees it."""
 
 
 PRIORITIES = range(5)
