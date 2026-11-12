@@ -189,8 +189,8 @@ class Problem(StrEnum):
     """The home's socket on a standby (421): its owner is known on this host only, and the holder of the term is
     another daemon. The detail names it."""
     TERM = 'term'
-    """A standby forwarded the request for a term that this daemon does not hold (409). The standby answers its client
-    503 ``unavailable`` instead: no client sees it."""
+    """A standby forwarded the request to another standby (409), which forwards nothing twice. The first standby answers
+    its client 503 ``unavailable`` instead: no client sees it."""
 
 
 PRIORITIES = range(5)

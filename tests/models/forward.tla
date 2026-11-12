@@ -1,8 +1,7 @@
 ---- MODULE forward ----
 \* L5c, as on branch feat/forward: a `piloop serve` that does not hold the home's term forwards each request to the holder
-\* (piloop/net/forward.py), and a request that carries `Piloop-Term: E` is served only by the holder of term E
-\* (forward.py:69 `refusal`, :81 `TermCheck`, piloop/daemon/api.py:930). Two hosts, REQS requests. The term itself is
-\* abstract: tests/models/term.tla shows that no host takes a term while another may still write, which `Take`'s guard
+\* (piloop/net/forward.py), and a standby refuses a request that carries `Piloop-Term` (forward.py:69 `refusal`): a
+\* holder ignores the header. Two hosts, REQS requests. The term itself is abstract: tests/models/term.tla shows that no host takes a term while another may still write, which `Take`'s guard
 \* (`~rec.live`) stands for.
 \* A forwarder reads the record every `renew` (`Refresh`), so its view may be stale. Faults (a crash, a graceful stop)
 \* are bounded by FAULTS. TLC: `-config forward_fixed.cfg forward.tla`.
@@ -10,7 +9,6 @@
 EXTENDS Integers
 CONSTANTS FAULTS, REQS,
           REFUSE,   \* a server that does not hold the term a request names answers 409 (TRUE), or a standby forwards it again
-          CHECK,    \* a holder answers 409 to a request for another epoch (TRUE), or serves it
           CANCEL,   \* a forwarder answers 503 to what it sent to a term, once it reads another or takes one (TRUE)
           RESEND,   \* a forwarder that got no answer sends the request again, to the term that it reads next
           OWN_DB     \* a standby with no term to forward to serves the request from its own database
@@ -32,13 +30,13 @@ Init == /\ phase = [h \in Hosts |-> "standby"] /\ ep = [h \in Hosts |-> 0] /\ vi
         /\ hops = [r \in Reqs |-> 0] /\ applied = [r \in Reqs |-> 0] /\ bad = FALSE /\ faults = 0
         /\ op = "init" /\ arg = 0
 
-\* forward.py:220 `_seen`, :200 `_hold`: what a forwarder sent to a term other than `e` answers 503 at once
-\* (:265 `_forward`), unless its answer is on the way back.
+\* forward.py:212 `_seen`, :192 `_hold`: what a forwarder sent to a term other than `e` answers 503 at once
+\* (:256 `_forward`), unless its answer is on the way back.
 Abandoned(h, e, r) == CANCEL /\ via[r] = h /\ st[r] \in {"in", "app", "lost"} /\ sent[r] # e
 Abandon(h, e) == /\ st' = [r \in Reqs |-> IF Abandoned(h, e, r) THEN "done" ELSE st[r]]
                  /\ ans' = [r \in Reqs |-> IF Abandoned(h, e, r) THEN "503" ELSE ans[r]]
 \* The term record (piloop/plugins/leader/bucket.py:242 `attempt`). main.py:381 `_take`: a standby takes the next term
-\* once none is live. main.py:177 -> forward.py:148 `hold`: from the take on, its forwarder answers 503, and ends what it
+\* once none is live. main.py:177 -> forward.py:136 `hold`: from the take on, its forwarder answers 503, and ends what it
 \* had sent.
 Take(h) == /\ phase[h] = "standby" /\ ~rec.live /\ rec.epoch < MAX_EPOCH
            /\ rec' = [epoch |-> rec.epoch + 1, holder |-> h, live |-> TRUE]
@@ -46,7 +44,7 @@ Take(h) == /\ phase[h] = "standby" /\ ~rec.live /\ rec.epoch < MAX_EPOCH
            /\ Abandon(h, -1) /\ op' = "take" /\ arg' = h
            /\ Keep(<<view, at, via, sent, res, hops, applied, bad, faults>>)
 \* main.py:346 `_listen`: the restore, the migration and the rebuild are done; the daemon's own servers serve once
-\* `Forwarding.close` (forward.py:154) returned, which waits for the forwarder's requests to end.
+\* `Forwarding.close` (forward.py:145) returned, which waits for the forwarder's requests to end.
 Serve(h) == /\ phase[h] = "starting" /\ \A r \in Reqs : via[r] = h => st[r] \in {"new", "done"}
             /\ phase' = [phase EXCEPT ![h] = "serving"] /\ op' = "serve" /\ arg' = h
             /\ Keep(<<ep, view, rec, st, at, via, sent, res, ans, hops, applied, bad, faults>>)
@@ -54,8 +52,8 @@ Serve(h) == /\ phase[h] = "starting" /\ \A r \in Reqs : via[r] = h => st[r] \in 
 Expire == /\ rec.live /\ phase[rec.holder] \in {"down", "standby"} /\ rec' = [rec EXCEPT !.live = FALSE]
           /\ op' = "expire" /\ arg' = rec.holder
           /\ Keep(<<phase, ep, view, st, at, via, sent, res, ans, hops, applied, bad, faults>>)
-\* forward.py:204 `_read`: every `forward_refresh`, a standby reads the term that a daemon holds now (`Leader.current`);
-\* a new one ends what went to the one before (:220 `_seen`).
+\* forward.py:196 `_read`: every `forward_refresh`, a standby reads the term that a daemon holds now (`Leader.current`);
+\* a new one ends what went to the one before (:212 `_seen`).
 Refresh(h) == LET now == IF rec.live THEN [epoch |-> rec.epoch, holder |-> rec.holder] ELSE None
               IN /\ phase[h] = "standby" /\ view[h] # now /\ view' = [view EXCEPT ![h] = now]
                  /\ Abandon(h, now.epoch) /\ op' = "refresh" /\ arg' = h
@@ -71,13 +69,13 @@ Reply(r, x) == IF via[r] = 0 THEN st' = [st EXCEPT ![r] = "done"] /\ ans' = [ans
 Apply(r, h) == /\ applied' = [applied EXCEPT ![r] = @ + 1] /\ st' = [st EXCEPT ![r] = "app"]
                /\ bad' = (bad \/ ~(phase[h] = "serving" /\ rec.live /\ rec.holder = h /\ ep[h] = rec.epoch))
                /\ Keep(<<res, ans>>)
-\* The server at `at[r]` handles it: the holder's `TermCheck` (forward.py:88), or a standby's `__call__` (:227): the
-\* refusal (:238), a daemon that starts (:241), no term (:244), else the forward (:265).
+\* The server at `at[r]` handles it: the holder serves whatever term the request names (a holder that took a later
+\* term at the same address is the holder all the same), or a standby's `__call__`: the refusal, a daemon that
+\* starts, no term, else the forward (forward.py `Forwarding.__call__`).
 Handle(r) == LET h == at[r] IN
              /\ st[r] = "in" /\ op' = "handle" /\ arg' = r
              /\ CASE ~Up(h) -> Reply(r, "refused") /\ Keep(<<at, via, sent, hops, applied, bad>>)
-                  [] phase[h] = "serving" /\ (sent[r] \in {0, ep[h]} \/ ~CHECK) -> Apply(r, h) /\ Keep(<<at, via, sent, hops>>)
-                  [] phase[h] = "serving" -> Reply(r, "409") /\ Keep(<<at, via, sent, hops, applied, bad>>)
+                  [] phase[h] = "serving" -> Apply(r, h) /\ Keep(<<at, via, sent, hops>>)
                   [] phase[h] = "starting" -> Reply(r, "503") /\ Keep(<<at, via, sent, hops, applied, bad>>)
                   [] sent[r] # 0 /\ REFUSE -> Reply(r, "409") /\ Keep(<<at, via, sent, hops, applied, bad>>)
                   [] view[h].holder # 0 /\ hops[r] < 2 ->
@@ -90,7 +88,7 @@ Handle(r) == LET h == at[r] IN
 \* The holder answers what it applied.
 Answer(r) == /\ st[r] = "app" /\ Up(at[r]) /\ Reply(r, "ok") /\ op' = "answer" /\ arg' = r
              /\ Keep(<<phase, ep, view, rec, at, via, sent, hops, applied, bad, faults>>)
-\* forward.py:344 `_relay`, :265 `_forward`: the forwarder passes the holder's answer on; any other is 503, Retry-After.
+\* forward.py:335 `_relay`, :256 `_forward`: the forwarder passes the holder's answer on; any other is 503, Retry-After.
 Relay(r) == /\ st[r] = "reply" /\ Up(via[r]) /\ st' = [st EXCEPT ![r] = "done"]
             /\ ans' = [ans EXCEPT ![r] = IF res[r] = "ok" THEN "ok" ELSE "503"] /\ op' = "relay" /\ arg' = r
             /\ Keep(<<phase, ep, view, rec, at, via, sent, res, hops, applied, bad, faults>>)

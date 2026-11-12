@@ -1,5 +1,5 @@
 """The paths of ``tests/models/forward.tla``, replayed against the real forwarder: two hosts whose ``piloop serve`` is a
-standby (``Forwarding``) until it takes the term, then a holder behind the real ``TermCheck``, with crashes, graceful
+standby (``Forwarding``) until it takes the term, then a holder, with crashes, graceful
 stops and restarts, and a client's request that goes through them.
 
 Each host has its own address on the loopback. A standby reads the record when the replay lets it (``Refresh``): its
@@ -30,7 +30,7 @@ import uvicorn
 from starlette.types import Receive, Scope, Send
 
 from piloop.net import forward as forward_module
-from piloop.net.forward import Forwarding, TermCheck
+from piloop.net.forward import Forwarding
 from piloop.plugins.leader.contract import Term
 from piloop.plugins.network.contract import Listener
 from piloop.settings import DaemonSettings
@@ -133,12 +133,10 @@ class HolderApp:
 
 
 class Holder:
-    """A holder on its host's address: uvicorn serving ``HolderApp`` behind ``TermCheck``."""
+    """A holder on its host's address: uvicorn serving ``HolderApp``, whatever term a request names."""
 
-    def __init__(self, world: World, sock: socket.socket, epoch: int) -> None:
-        config = uvicorn.Config(
-            TermCheck(HolderApp(world), epoch), lifespan='off', log_config=None, timeout_graceful_shutdown=0
-        )
+    def __init__(self, world: World, sock: socket.socket) -> None:
+        config = uvicorn.Config(HolderApp(world), lifespan='off', log_config=None, timeout_graceful_shutdown=0)
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, kwargs={'sockets': [sock]}, daemon=True)
         self.thread.start()
@@ -224,7 +222,7 @@ class Replay:
                 host = self.hosts[arg]
                 assert host.standby is not None and host.sock is not None
                 host.standby.close()
-                host.standby, host.holder = None, Holder(self.world, host.sock, _int(after['ep'], arg))
+                host.standby, host.holder = None, Holder(self.world, host.sock)
             case 'refresh':
                 view = _at(after['view'], arg)
                 self.hosts[arg].views.put(self.term(view))
@@ -322,7 +320,7 @@ def traces() -> list[Path]:
 
 
 def test_the_traces_cover_the_model() -> None:
-    assert len(traces()) == 187
+    assert len(traces()) == 188
 
 
 @pytest.mark.parametrize('trace', traces(), ids=lambda p: p.stem.split('.')[0])

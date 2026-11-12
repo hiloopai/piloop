@@ -5,9 +5,9 @@ while it waits. Every ``forward_refresh`` it reads which daemon holds the term (
 request there, at the term's URL, as it came: its method, path, headers (the caller's own token too: the holder checks
 it as always) and body, streamed both ways. It adds ``Piloop-Term``, the epoch that it forwards to.
 
-- **One hop.** A request that names a term is served only by the daemon that holds that term (``refusal``): any other
-  answers 409 ``term``, a standby too, so a request is never forwarded twice, and a stale standby learns nothing wrong.
-  The standby answers its client 503 instead.
+- **One hop.** A standby answers a request that names a term 409 ``term`` (``refusal``), and never forwards it: a
+  request that a stale standby sent to another standby goes no further. The holder ignores the header: whatever term a
+  standby read, the daemon that serves is the one that holds the term: TLC needs no check there (``forward.tla``).
 - **503, Retry-After.** No term, a holder that does not answer, or a 409 ``term``: the client sends it again later.
   A standby never sends a request twice: the holder may have applied it.
 - **Long-polls and streams.** Once connected, a forwarded request waits as long as the holder takes. It ends when the
@@ -35,7 +35,7 @@ import httpx2 as httpx
 import uvicorn
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse, Response
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from piloop.api.contract import READY, Problem
 from piloop.api.views import Readiness, Role
@@ -45,7 +45,7 @@ from piloop.plugins.network.contract import Listener
 from piloop.settings import DaemonSettings
 
 TERM_HEADER = 'piloop-term'
-"""The epoch that a standby forwarded a request to: only the daemon that holds that term serves it."""
+"""The epoch that a standby forwarded a request to: another standby refuses it (``refusal``)."""
 HOP_BY_HOP = frozenset(
     {
         b'connection',
@@ -66,30 +66,18 @@ START_SECONDS = 10
 """How long ``Forwarding.start`` waits for its servers to accept."""
 
 
-def refusal(headers: Headers, epoch: int | None) -> Response | None:
-    """409 ``term`` when ``headers`` name a term other than ``epoch``, the one that this daemon holds (None: none)."""
+def refusal(headers: Headers) -> Response | None:
+    """A standby's 409 ``term`` to a request that another standby forwarded: it goes no further."""
     named = headers.get(TERM_HEADER)
-    if named is None or named == str(epoch):
+    if named is None:
         return None
-    held = 'is a standby, which holds none' if epoch is None else f'holds term {epoch}'
     return JSONResponse(
-        {'error': Problem.TERM, 'detail': f'a standby forwarded this request for term {named}, and this daemon {held}'},
+        {
+            'error': Problem.TERM,
+            'detail': f'a standby forwarded this request for term {named} to this daemon, a standby',
+        },
         status_code=HTTPStatus.CONFLICT,
     )
-
-
-class TermCheck:
-    """The holder's half of ``refusal``: it serves a forwarded request only for its own term."""
-
-    def __init__(self, app: ASGIApp, epoch: int) -> None:
-        self.app = app
-        self.epoch = epoch
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope['type'] == 'http' and (refused := refusal(Headers(scope=scope), self.epoch)) is not None:
-            await refused(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
 
 
 class _Gone(Exception):
@@ -97,7 +85,7 @@ class _Gone(Exception):
 
 
 class _Stale(Exception):
-    """The holder answered 409 ``term``: the term that the standby forwarded to is no longer its."""
+    """The term's URL led to a standby, which answered 409 ``term``: the term read last is over."""
 
 
 class Forwarding:
@@ -213,7 +201,7 @@ class Forwarding:
         while self._reading.is_set():
             try:
                 term = self._current()
-            except Unreachable as e:  # the term read last stands: its holder checks every request that it gets
+            except Unreachable as e:  # the term read last stands: a stale one ends in 503s, never in a wrong write
                 print(f'piloop: the standby could not read the term: {e}', file=sys.stderr)
             else:
                 with self._posting:
@@ -238,7 +226,7 @@ class Forwarding:
             readiness = Readiness(serves=serves, role=role, epoch=epoch).model_dump()
             await self._answer(readiness, HTTPStatus.OK if serves else None)(scope, receive, send)
             return
-        if (refused := refusal(Headers(scope=scope), None)) is not None:
+        if (refused := refusal(Headers(scope=scope))) is not None:
             await refused(scope, receive, send)
             return
         if self._held is not None:
@@ -291,7 +279,7 @@ class Forwarding:
             case _Gone():
                 return
             case _Stale():
-                why = f"term {term.epoch} is no longer the holder's"
+                why = f'{term.url} is a standby now: term {term.epoch} is over'
             case httpx.TransportError() as e:
                 why = f'the holder of term {term.epoch} ({term.url}) did not answer ({type(e).__name__})'
             case None:  # the term ended first
@@ -348,7 +336,7 @@ async def _relay(client: httpx.AsyncClient, request: httpx.Request, send: Send, 
     """Send ``request``, and pass the holder's answer back as it streams; ``began`` is set once it began to go back.
 
     Raises:
-        _Stale: The holder answered 409 ``term``.
+        _Stale: A standby answered 409 ``term``.
         httpx.TransportError: The holder did not answer.
     """
     response = await client.send(request, stream=True)

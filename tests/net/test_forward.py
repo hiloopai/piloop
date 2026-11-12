@@ -16,7 +16,7 @@ from starlette.types import Receive, Scope, Send
 
 from piloop.api.contract import Problem
 from piloop.net import forward as forward_module
-from piloop.net.forward import Forwarding, TermCheck, _stale
+from piloop.net.forward import Forwarding, _stale
 from piloop.net.server import advertised, local_listener
 from piloop.plugins.leader.contract import Term, Unreachable
 from piloop.plugins.network.contract import Listener
@@ -46,7 +46,7 @@ class Record:
 
 
 class Holder:
-    """The routes of a holder, behind the real ``TermCheck``: what it got, and a long-poll that ends when told."""
+    """The routes of a holder: what it got, and a long-poll that ends when told."""
 
     def __init__(self) -> None:
         self.got: list[dict[str, object]] = []
@@ -140,7 +140,7 @@ def test_a_request_goes_to_the_holder_once_as_it_came_with_its_term_and_its_answ
 ) -> None:
     holder = Holder()
     _, url, _ = standby
-    with serving(TermCheck(holder, epoch=4)) as at:
+    with serving(holder) as at:
         record.holds(4, at + '/')
         forwards_to(url, 4)
         assert ready(url).status_code == 200 and ready(url).json() == {'serves': True, 'role': 'standby', 'epoch': 4}
@@ -171,26 +171,24 @@ def test_a_request_goes_to_the_holder_once_as_it_came_with_its_term_and_its_answ
         assert httpx.get(f'{url}/v1/garbled').status_code == 409
 
 
-def test_a_request_for_a_term_is_served_only_by_its_holder(
+def test_a_standby_forwards_nothing_twice_and_a_holder_serves_whatever_term_a_request_names(
     standby: tuple[Forwarding, str, Path], record: Record
 ) -> None:
     holder = Holder()
     _, url, _ = standby
-    with serving(TermCheck(holder, epoch=2)) as at:
-        assert httpx.get(f'{at}/x', headers={'piloop-term': '2'}).status_code == 201, 'its own term'
-        assert httpx.get(f'{at}/x').status_code == 201, 'a request that names no term'
-        other = httpx.get(f'{at}/x', headers={'piloop-term': '1'})
-        assert (other.status_code, other.json()['error']) == (409, Problem.TERM)
-        assert 'this daemon holds term 2' in other.json()['detail']
-        again = httpx.get(f'{url}/x', headers={'piloop-term': '2'})
+    with serving(holder) as at:
+        record.holds(7, at)
+        forwards_to(url, 7)
+        assert httpx.get(f'{at}/x', headers={'piloop-term': '1'}).status_code == 201, 'the holder ignores the header'
+        again = httpx.get(f'{url}/x', headers={'piloop-term': '7'})
         assert (again.status_code, again.json()['error']) == (409, Problem.TERM), 'a standby never forwards it again'
-        assert 'is a standby' in again.json()['detail']
-        record.holds(1, at)
-        forwards_to(url, 1)
-        stale = httpx.get(f'{url}/x')
-        assert (stale.status_code, stale.json()['error']) == (503, Problem.UNAVAILABLE), 'a stale standby retries'
-        assert stale.headers['retry-after'] == '1' and 'term 1 is no longer' in stale.json()['detail']
-        assert len(holder.got) == 2, 'the holder of another term served none of them'
+        assert 'to this daemon, a standby' in again.json()['detail']
+        assert len(holder.got) == 1, 'the refused request reached no holder'
+    record.holds(8, url)  # a stale record: the term's address is a standby now, this one
+    forwards_to(url, 8)
+    stale = httpx.get(f'{url}/x')
+    assert (stale.status_code, stale.json()['error']) == (503, Problem.UNAVAILABLE), 'one hop, then a retry'
+    assert stale.headers['retry-after'] == '1' and f'{url} is a standby now: term 8 is over' in stale.json()['detail']
 
 
 def test_without_a_holder_that_answers_or_while_it_starts_a_standby_answers_503(
@@ -240,7 +238,7 @@ def test_a_new_term_ends_what_went_to_the_old_one_and_a_client_that_goes_ends_it
 ) -> None:
     holder = Holder()
     _, url, _ = standby
-    with serving(TermCheck(holder, epoch=1)) as at:
+    with serving(holder) as at:
         record.holds(1, at)
         forwards_to(url, 1)
         answers: list[httpx.Response] = []
@@ -271,7 +269,7 @@ def test_a_new_term_ends_what_went_to_the_old_one_and_a_client_that_goes_ends_it
         assert holder.gone.wait(WAIT), 'the forwarder closed its request to the old term'
         holder.go_on.set()
     next_holder = Holder()
-    with serving(TermCheck(next_holder, epoch=3)) as at:
+    with serving(next_holder) as at:
         record.holds(3, at)
         forwards_to(url, 3)
         with httpx.Client(timeout=0.5) as client, pytest.raises(httpx.ReadTimeout):
@@ -294,6 +292,25 @@ def test_a_failure_of_the_forwarder_itself_is_the_server_s_error(
     record.holds(1, 'http://holder:1')
     forwards_to(url, 1)
     assert httpx.get(f'{url}/x').status_code == 500
+
+
+def test_a_read_of_the_term_that_returns_after_the_close_lands_nowhere(tmp_path: Path) -> None:
+    reading, returned, answer = threading.Event(), threading.Event(), threading.Event()
+
+    def slow() -> Term | None:
+        reading.set()
+        answer.wait(WAIT)
+        returned.set()
+        return None
+
+    listener = Listener(socket.create_server(('127.0.0.1', 0)), None)
+    forwarding = Forwarding(slow, [listener], FAST)
+    forwarding.start()
+    assert reading.wait(WAIT)
+    forwarding.close()  # it does not wait for the read
+    answer.set()
+    assert returned.wait(WAIT), 'the read ends on its own, into a loop that closed, and posts nothing there'
+    listener.socket.close()
 
 
 def test_a_standby_whose_socket_takes_no_connection_does_not_start(record: Record) -> None:

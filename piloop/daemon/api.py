@@ -134,7 +134,6 @@ from piloop.ids import (
 )
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
-from piloop.net.forward import TermCheck
 from piloop.net.server import App, asked, authorized, changed, served
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
@@ -917,8 +916,6 @@ def _events(db: Database, query: EventsQuery, campaign: CampaignId | None, after
 def with_api(server: App, api: Handlers) -> App:
     """``server`` with the API's routes, which read with ``api``. An operation's refusal answers 409, ``refused``.
 
-    A request that a standby forwarded for another term than this daemon's answers 409 ``term`` (``TermCheck``).
-
     Raises:
         PluginError: A contributed route has the method and path of one of the API's.
     """
@@ -927,7 +924,6 @@ def with_api(server: App, api: Handlers) -> App:
     for refused in REFUSALS:
         server.add_exception_handler(refused, _refused)
     server.add_exception_handler(ops.StillStopping, _still_stopping)
-    server.add_middleware(TermCheck, epoch=api.daemon.epoch)
     server.state.handlers = api
     return server
 
