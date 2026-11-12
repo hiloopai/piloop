@@ -465,7 +465,8 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
             return register(s, FilePath(body.path), me, body.name)
         case Clone(clone=remote):
             vcs, credential = VCS.selected(api.cfg.providers), _credential(api, s, remote.credential)
-            return register_clone(s, api.cfg.home, vcs, FromUrl(remote.url, credential), me, body.name)
+            secret = remote.credential.secret if isinstance(remote.credential, SecretCredential) else None
+            return register_clone(s, api.cfg.home, vcs, FromUrl(remote.url, credential, secret), me, body.name)
         case Fork():
             if (source := referenced(s, body.fork)) is None:
                 raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CAMPAIGN, str(UnknownCampaign(body.fork)))

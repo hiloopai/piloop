@@ -414,7 +414,7 @@ class Campaign(Tracked, Base):
     __tablename__ = 'campaigns'
     __table_args__ = (
         *CAMPAIGN_CHECKS,
-        *text_checks('campaigns', nullable=('paused_reason',)),
+        *text_checks('campaigns', nullable=('paused_reason', 'clone_url', 'clone_secret')),
         Index('ix_campaigns_name', 'name', unique=True, sqlite_where=text(f"status != '{CampaignStatus.RETIRED}'")),
     )
 
@@ -452,6 +452,12 @@ class Campaign(Tracked, Base):
     """The repository that the campaign works on, the same for every clone of it: the URL of its ``origin`` remote
     (else of its first remote) as ``host/owner/name``, else ``path``. ``piloop init`` sets it. Past work on the same
     code is ``WHERE repo = (SELECT repo FROM campaigns WHERE id = <p>)``."""
+    clone_url: Mapped[str | None]
+    """Where the daemon cloned its checkout from (``register_clone``), NULL for a checkout of one's own or a fork of a
+    pack: what another host clones it from again (``piloop.daemon.rebuild``)."""
+    clone_secret: Mapped[str | None]
+    """The home's secret that the clone used (``SecretCredential``), NULL for none or a token given with it: what
+    another host clones with again."""
     type: Mapped[str] = mapped_column(default=OPTIMIZATION, server_default=OPTIMIZATION)
     """What the campaign does: a campaign type, by its name. Every campaign is ``optimization``. Each change is a
     ``campaign.type`` event."""
@@ -648,8 +654,9 @@ class RepoTransfer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     campaign_id: Mapped[CampaignId]
     """No foreign key: an agent deletes a campaign with ``piloop sql``, and this table is not its to write."""
-    base: Mapped[Revision]
-    """The version that the transfer is relative to: one that the repo had already."""
+    base: Mapped[Revision | None]
+    """The version that the transfer is relative to: one that the repo had already. NULL for a pack of every version
+    that the repo began with (a fork of a retired campaign): the vcs fetches the head from it (``Repository.fetch``)."""
     head: Mapped[Revision]
     blob: Mapped[Cid] = mapped_column(CidText)
     received_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)

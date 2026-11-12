@@ -113,6 +113,8 @@ def preflight(cfg: Settings, listen: network.Address | None = None) -> network.N
             or the network refuses ``listen``.
     """
     plugins.compose(*bound(cfg))
+    if (why := LEADERS.selected(cfg.providers).refuses_cas(cas.CAS.selected(cfg.providers))) is not None:
+        raise plugins.PluginError(f'{cfg.home / CONFIG_FILE}: {why}')
     schemas()
     for slot in DECLARED:
         slot.loaded()
@@ -210,7 +212,7 @@ class Daemon:
             """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
             if self._restored:
                 try:
-                    rebuild(self.db, self._cas, cfg.home, self.tracer)
+                    rebuild(self.db, self._cas, cfg.home, SECRETS.selected(cfg.providers), self.tracer)
                 except RebuildFailed as e:
                     self._leader.release(self._term)
                     raise SystemExit(f'the daemon does not start: {e}') from e

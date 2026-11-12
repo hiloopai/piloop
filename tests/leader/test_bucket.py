@@ -13,11 +13,17 @@ from moto import mock_aws
 from mypy_boto3_s3 import S3Client
 from pydantic import ValidationError
 
+from piloop.daemon.main import preflight
 from piloop.db import terms
 from piloop.db.session import Database
+from piloop.plugins.cas.cached import Cached
+from piloop.plugins.cas.disk import Disk
+from piloop.plugins.cas.s3 import S3
+from piloop.plugins.host import PluginError
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms
 from piloop.plugins.leader.contract import LostTerm, Term, Unreachable
 from piloop.plugins.leader.local import LocalLeader
+from piloop.settings import Settings
 from tests.conftest import leader_host
 
 BUCKET = 'piloop-terms'
@@ -192,3 +198,18 @@ def test_a_checkout_that_piloop_did_not_clone_is_refused_and_local_refuses_none(
         f'{tmp_path / "mine"} is'
     )
     assert LocalLeader().refuses(tmp_path, tmp_path / 'mine') is None
+
+
+def test_a_cas_that_only_this_host_reaches_is_refused_and_the_daemon_does_not_start(tmp_path: Path) -> None:
+    bucket = BucketLeader(url=URL)
+    disk, s3 = Disk(), S3(url=f's3://{BUCKET}/cas')
+    assert [bucket.refuses_cas(c) is None for c in (disk, s3, Cached(remote=disk), Cached(remote=s3))] == [
+        False,
+        True,
+        False,
+        True,
+    ]
+    assert LocalLeader().refuses_cas(disk) is None
+    (tmp_path / 'config.toml').write_text(f'[plugins.leader]\nprovider = "bucket"\nurl = "{URL}"\n')
+    with pytest.raises(PluginError, match='config.toml: the CAS is a directory of this host'):
+        preflight(Settings(home=tmp_path))

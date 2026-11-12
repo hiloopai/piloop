@@ -385,7 +385,8 @@ not shipped.
 
 Under `bucket`:
 
-- `litestream` must be on `PATH`, and the CAS must be one that every host reaches (`s3`, `gcs`, `http`, or `cached` over one of them).
+- `litestream` must be on `PATH`, and the CAS must be one that every host reaches (`s3`, `gcs`, `http`, or `cached` over one of them): the daemon does not start on a `disk` CAS.
+- A campaign cloned with a home's secret is cloned again with that secret. A token given with `piloop init <url>` is kept nowhere: give a secret instead.
 - Register campaigns by their URL (`piloop init <url>`): a checkout of your own is refused, since another host could not make it again.
 - Run a standby with `piloop serve` (under systemd or Kubernetes): `piloop start` waits for a daemon that serves, and a standby does not serve until it holds the term.
 

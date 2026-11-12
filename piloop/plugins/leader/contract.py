@@ -23,6 +23,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from piloop.plugins.cas.contract import CasProvider
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
 
@@ -142,6 +143,10 @@ class LeaderConfig(Parameters, ABC):
     @abstractmethod
     def open(self, host: LeaderHost) -> Leader:
         """Open the record of the home's terms. The daemon calls it once, before it takes a term."""
+
+    def refuses_cas(self, cas: CasProvider) -> str | None:
+        """Why this provider cannot serve a home whose CAS is ``cas``, or None: it can. The daemon does not start then."""
+        return None
 
     def refuses(self, home: Path, checkout: Path) -> str | None:
         """Why this provider cannot serve a campaign whose checkout is ``checkout``, or None: it can.

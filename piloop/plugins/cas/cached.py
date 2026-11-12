@@ -80,6 +80,9 @@ class Cached(CasProvider):
     def where(self, home: Path) -> str:
         return self.remote.where(home)
 
+    def shared(self) -> bool:
+        return self.remote.shared()
+
 
 @dataclass
 class CachedCas(StreamCas):

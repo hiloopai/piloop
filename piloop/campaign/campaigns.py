@@ -24,13 +24,14 @@ from piloop.actor import Actor
 from piloop.campaign.dirs import campaign_dir
 from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigMissing, load_campaign_config
 from piloop.db.events import emit, latest
-from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
+from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel, RepoTransfer
 from piloop.db.session import Database
 from piloop.ids import (
     LISTED,
     CampaignId,
     CampaignName,
     CampaignStatus,
+    EnvName,
     Revision,
     TargetKind,
     TargetRef,
@@ -182,6 +183,9 @@ class FromUrl:
 
     url: str
     credential: SecretStr | None
+    secret: EnvName | None = None
+    """The name of the home's secret that gave ``credential``: another host clones with it again. None for none, or a
+    token given with the call, which nothing keeps."""
 
 
 @dataclass(frozen=True)
@@ -244,6 +248,16 @@ def register_clone(
             shutil.rmtree(cloning)
         raise
     campaign.path = str(checkout.resolve())
+    match source:
+        case FromUrl(url=url, secret=secret):
+            campaign.clone_url, campaign.clone_secret = url, secret
+        case FromPack(packed=packed):  # another host fetches the same pack (``piloop.daemon.rebuild``)
+            s.flush()
+            s.add_all(
+                RepoTransfer(campaign_id=campaign.id, base=None, head=r, blob=packed.blob) for r in packed.revisions
+            )
+        case _:
+            assert_never(source)
     return campaign, baseline
 
 

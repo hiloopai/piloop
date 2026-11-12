@@ -339,6 +339,11 @@ def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_regi
         assert (path.parent, credential.get_secret_value()) == (cfg.home / 'repos', 'tok')
         again = client.register_campaign(Clone(clone=Remote(url=url), name='again'))
         assert (again.campaign.name, again.campaign.path) == ('again', str(cfg.home / 'repos' / str(again.campaign.id)))
+        with db.session() as s:
+            sources = s.execute(select(Campaign.clone_url, Campaign.clone_secret).order_by(Campaign.id)).all()
+        assert [tuple(r) for r in sources[-2:]] == [(url, 'TOKEN'), (url, None)], (
+            'what another host clones it with again'
+        )
         (cfg.home / 'repos' / str(again.campaign.id + 1)).mkdir()
         with pytest.raises(
             Refused, match=f'^{cfg.home / "repos" / str(again.campaign.id + 1)} exists: move it away'

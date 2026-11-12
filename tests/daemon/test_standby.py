@@ -39,6 +39,10 @@ renew = 0.05
 deadline = 1
 max_skew = 0
 replica_poll = 0.01
+
+[plugins.cas]
+provider = "s3"
+url = "s3://{BUCKET}/cas"
 """
 WAIT = 30
 

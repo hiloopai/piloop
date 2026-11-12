@@ -206,9 +206,16 @@ class CasProvider(Parameters, ABC):
     def where(self, home: Path) -> str:
         """Where its blobs are, in one spelling (``s3://bucket/prefix``): a cache over it records which store it fills."""
 
+    def shared(self) -> bool:
+        """Whether every host that serves the home reaches its blobs, as a bucket or a server does: yes by default."""
+        return True
+
 
 class LocalProvider(CasProvider):
     """A provider whose store can be the local tier of another (``cached``'s ``local``)."""
+
+    def shared(self) -> bool:
+        return False  # a directory of this host
 
     @abstractmethod
     def tier(self, home: Path) -> LocalCas:

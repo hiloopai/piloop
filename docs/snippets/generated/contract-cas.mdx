@@ -4,6 +4,7 @@
 |---|---|
 | `CasProvider.open(home: Path) -> Cas` | The store that these parameters describe, for the PILOOP_HOME `home`. |
 | `CasProvider.where(home: Path) -> str` | Where its blobs are, in one spelling (`s3://bucket/prefix`): a cache over it records which store it fills. |
+| `CasProvider.shared() -> bool` | Whether every host that serves the home reaches its blobs, as a bucket or a server does: yes by default. |
 | `Cas.has(cid: Cid) -> bool` | Whether the store holds the blob, without checking its bytes. |
 | `Cas.missing(cids: Sequence[Cid]) -> list[Cid]` | Those of `cids` that the store lacks, in order. |
 | `Cas.put(data: bytes) -> Cid` | Store `data` and return its raw BLAKE3 CID. |

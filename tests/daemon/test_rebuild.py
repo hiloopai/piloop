@@ -10,17 +10,20 @@ from pathlib import Path
 import pytest
 from covalence import Cid
 from git import Repo
-from sqlalchemy import delete, update
+from pydantic import SecretStr
+from sqlalchemy import delete, select, update
 
 from piloop.actor import System
 from piloop.agents.results import JOB_FILES
-from piloop.campaign.campaigns import FromUrl, register_clone, workspace_dir
+from piloop.campaign.campaigns import ForkOf, FromPack, FromUrl, register_clone, workspace_dir
 from piloop.config import load_campaign_config
 from piloop.daemon.rebuild import RebuildFailed, rebuild
 from piloop.db.models import Campaign, JobFiles, RepoTransfer, WorkspaceSnapshot
 from piloop.db.session import Database
 from piloop.ids import CampaignId, Revision
 from piloop.otel import Tracer
+from piloop.plugins.archive.contract import PackedCheckout
+from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.git import Git
 from piloop.store.tree import put_tree
 from tests.conftest import disk
@@ -60,7 +63,7 @@ def test_a_home_whose_files_are_gone_is_made_again_from_its_rows_and_the_cas_twi
     stale.mkdir(parents=True)
     (stale / 'gone.txt').write_text('a file that a later merge removed\n')
     for _ in range(2):
-        rebuild(db, cas, home, Tracer(None))
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
         with Repo(checkout) as repo:
             assert repo.commit(head).message.strip() == 'better', 'the transfer it received'
             assert any(r.path == 'refs/piloop/demo/received/1' for r in repo.refs), 'kept from garbage collection'
@@ -76,7 +79,7 @@ def test_a_row_whose_blob_the_cas_lacks_fails_the_rebuild_and_says_which(
         s.add(JobFiles(place='runs/7', files=Cid('bafkr4ihkr4ld3m4gqkjf4reryxsy2s5tkbxprqkow6fin2iiyvreuzzab4')))
         s.commit()
     with pytest.raises(RebuildFailed, match='the files of runs/7 .* are not in the CAS'):
-        rebuild(db, cas, home, Tracer(None))
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
 
 
 def test_what_cannot_be_made_again_fails_the_rebuild_and_says_why(
@@ -88,20 +91,20 @@ def test_what_cannot_be_made_again_fails_the_rebuild_and_says_why(
     with db.session() as s:
         s.add(Campaign(name='lost', path=str(checkout), config=load_campaign_config(campaign_path)))
         s.commit()
-    with pytest.raises(RebuildFailed, match=f'campaign lost: no URL to clone {checkout} from'):
-        rebuild(db, cas, home, Tracer(None))
+    with pytest.raises(RebuildFailed, match=f'campaign lost: no URL or pack to make {checkout} from'):
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
     with db.session() as s:
-        s.execute(update(Campaign).values(repo=(tmp_path / 'gone.git').as_uri()))
+        s.execute(update(Campaign).values(clone_url=(tmp_path / 'gone.git').as_uri()))
         s.commit()
     with pytest.raises(RebuildFailed, match=f'campaign lost: {checkout} could not be made again'):
-        rebuild(db, cas, home, Tracer(None))
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
     Repo.init(checkout).git.commit('-q', '--allow-empty', '-m', 'base')
     base = Repo(checkout).head.commit.hexsha
     with db.session() as s:
         s.add(RepoTransfer(campaign_id=1, base=base, head='f' * 40, blob=disk(tmp_path / 'other').put(b'x')))
         s.commit()
     with pytest.raises(RebuildFailed, match=f'campaign lost: transfer 1 \\({"f" * 40}\\)'):
-        rebuild(db, cas, home, Tracer(None))
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
     with db.session() as s:
         s.execute(delete(RepoTransfer))
         s.add(JobFiles(place='runs/2', files=cas.put(JOB_FILES.dump_json({'log.txt': cas.put(b'x')}))))
@@ -112,7 +115,7 @@ def test_what_cannot_be_made_again_fails_the_rebuild_and_says_why(
         )
         s.commit()
     with pytest.raises(RebuildFailed, match='^runs/3: the blob'):
-        rebuild(db, cas, home, Tracer(None))
+        rebuild(db, cas, home, LocalSecrets(), Tracer(None))
     assert (home / 'runs' / '2' / 'log.txt').read_bytes() == b'x', 'what it could make, it made'
 
 
@@ -123,7 +126,7 @@ def test_a_campaign_with_a_checkout_of_its_own_or_no_snapshot_keeps_what_it_has(
     home = tmp_path / 'home'
     (workspace_dir(home, campaign.id) / 'notes.md').parent.mkdir(parents=True)
     (workspace_dir(home, campaign.id) / 'notes.md').write_text('kept\\n')
-    rebuild(db, disk(tmp_path / 'cas'), home, Tracer(None))
+    rebuild(db, disk(tmp_path / 'cas'), home, LocalSecrets(), Tracer(None))
     assert (workspace_dir(home, campaign.id) / 'notes.md').read_text() == 'kept\\n'
     assert (Path(campaign.path) / 'piloop.toml').is_file()
 
@@ -143,5 +146,45 @@ def test_a_workspace_rebuilt_where_none_was_and_after_a_rebuild_that_stopped_hal
         s.commit()
     root = workspace_dir(home, CampaignId(1))
     (root.with_name(f'{root.name}.rebuilding') / 'half').mkdir(parents=True)
-    rebuild(db, cas, home, Tracer(None))
+    rebuild(db, cas, home, LocalSecrets(), Tracer(None))
     assert [p.name for p in root.iterdir()] == ['a.txt'] and not root.with_name(f'{root.name}.rebuilding').exists()
+
+
+def test_a_clone_made_with_a_secret_is_made_again_with_it_and_a_fork_of_a_pack_from_the_pack(
+    db: Database, campaign_path: Path, tmp_path: Path
+) -> None:
+    home, cas = tmp_path / 'home', disk(tmp_path / 'cas')
+    origin = tmp_path / 'origin.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(origin)], check=True)
+    secrets = LocalSecrets()
+    with db.session() as s:
+        secrets.put(s, None, 'GIT_TOKEN', SecretStr('t0ken'))
+        cloned, _ = register_clone(
+            s, home, Git(), FromUrl(origin.as_uri(), SecretStr('t0ken'), 'GIT_TOKEN'), System.HUMAN, 'a'
+        )
+        s.commit()
+        assert (cloned.clone_url, cloned.clone_secret) == (origin.as_uri(), 'GIT_TOKEN')
+        head = Revision(Repo(cloned.path).head.commit.hexsha)
+        with closing(Git().open(Path(cloned.path))) as repo:
+            blob = repo.send(cas, [head], [])
+        assert blob is not None
+        packed = PackedCheckout(blob=blob, head=head, revisions=(head,))
+        forked, _ = register_clone(s, home, Git(), FromPack(cas, packed), System.HUMAN, 'b', ForkOf(cloned, head))
+        s.commit()
+        assert forked.clone_url is None
+        assert [
+            (t.base, t.head) for t in s.scalars(select(RepoTransfer).where(RepoTransfer.campaign_id == forked.id))
+        ] == [(None, head)], 'the pack is its first transfer'
+        paths = Path(cloned.path), Path(forked.path)
+    for path in paths:
+        shutil.rmtree(path)
+    rebuild(db, cas, home, secrets, Tracer(None))
+    for path in paths:
+        with Repo(path) as repo:
+            assert repo.commit(head).message.strip() == 'baseline'
+    shutil.rmtree(paths[0])
+    with db.session() as s:
+        secrets.delete(s, None, 'GIT_TOKEN')
+        s.commit()
+    with pytest.raises(RebuildFailed, match='campaign a: the home has no secret GIT_TOKEN to clone it with'):
+        rebuild(db, cas, home, secrets, Tracer(None))

@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from piloop.campaign.campaigns import REPOS
 from piloop.db import ids, terms
 from piloop.db.models import utcnow
+from piloop.plugins.cas.contract import CasProvider
 from piloop.plugins.host import Check, Severity
 from piloop.plugins.leader.contract import LeaderConfig, LeaderHost, LostTerm, Renewal, Term, Unreachable
 
@@ -172,6 +173,14 @@ class BucketLeader(LeaderConfig):
         if found is None:
             return [Check('leader', f'{self.litestream} is not on PATH', 'install Litestream 0.5', Severity.FAIL)]
         return [Check('leader', f'bucket {self.url}, Litestream at {found}')]
+
+    def refuses_cas(self, cas: CasProvider) -> str | None:
+        if cas.shared():
+            return None
+        return (
+            'the CAS is a directory of this host: under the bucket leader, another host makes the home again from the'
+            ' CAS, so choose one that every host reaches (s3, gcs, http, or cached over one of them)'
+        )
 
     def refuses(self, home: Path, checkout: Path) -> str | None:
         if checkout.resolve().is_relative_to((home / REPOS).resolve()):
