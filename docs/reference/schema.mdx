@@ -28,6 +28,8 @@ CREATE TABLE campaigns (
 	paused_reason VARCHAR,
 	paused_by VARCHAR,
 	repo VARCHAR,
+	clone_url VARCHAR,
+	clone_secret VARCHAR,
 	type VARCHAR DEFAULT 'optimization' NOT NULL,
 	parent_id INTEGER,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -39,6 +41,8 @@ CREATE TABLE campaigns (
 	CONSTRAINT "campaigns.a stopped or retired campaign has its stopped_reason" CHECK ((status = 'active') = (stopped_reason IS NULL)),
 	CONSTRAINT "campaigns.a retired campaign is not paused" CHECK (status != 'retired' OR paused IS NULL),
 	CONSTRAINT "campaigns.paused_reason must be a text value" CHECK (typeof(paused_reason) IN ('text', 'null')),
+	CONSTRAINT "campaigns.clone_url must be a text value" CHECK (typeof(clone_url) IN ('text', 'null')),
+	CONSTRAINT "campaigns.clone_secret must be a text value" CHECK (typeof(clone_secret) IN ('text', 'null')),
 	CONSTRAINT campaignstatus CHECK (status IN ('active', 'stopped', 'retired')),
 	CONSTRAINT pause CHECK (paused IN ('launches', 'all')),
 	FOREIGN KEY(parent_id) REFERENCES campaigns (id)
@@ -74,7 +78,7 @@ CREATE TABLE migrations (
 CREATE TABLE repo_transfers (
 	id INTEGER NOT NULL,
 	campaign_id INTEGER NOT NULL,
-	base VARCHAR NOT NULL,
+	base VARCHAR,
 	head VARCHAR NOT NULL,
 	blob VARCHAR NOT NULL,
 	received_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
