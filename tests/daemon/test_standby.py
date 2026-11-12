@@ -152,6 +152,7 @@ def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_pat
         Daemon(home(tmp_path, 'a'))
 
 
+@pytest.mark.quarantine(issue=858)
 def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(tmp_path: Path, bucket: FakeReplica) -> None:
     """Another host could not make its repo again: the daemon refuses before it takes the term."""
     first = home(tmp_path, 'a')
@@ -193,6 +194,7 @@ def stored() -> Record:
     return Record.model_validate_json(body)
 
 
+@pytest.mark.quarantine(issue=858)
 def test_a_daemon_that_loses_its_term_restores_badly_or_cannot_renew_while_it_starts_does_not_serve(
     tmp_path: Path, bucket: FakeReplica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
