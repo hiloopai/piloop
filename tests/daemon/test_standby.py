@@ -152,17 +152,40 @@ def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_pat
         Daemon(home(tmp_path, 'a'))
 
 
-@pytest.mark.quarantine(issue=858)
-def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(tmp_path: Path, bucket: FakeReplica) -> None:
-    """Another host could not make its repo again: the daemon refuses before it takes the term."""
+def stops_and_releases(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """What a daemon's renewals and its provider do, in order: ``stop`` (the renewals) and ``release`` (the term)."""
+    done: list[str] = []
+    stop, release = Holding.stop, BucketTerms.release
+
+    def stopping(self: Holding) -> None:
+        done.append('stop')
+        stop(self)
+
+    def releasing(self: BucketTerms, term: Term) -> None:
+        done.append('release')
+        release(self, term)
+
+    monkeypatch.setattr(Holding, 'stop', stopping)
+    monkeypatch.setattr(BucketTerms, 'release', releasing)
+    return done
+
+
+def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(
+    tmp_path: Path, bucket: FakeReplica, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another host could not make its repo again: the daemon refuses, and gives the term back."""
     first = home(tmp_path, 'a')
     daemon = Daemon(first)
     with daemon.db.session() as s:  # a campaign that a daemon of an older piloop registered: in its replica too
         s.execute(text("INSERT INTO campaigns (name, path, config) VALUES ('mine', '/srv/mine', '{}')"))
         s.commit()
     daemon.shutdown(timeout=5)
+    done = stops_and_releases(monkeypatch)
     with pytest.raises(SystemExit, match='^the daemon does not start: /srv/mine is a checkout of your own'):
         Daemon(first)
+    assert done[:2] == ['stop', 'release'], 'no renewal after the release: it would end the process at once'
+    until = stored().until
+    assert until is not None and until <= datetime.now(UTC), 'released: the next daemon takes it at once'
 
 
 def test_the_next_term_restores_what_the_first_wrote_and_names_its_own_replica_once_it_is_whole(
@@ -194,7 +217,6 @@ def stored() -> Record:
     return Record.model_validate_json(body)
 
 
-@pytest.mark.quarantine(issue=858)
 def test_a_daemon_that_loses_its_term_restores_badly_or_cannot_renew_while_it_starts_does_not_serve(
     tmp_path: Path, bucket: FakeReplica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -212,8 +234,10 @@ def test_a_daemon_that_loses_its_term_restores_badly_or_cannot_renew_while_it_st
     with monkeypatch.context() as m:
         m.setattr(BucketTerms, 'restore', lambda self, term: True)
         m.setattr(main, 'rebuild', failed)
+        done = stops_and_releases(m)
         with pytest.raises(SystemExit, match='^the daemon does not start: campaign c: the origin is gone$'):
             Daemon(home(tmp_path, 'b'))
+        assert done[:2] == ['stop', 'release'], 'no renewal after the release'
 
     start = Holding.start
 

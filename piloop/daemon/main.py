@@ -9,6 +9,7 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import FrameType
+from typing import NoReturn
 
 from sqlalchemy import select
 
@@ -209,8 +210,7 @@ class Daemon:
                 live = s.scalars(select(Campaign).where(Campaign.status != CampaignStatus.RETIRED)).all()
                 refused = [why for c in live if (why := leader.refuses(cfg.home, Path(c.path))) is not None]
             if refused:
-                self._leader.release(self._term)
-                raise SystemExit(f'the daemon does not start: {"; ".join(refused)}')
+                self._refuse('; '.join(refused))
             with self.db.session() as s:
                 write_transaction(s)
                 try:
@@ -224,8 +224,7 @@ class Daemon:
                 try:
                     rebuild(self.db, self._cas, cfg.home, SECRETS.selected(cfg.providers), self.tracer)
                 except RebuildFailed as e:
-                    self._leader.release(self._term)
-                    raise SystemExit(f'the daemon does not start: {e}') from e
+                    self._refuse(str(e))
             self._replicating = self._leader.replicate(self._term, self._unreplicated)
             """Ships the database for the term's life: it starts before the daemon serves, and stops after its last
             write."""
@@ -394,6 +393,17 @@ class Daemon:
         if term is None:
             raise SystemExit('the daemon stopped while it waited, as a standby, for its term')
         return term
+
+    def _refuse(self, why: str) -> NoReturn:
+        """Give the term back and do not start.
+
+        The renewals stop first: one after the release would find the term no longer this daemon's, and end the process
+        at once (``Holding``), without saying why it did not start.
+        """
+        if self._holding is not None:
+            self._holding.stop()
+        self._leader.release(self._term)
+        raise SystemExit(f'the daemon does not start: {why}')
 
     def _lost_term(self, why: str) -> None:
         """The term was not renewed in time: the daemon stops, as on SIGTERM, before the term ends."""
