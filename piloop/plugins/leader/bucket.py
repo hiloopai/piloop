@@ -15,7 +15,8 @@ Each term replicates the home's database with Litestream to ``terms/<epoch>/`` b
 stale writer never writes where a newer term reads. The record names the source of the next restore (``Source``): the
 prefix and the transaction that the holder restored, until its own replica holds the whole database, then its own
 prefix. A term restores from that source, and names it as its own before it serves, so a term that dies before its first
-replica leaves the source as it found it. The protocol is model-checked in ``tests/models/replica.tla``.
+replica leaves the source as it found it. A term whose replica does not hold the whole database within
+``replica_wait`` stops rather than go on serving writes that nothing ships. The protocol is model-checked in ``tests/models/replica.tla``.
 
 boto3 is imported when the record opens, not with this module: it takes ~0.5 s, and every command reads the settings
 that name this provider. Credentials are boto3's own chain: the environment, a profile, an instance role.
@@ -28,7 +29,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -98,7 +99,7 @@ class Replica(Protocol):
         ...
 
     def replicate(self, database: Path, url: str) -> Replicating:
-        """Ship ``database`` to the replica at ``url`` from now on."""
+        """Ship ``database`` to the replica at ``url``, which is new, from now on: its first file holds all of it."""
         ...
 
 
@@ -117,8 +118,16 @@ class Litestream:
         return str(json.loads(done.stdout)['txid'])
 
     def replicate(self, database: Path, url: str) -> Replicating:
+        """Start Litestream with no local state: what an earlier replication left there belongs to another replica.
+
+        That replication may be an earlier term's on this host, or a sidecar's. Once Litestream's L0 retention dropped
+        TXID 1 from that state, a new replica gets one snapshot and then fails every upload: no later write ships.
+        Nothing needs that state: each term's replica is new, and starts at TXID 1.
+        """
+        with suppress(FileNotFoundError):
+            shutil.rmtree(database.with_name(f'.{database.name}-litestream'))
         argv = [self._executable, 'replicate', str(database), url]
-        return _Child(subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._env))
+        return _Child(subprocess.Popen(argv, stdout=subprocess.DEVNULL, env=self._env))  # its log goes to the daemon's
 
 
 @dataclass(frozen=True)
@@ -153,6 +162,9 @@ class BucketLeader(LeaderConfig):
     """The Litestream executable (0.5), which replicates and restores the home's database."""
     replica_poll: timedelta = Field(default=timedelta(seconds=0.5), gt=timedelta(0))
     """How often a new term looks whether its replica holds the whole database yet: the record names it then."""
+    replica_wait: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
+    """How long a new term waits for its replica to hold the whole database. Past it, the daemon stops rather than
+    serve a term that it does not replicate. Litestream ships a database of 100 MB in about 5 s."""
 
     @field_validator('url')
     @classmethod
@@ -166,6 +178,8 @@ class BucketLeader(LeaderConfig):
     def _in_order(self) -> Self:
         if not self.renew < self.deadline < self.ttl:
             raise ValueError(f'renew ({self.renew}) < deadline ({self.deadline}) < ttl ({self.ttl}) does not hold')
+        if not self.replica_poll < self.replica_wait:
+            raise ValueError(f'replica_poll ({self.replica_poll}) < replica_wait ({self.replica_wait}) does not hold')
         return self
 
     def checks(self) -> list[Check]:
@@ -278,10 +292,11 @@ class BucketTerms:
         return True
 
     @contextmanager
-    def replicate(self, term: Term) -> Generator[None]:
+    def replicate(self, term: Term, unreplicated: Callable[[str], None]) -> Generator[None]:
         replicating = self.replica.replicate(self._host.database, self._url(term.epoch))
         stop = threading.Event()
-        watch = threading.Thread(target=self._watch, args=(term, stop), name='replica-watch', daemon=True)
+        args = (term, stop, unreplicated)
+        watch = threading.Thread(target=self._watch, args=args, name='replica-watch', daemon=True)
         watch.start()
         try:
             yield
@@ -290,12 +305,13 @@ class BucketTerms:
             watch.join()
             replicating.stop()
 
-    def _watch(self, term: Term, stop: threading.Event) -> None:
+    def _watch(self, term: Term, stop: threading.Event, unreplicated: Callable[[str], None]) -> None:
         """Name this term's own replica as the source once it holds the whole database: a restore needs no other.
 
         S3 that does not answer is asked again at the next poll. A lost term stops the watch: the renewals end the
-        daemon then.
+        daemon then. Past ``replica_wait`` without the replica, it says why to ``unreplicated``, and stops.
         """
+        until = self._clock() + self.config.replica_wait
         while not stop.wait(self.config.replica_poll.total_seconds()):
             try:
                 if self.named(term):
@@ -303,6 +319,14 @@ class BucketTerms:
             except (self._client_error, self._boto_error, Unreachable) as e:
                 print(f'piloop: term {term.epoch} looks again for its replica: {e}', file=sys.stderr)
             except LostTerm:
+                return
+            if self._clock() >= until:
+                why = (
+                    f'term {term.epoch}: its replica {self._url(term.epoch)} does not hold the whole database'
+                    f" {self.config.replica_wait} after its start, so nothing ships its writes (Litestream's log says why)"
+                )
+                print(f'piloop: error: {why}', file=sys.stderr, flush=True)
+                unreplicated(why)
                 return
 
     def named(self, term: Term) -> bool:

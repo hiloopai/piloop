@@ -6,6 +6,7 @@ take never waits. Its epoch is one above the newest of the home's terms (``piloo
 
 import socket
 import threading
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
@@ -42,7 +43,7 @@ class LocalTerms:
     def restore(self, term: Term) -> bool:
         return False  # the home is on this host's disk, as the term before left it
 
-    def replicate(self, term: Term) -> AbstractContextManager[None]:
+    def replicate(self, term: Term, unreplicated: Callable[[str], None]) -> AbstractContextManager[None]:
         return nullcontext()
 
     def begin(self, s: Session, term: Term) -> None:

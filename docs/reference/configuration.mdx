@@ -722,6 +722,7 @@ With `provider = "bucket"`:
 | `max_skew` | duration | `"PT2S"` | The most that two hosts' clocks differ by. A standby takes a term this long after its `until`. |
 | `litestream` | string | `"litestream"` | The Litestream executable (0.5), which replicates and restores the home's database. |
 | `replica_poll` | duration | `"PT0.5S"` | How often a new term looks whether its replica holds the whole database yet: the record names it then. |
+| `replica_wait` | duration | `"PT1M"` | How long a new term waits for its replica to hold the whole database. Past it, the daemon stops rather than serve a term that it does not replicate. Litestream ships a database of 100 MB in about 5 s. |
 
 With `provider = "local"`, the table has no other key.
 

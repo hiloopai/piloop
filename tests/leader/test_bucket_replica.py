@@ -7,7 +7,7 @@ import stat
 import threading
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import boto3
@@ -46,6 +46,10 @@ def home_of(db: Database, at: Path) -> LeaderHost:
     return LeaderHost(at, at / 'piloop.db')
 
 
+def never(why: str) -> None:
+    raise AssertionError(f'the replica went whole: {why}')
+
+
 def record(client: S3Client) -> Record:
     return Record.model_validate_json(client.get_object(Bucket=BUCKET, Key=KEY)['Body'].read())
 
@@ -70,7 +74,7 @@ def test_a_term_restores_what_the_term_before_replicated_and_pins_it_until_its_o
     first = a.attempt('a/1', None)
     assert first is not None and a.restore(first) is False, 'the first term of the bucket keeps its home as it is'
     note(tmp_path / 'a' / 'piloop.db', 'written by term 1')
-    with a.replicate(first):
+    with a.replicate(first, never):
         assert a.named(first) and record(client).source == Source(epoch=1), 'its replica holds the whole database'
         note(tmp_path / 'a' / 'piloop.db', 'its last write')
     a.release(first)  # after the replica shipped the rest (the fake's stop)
@@ -83,7 +87,7 @@ def test_a_term_restores_what_the_term_before_replicated_and_pins_it_until_its_o
     assert record(client).source == Source(epoch=1, txid=f'{2:016x}'), 'pinned: where it restored from, how far'
     assert replica.restores == [(f'{URL}/terms/1', None)]
     assert not b.named(second), 'its own replica has nothing yet: the pin stays'
-    with b.replicate(second):
+    with b.replicate(second, never):
         assert b.named(second) and record(client).source == Source(epoch=2)
 
 
@@ -95,7 +99,7 @@ def test_a_term_that_dies_before_its_own_replica_leaves_the_pin_and_the_next_res
     first = a.attempt('a/1', None)
     assert first is not None
     note(tmp_path / 'a' / 'piloop.db', 'one')
-    with a.replicate(first):
+    with a.replicate(first, never):
         a.named(first)
     clock.now += TTL + SKEW
     b = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'b'), client, clock, replica)
@@ -133,7 +137,7 @@ def test_a_pin_that_another_take_beat_fails_and_the_term_never_serves(
     a = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'a'), client, clock, replica)
     first = a.attempt('a/1', None)
     assert first is not None
-    with a.replicate(first):
+    with a.replicate(first, never):
         a.named(first)
     a.release(first)
     clock.now += SKEW
@@ -162,7 +166,7 @@ def test_the_watch_names_the_replica_soon_after_it_is_whole_and_the_stop_ships_t
     a = BucketTerms(config, home_of(db, tmp_path / 'a'), client, Clock(), replica)
     first = a.attempt('a/1', None)
     assert first is not None
-    with a.replicate(first):
+    with a.replicate(first, never):
         for _ in range(500):  # the holder's own copy of its last write: moto serves no read beside a write
             if a._held is not None and a._held[0].source is not None:
                 break
@@ -231,11 +235,36 @@ def test_the_watch_asks_again_when_s3_does_not_answer_and_stops_when_the_term_is
         return answer
 
     monkeypatch.setattr(a, 'named', named)
-    a._watch(first, threading.Event())
+    a._watch(first, threading.Event(), never)
     assert len(asked) == 3 and 'term 1 looks again for its replica: slow' in capsys.readouterr().err
 
     def lost(term: Term) -> bool:
         raise LostTerm('taken')
 
     monkeypatch.setattr(a, 'named', lost)
-    a._watch(first, threading.Event())  # returns: the renewals end the daemon
+    a._watch(first, threading.Event(), never)  # returns: the renewals end the daemon
+
+
+def test_a_term_whose_replica_is_not_whole_in_time_says_why_and_stops_the_daemon(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Litestream that ships nothing: the term must not go on serving as if its writes were replicated."""
+    clock = Clock()
+    config = BucketLeader(url=URL, replica_poll=timedelta(milliseconds=1), replica_wait=timedelta(seconds=60))
+    a = BucketTerms(config, home_of(db, tmp_path / 'a'), client, clock, FakeReplica(client, automatic=False))
+    first = a.attempt('a/1', None)
+    assert first is not None
+    polls: list[datetime] = []
+
+    def not_yet(term: Term) -> bool:
+        polls.append(clock.now)
+        clock.now += timedelta(seconds=20)
+        return False
+
+    monkeypatch.setattr(a, 'named', not_yet)
+    unreplicated: list[str] = []
+    a._watch(first, threading.Event(), unreplicated.append)
+    why = f'term 1: its replica {URL}/terms/1 does not hold the whole database 0:01:00 after its start'
+    assert len(polls) == 3 and len(unreplicated) == 1 and unreplicated[0].startswith(why), 'once, at its bound'
+    assert f'piloop: error: {why}' in capsys.readouterr().err
+    assert record(client).source is None, 'the record still names no replica of this term'

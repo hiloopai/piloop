@@ -175,9 +175,9 @@ class Daemon:
             """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
             self._forwarding.hold(self._term.epoch)
             self._lost: str | None = None
-            """Why the term's renewals failed, once they did."""
+            """Why the daemon gives its term up, once it does: its renewals failed, or its replica never went whole."""
             self._stop_on_loss: Callable[[], None] = lambda: None
-            """What a failed renewal stops: nothing while the daemon starts (it checks ``_lost`` before it serves),
+            """What giving the term up stops: nothing while the daemon starts (it checks ``_lost`` before it serves),
             then the scheduler."""
             renewal = self._leader.renewal
             self._holding = (
@@ -226,7 +226,7 @@ class Daemon:
                 except RebuildFailed as e:
                     self._leader.release(self._term)
                     raise SystemExit(f'the daemon does not start: {e}') from e
-            self._replicating = self._leader.replicate(self._term)
+            self._replicating = self._leader.replicate(self._term, self._unreplicated)
             """Ships the database for the term's life: it starts before the daemon serves, and stops after its last
             write."""
             self._replicating.__enter__()
@@ -310,6 +310,8 @@ class Daemon:
                     sys.stdout.flush()  # exec discards Python's buffers.
                     sys.stderr.flush()
                     os.execv(self._argv[0], self._argv)
+        if self._lost is not None:  # a failure: a service manager starts it again, with a new term or as a standby
+            raise SystemExit(f'the daemon gave its term up: {self._lost}')
 
     def _bind(self, address: network.Address | None) -> Listener | None:
         """Bind the home's Unix socket, and the network's listener when it has one (``_listeners``), which it returns.
@@ -395,7 +397,14 @@ class Daemon:
 
     def _lost_term(self, why: str) -> None:
         """The term was not renewed in time: the daemon stops, as on SIGTERM, before the term ends."""
-        self.tracer.event('term.lost', error=why)
+        self._give_up('term.lost', why)
+
+    def _unreplicated(self, why: str) -> None:
+        """The term's replica did not hold the whole database in time: the daemon stops, as on a lost term."""
+        self._give_up('term.unreplicated', why)
+
+    def _give_up(self, event: str, why: str) -> None:
+        self.tracer.event(event, error=why)
         self._lost = why
         self._stop_on_loss()
 

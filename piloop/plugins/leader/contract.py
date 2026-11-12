@@ -14,6 +14,7 @@ term row in ``terms`` has it.
 
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -118,10 +119,11 @@ class Leader(Protocol):
         """
         ...
 
-    def replicate(self, term: Term) -> AbstractContextManager[None]:
+    def replicate(self, term: Term, unreplicated: Callable[[str], None]) -> AbstractContextManager[None]:
         """Ship the home's database while the context runs, where only ``term``'s epoch writes. Its exit ships the rest.
 
-        Once the replica holds the whole database, the term record names it as the source of the next restore.
+        Once the replica holds the whole database, the term record names it as the source of the next restore. When it
+        does not within the provider's bound, the provider calls ``unreplicated`` once, with why: the daemon stops.
         """
         ...
 

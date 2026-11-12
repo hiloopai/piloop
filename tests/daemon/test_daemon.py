@@ -157,6 +157,21 @@ def test_serve_runs_until_interrupted(tmp_path: Path, mocker: MockerFixture) -> 
     assert not (tmp_path / 'home' / 'serve.pid').exists()
 
 
+def test_a_daemon_that_gives_its_term_up_stops_and_exits_with_why(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Its replica never went whole: a failure, so that a service manager starts it again with a new term."""
+    daemon = Daemon(Settings(home=tmp_path / 'home'))
+    real_serve = daemon.scheduler.serve
+
+    def unreplicated() -> None:
+        daemon._unreplicated('as the test says')  # what the leader's replica watch calls past its bound
+        real_serve()  # it was interrupted: the loop returns
+
+    mocker.patch.object(daemon.scheduler, 'serve', side_effect=unreplicated)
+    with pytest.raises(SystemExit, match='^the daemon gave its term up: as the test says$'):
+        daemon.serve()
+    assert not (tmp_path / 'home' / 'serve.pid').exists()
+
+
 def test_serve_reaps_the_children_an_in_place_restart_handed_over_as_each_exits(tmp_path: Path) -> None:
     early = os.posix_spawn('/bin/sh', ['sh', '-c', 'exit 0'], os.environ)
     late = os.posix_spawn('/bin/sh', ['sh', '-c', 'sleep 0.8'], os.environ)

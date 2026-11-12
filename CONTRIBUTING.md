@@ -12,7 +12,8 @@ cd piloop
 make install
 ```
 
-`make install` installs the dependencies and the pre-commit hooks.
+`make install` installs the dependencies, the pre-commit hooks, and the Litestream that the tests of the `bucket`
+leader run (`uv run -m scripts.litestream`, into `.venv/bin`).
 
 To try the installer from your checkout, as CI does:
 

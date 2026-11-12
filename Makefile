@@ -3,8 +3,9 @@ PYTEST_WORKERS ?= 8
 SUITE_MEMORY ?= 24G
 
 .PHONY: install
-install:  ## Install deps and pre-commit hooks
+install:  ## Install deps, the Litestream that the tests run, and pre-commit hooks
 	uv sync --frozen
+	uv run -m scripts.litestream
 	uv run pre-commit install --install-hooks
 	git config merge.generated.driver true
 

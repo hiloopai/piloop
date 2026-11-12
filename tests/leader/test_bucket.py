@@ -185,6 +185,8 @@ def test_only_s3_urls_and_timings_in_order(db: Database, client: S3Client) -> No
             BucketLeader(url=url)
     with pytest.raises(ValidationError, match='renew'):
         BucketLeader(url=URL, renew=timedelta(seconds=20))
+    with pytest.raises(ValidationError, match='replica_poll'):
+        BucketLeader(url=URL, replica_poll=timedelta(seconds=60))
     assert BucketTerms(BucketLeader(url=f's3://{BUCKET}/'), leader_host(db), client).key == 'term.json', (
         'at the root of the bucket'
     )

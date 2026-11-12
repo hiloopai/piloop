@@ -2,6 +2,7 @@
 
 import threading
 import time
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -55,7 +56,7 @@ class Fake:
     def restore(self, term: Term) -> bool:
         return False
 
-    def replicate(self, term: Term) -> AbstractContextManager[None]:
+    def replicate(self, term: Term, unreplicated: Callable[[str], None]) -> AbstractContextManager[None]:
         return nullcontext()
 
 

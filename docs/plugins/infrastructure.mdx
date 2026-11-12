@@ -385,7 +385,8 @@ readiness probe of a load balancer. Each term streams the home's
 database with [Litestream](https://litestream.io) 0.5 to `terms/<epoch>/` beside the object. The next term restores
 it, then makes the rest of the home again from the CAS: each campaign's repo from its URL and what it received, its
 workspace, and the jobs' logs. A takeover loses what the old holder wrote in its last second or so, which Litestream had
-not shipped.
+not shipped. A holder whose replica does not hold the whole database within `replica_wait` (60 s) logs an error,
+stops, and exits with a failure: it never goes on serving writes that nothing ships.
 
 Under `bucket`:
 
