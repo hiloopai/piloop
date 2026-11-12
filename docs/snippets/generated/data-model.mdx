@@ -23,6 +23,11 @@ erDiagram
     comment_kinds {
         varchar id PK
     }
+    job_files {
+        integer id PK
+        varchar place
+        varchar files
+    }
     lease_workers {
         varchar id PK
         varchar pool
@@ -45,6 +50,17 @@ erDiagram
         varchar name PK
         varchar package
         integer fingerprint
+    }
+    owners {
+        varchar id PK
+    }
+    repo_transfers {
+        integer id PK
+        integer campaign_id
+        varchar base
+        varchar head
+        varchar blob
+        datetime received_at
     }
     target_kinds {
         varchar id PK
@@ -75,6 +91,12 @@ erDiagram
         datetime registered_at
         datetime ended_at
         InstanceEnd end
+    }
+    workspace_snapshots {
+        integer id PK
+        integer campaign_id
+        varchar manifest
+        datetime at
     }
     agent_sessions {
         integer id PK
@@ -281,6 +303,7 @@ erDiagram
         varchar rung
         varchar stopped
         datetime created_at
+        varchar units
     }
     campaigns |o--o{ campaigns : "parent_id"
     campaigns |o--o{ agent_sessions : "campaign_id"

@@ -1848,7 +1848,7 @@ def test_optimization_0013_counts_runs_candidates_ideas_and_measurements_with_au
     for table in tables:
         sql, indexes, triggers, _ = _schema_of(path, table)
         assert 'AUTOINCREMENT' not in sql and (indexes, triggers) == head[table][1:3], table
-    command.upgrade(chain, 'head')
+    command.upgrade(chain, '0013')
     assert {t: _schema_of(path, t)[:3] for t in tables} == {t: v[:3] for t, v in head.items()}, (
         'as the models make them'
     )
