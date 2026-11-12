@@ -113,13 +113,13 @@ def preflight(cfg: Settings, listen: network.Address | None = None) -> network.N
             or the network refuses ``listen``.
     """
     plugins.compose(*bound(cfg))
-    if (why := LEADERS.selected(cfg.providers).refuses_cas(cas.CAS.selected(cfg.providers))) is not None:
-        raise plugins.PluginError(f'{cfg.home / CONFIG_FILE}: {why}')
     schemas()
     for slot in DECLARED:
         slot.loaded()
     try:
         runtimes(cfg)
+        if (why := LEADERS.selected(cfg.providers).refuses_cas(cas.CAS.selected(cfg.providers))) is not None:
+            raise ValueError(why)
         return network.NETWORKS.selected(cfg.providers).listening(listen)
     except ValueError as e:
         raise plugins.PluginError(f'{cfg.home / CONFIG_FILE}: {e}') from e

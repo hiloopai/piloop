@@ -52,12 +52,14 @@ class Holding:
         renewal: Renewal,
         lost: Callable[[str], None],
         *,
-        exit: Callable[[str], None] = _exit,
+        exit: Callable[[str], None] | None = None,
         mono: Callable[[], float] = time.monotonic,
         wall: Callable[[], datetime] = utcnow,
     ) -> None:
         self.term = term
-        self._leader, self._renewal, self._lost, self._exit = leader, renewal, lost, exit
+        self._leader, self._renewal, self._lost = leader, renewal, lost
+        self._exit = exit if exit is not None else _exit
+        """Ends the process (``_exit``), read when the hold begins: a test of a daemon in its own process swaps it."""
         self._mono, self._wall = mono, wall
         now = mono()
         self.ends = deadline(term, now, wall())

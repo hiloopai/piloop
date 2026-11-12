@@ -14,7 +14,7 @@ from moto import mock_aws
 from sqlalchemy import select, text
 
 from piloop.actor import System
-from piloop.daemon import main
+from piloop.daemon import holding, main
 from piloop.daemon.holding import Holding
 from piloop.daemon.main import Daemon
 from piloop.daemon.rebuild import RebuildFailed
@@ -34,9 +34,9 @@ BUCKET = 'piloop-standby'
 CONFIG = f"""[plugins.leader]
 provider = "bucket"
 url = "s3://{BUCKET}/cell"
-ttl = 2
+ttl = 10
 renew = 0.05
-deadline = 1
+deadline = 5
 max_skew = 0
 replica_poll = 0.01
 
@@ -58,7 +58,10 @@ def bucket(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeReplica]:
         client.create_bucket(Bucket=BUCKET)
         replica = FakeReplica(client)
         monkeypatch.setattr(bucket_module, 'Litestream', lambda _executable, _region: replica)
+        ended: list[str] = []
+        monkeypatch.setattr(holding, '_exit', ended.append)  # a term's end would end the test's worker process
         yield replica
+    assert ended == [], 'no term ends inside a test: its daemon would exit at once'
 
 
 def home(tmp_path: Path, name: str) -> Settings:
