@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx2 as httpx
+import psutil
 import pytest
 from git import Repo
 from pydantic import SecretStr
@@ -38,6 +39,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.executor.contract import AGENT, AgentKey, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call
+from piloop.plugins.executor.kit.forks import CLOSE_SECONDS
 from piloop.plugins.executor.kit.leases import StaleLease, StaleReport, read_job
 from piloop.plugins.executor.kit.remote import Remote
 from piloop.plugins.executor.kit.tables import LeaseWorker
@@ -104,8 +106,15 @@ class Net:
         self.proxy.upstream = ('127.0.0.1', int(port))
 
     def kill_server(self) -> None:
+        """Kill the server process, and wait for its template of relayed calls (``Forks``) to exit.
+
+        The template exits once it reads that the server's end of its socket closed: some time after the kill, which
+        the test's check for leftover processes (``tests.processes``) must not outrun.
+        """
         assert self.server is not None and self.server.stdin is not None and self.server.stdout is not None
+        left = psutil.Process(self.server.pid).children(recursive=True) if self.server.poll() is None else []
         _kill(self.server)
+        psutil.wait_procs(left, timeout=CLOSE_SECONDS)
         self.server.stdin.close()
         self.server.stdout.close()
 
@@ -160,11 +169,12 @@ def net(db: Database, tmp_path: Path) -> Generator[Net]:
     try:
         yield net
     finally:
-        for proc in [*net.workers, *([net.server] if net.server else [])]:
+        for proc in net.workers:
             _kill(proc)
-            for pipe in (proc.stdin, proc.stdout):
-                if pipe is not None:
-                    pipe.close()
+            if proc.stdout is not None:
+                proc.stdout.close()
+        if net.server is not None:
+            net.kill_server()
         if net.proxy is not None:
             net.proxy.close()
 
