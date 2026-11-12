@@ -406,6 +406,7 @@ url = "s3://my-bucket/piloop/cell-1"
 
 ## Campaign types
 
-A **campaign type** is what one kind of campaign stores, and `campaigns.type` names it. `optimization`, built in, is
-the research model: its schema has the ideas, runs, candidates and evaluations. Every campaign is of this type. Its
-contract has no methods.
+A **campaign type** is what one kind of campaign stores and how it runs. `type` in `piloop.toml` picks it, and
+`campaigns.type` holds it. `optimization`, built in and the default, is the research model: its schema has the ideas,
+runs, candidates and evaluations. A type gives the daemon its planner, the version that a fork starts from, how a run's
+end settles its idea (`settle`), and the check of a new config.

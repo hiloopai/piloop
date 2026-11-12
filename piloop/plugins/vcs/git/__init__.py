@@ -23,6 +23,7 @@ from piloop.plugins.host import Check
 from piloop.plugins.vcs.contract import (
     MAX_HAVE,
     Captured,
+    Conflict,
     Fetch,
     NotARepository,
     Part,
@@ -143,6 +144,28 @@ class GitRepository(Repository):
 
     def keep(self, revision: Revision, why: Pin) -> None:
         git.pin(self.repo, ref(why), revision)
+
+    def merge(self, base: Revision, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
+        """``git merge-tree --write-tree --merge-base``, in the object store alone, then ``git commit-tree``.
+
+        git prints the tree, then the files in conflict if there are any, then a blank line and its messages.
+        """
+        for revision in (base, ours, theirs):
+            self.version(revision)
+        argv = ('--write-tree', '--name-only', f'--merge-base={base}', ours, theirs)
+        code, out, err = self.repo.git.merge_tree(*argv, with_extended_output=True, with_exceptions=False)
+        listed, _, messages = out.partition('\n\n')
+        tree, *paths = listed.splitlines()
+        match code:
+            case 0:
+                sha = self.repo.git.commit_tree(
+                    tree, '-p', ours, '-p', theirs, '-m', summary, env=git.commit_env(self.committer, self.committer)
+                )
+                return self._version(sha)
+            case 1:
+                return Conflict(paths=tuple(paths), detail=messages.strip())
+            case _:
+                raise VcsError(f'git merge-tree of {theirs} onto {ours} failed: {err.strip()}')
 
     def checkout(self, revision: Revision, path: Path) -> None:
         """A detached worktree."""

@@ -32,6 +32,7 @@ from pydantic_settings import (
 
 from piloop import deprecated
 from piloop.ids import EnvName, RoleName
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, OPTIMIZATION
 from piloop.plugins.campaign_type.kit.evaluation.config import (
     EvaluatorConfig,
     Metric,
@@ -118,6 +119,9 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     name: str
     """A short name for the campaign: letters, digits, ``.``, ``_`` and ``-``, not all digits. A campaign gets it when
     it is registered, unless the registration names another, and piloop names its git refs after it."""
+    type: str = OPTIMIZATION
+    """The campaign type: what the campaign does with its agents' work. ``optimization`` keeps the best version of the
+    code. Another installed type does what its plugin documents. A change takes effect at the next ``piloop init``."""
     metrics: list[Metric] = Field(min_length=1)
     """Every metric that the evaluate command reports, each with its ``role``. Each track has one ``primary``, so a campaign
     with one track has exactly one."""
@@ -149,6 +153,10 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
 
     @model_validator(mode='after')
     def _check(self) -> Self:
+        if self.type not in (types := CAMPAIGN_TYPES.providers()):
+            raise ValueError(
+                f'type {self.type!r} is no installed campaign type; the installed ones are {", ".join(types)}'
+            )
         self._check_tracks()
         self._check_ratios()
         self._check_ladder()

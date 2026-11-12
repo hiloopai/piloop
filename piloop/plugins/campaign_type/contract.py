@@ -22,11 +22,16 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.db.models import AgentSession, Campaign
     from piloop.ids import AgentSessionId, Revision, TargetRef
     from piloop.otel import Tracer
+    from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
+    from piloop.plugins.campaign_type.kit.runs.tables import Run
     from piloop.plugins.fact_source.facts import Facts
 
 
+OPTIMIZATION: Final = 'optimization'
+"""The built-in campaign type: improve the code against its evaluate command, candidate by candidate. A campaign whose
+``piloop.toml`` names no ``type`` is one."""
 CAMPAIGNS: Final = 'campaigns'
 """The name of the campaigns' pass in the daemon's loop, which a type's thread that ends wakes."""
 
@@ -126,6 +131,14 @@ class CampaignType(Parameters, ABC):
     @abstractmethod
     def fork_point(self, s: Session, source: Campaign) -> Revision:
         """The version that a fork of ``source`` starts from when the fork names none (``piloop campaign fork``)."""
+
+    @abstractmethod
+    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
+        """Settle the idea that ``run`` claimed, once the run ended ``end`` and its commits are scored.
+
+        ``last`` is the newest of its versions' candidates that has a score. The type decides whether the idea is done,
+        open again or still waits. The caller commits.
+        """
 
     @abstractmethod
     def check_config(self, s: Session, campaign: Campaign) -> None:

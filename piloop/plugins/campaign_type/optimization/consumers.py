@@ -5,13 +5,14 @@ from datetime import datetime
 from sqlalchemy import select
 
 from piloop.daemon.loop import Consumer, Kinds, Phase, Turn
-from piloop.db.models import NOT_RETIRED, OPTIMIZATION, Campaign, EventModel
+from piloop.db.models import NOT_RETIRED, Campaign, EventModel
 from piloop.db.triggers.changelog import (
     LIMITS,
     CampaignConfigChanged,
     EvaluationCancelled,
     EvaluationDeleted,
 )
+from piloop.plugins.campaign_type.contract import OPTIMIZATION
 from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_scores
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.contribution import Contribution, DaemonHost

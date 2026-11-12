@@ -22,7 +22,7 @@ from piloop.actor import Agent
 from piloop.api.client import CLONE_WAIT
 from piloop.ids import AgentSessionId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
-from piloop.plugins.vcs.contract import CloneFailed, Transfer, UnknownRevision, VcsError
+from piloop.plugins.vcs.contract import CloneFailed, Conflict, Transfer, UnknownRevision, VcsError, Version
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from tests.conftest import disk, git_processes
 
@@ -153,6 +153,40 @@ def test_switch_moves_the_checkout_in_place_and_refuses_to_lose_a_change_or_reac
         (campaign_path / 'solve.txt').write_text('base\n')
         checkout.switch(branch)
     assert repo.head.commit.hexsha == branch
+
+
+def test_a_merge_combines_both_sides_into_a_version_by_piloop_and_a_clash_is_a_conflict_that_makes_nothing(
+    campaign_path: Path, no_git_identity: None
+) -> None:
+    """Nothing moves: not the checkout, not a ref. A merge is made in git's object store alone."""
+    repo = Repo(campaign_path)
+    base = Revision(repo.head.commit.hexsha)
+
+    def commit(files: dict[str, str], subject: str) -> Revision:
+        repo.git.checkout('-q', '--detach', base)
+        for name, text in files.items():
+            (campaign_path / name).write_text(text)
+        repo.git.add('-A')
+        repo.git.commit('-qm', subject, env=git.commit_env(PILOOP, PILOOP))
+        return Revision(repo.head.commit.hexsha)
+
+    ours = commit({'solve.txt': 'base\nours\n'}, 'ours')
+    theirs = commit({'lemma.txt': 'theirs\n'}, 'theirs')
+    clash = commit({'solve.txt': 'base\nclash\n'}, 'clash')
+    refs = repo.git.for_each_ref()
+    with closing(Git().open(campaign_path)) as record:
+        merged = record.merge(base, ours, theirs, 'merge run#4')
+        assert isinstance(merged, Version) and merged.summary == 'merge run#4'
+        conflict = record.merge(base, ours, clash, 'merge run#5')
+        with pytest.raises(UnknownRevision):
+            record.merge(base, ours, Revision('0' * 40), 'merge run#6')
+    assert repo.git.show('-s', '--format=%P', merged.revision).split() == [ours, theirs], 'ours, then theirs'
+    assert by(repo, merged.revision) == ('piloop <piloop@localhost>',) * 2
+    assert repo.git.show(f'{merged.revision}:solve.txt') == 'base\nours'
+    assert repo.git.show(f'{merged.revision}:lemma.txt') == 'theirs'
+    assert isinstance(conflict, Conflict) and conflict.paths == ('solve.txt',)
+    assert 'CONFLICT (content): Merge conflict in solve.txt' in conflict.detail
+    assert (repo.head.commit.hexsha, repo.git.for_each_ref()) == (clash, refs)
 
 
 def test_a_closed_repository_leaves_no_git_process_running(campaign_path: Path) -> None:

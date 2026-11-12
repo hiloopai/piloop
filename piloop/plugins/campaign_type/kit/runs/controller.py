@@ -79,6 +79,7 @@ from piloop.ids import (
 )
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -121,7 +122,6 @@ from piloop.plugins.campaign_type.kit.pool.pool import (
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored, record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
-from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
@@ -1193,7 +1193,7 @@ class RunController:
         span.set(status=end.status, end=end, error=error)
 
     def _settle(self, run_id: RunId, end: RunEnd, last: CandidateId | None) -> None:
-        """After the run's commits are scored, end its ``scoring`` and its claim (``release``).
+        """After the run's commits are scored, end its ``scoring``, and let its campaign's type settle its idea.
 
         ``last`` is the newest candidate of the run's versions that has a score: it decides whether the idea is done.
         It first waits until each submission of the run is scored (``score_submission``), however the run ended: its
@@ -1212,7 +1212,8 @@ class RunController:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
                 run.scoring = False
-                release(s, run, end, s.get(Candidate, last) if last is not None else None)
+                kind = CAMPAIGN_TYPES.model_of(run.campaign.type)()
+                kind.settle(s, run, end, s.get(Candidate, last) if last is not None else None)
                 s.commit()
 
     def _context(

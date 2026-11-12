@@ -346,7 +346,7 @@ def register(
     vcs = VCS.selected(cfg.plugins)
     with closing(vcs.open(path)) as repo:
         version = repo.head() if fork is None else _fork_version(s, repo, fork)
-    campaign = Campaign(name=name, path=str(path.resolve()), repo=vcs.identity(path), config=cfg)
+    campaign = Campaign(name=name, path=str(path.resolve()), repo=vcs.identity(path), config=cfg, type=cfg.type)
     if fork is not None:
         campaign.repo, campaign.parent_id = fork.source.repo, fork.source.id
     s.add(campaign)
@@ -468,8 +468,8 @@ def checked_out(s: Session, path: Path) -> Campaign | None:
 def sync(s: Session, campaign: Campaign) -> bool:
     """Read the repo's ``piloop.toml`` into the campaign row again, and return whether its stop rule changed.
 
-    A change to ``evaluate``, ``metrics`` or ``link`` makes a new evaluator. The campaign's type refuses a config that
-    its rows cannot run on (``CampaignType.check_config``). A stored copy that no longer validates is replaced, and its
+    A change to ``evaluate``, ``metrics`` or ``link`` makes a new evaluator. ``type`` sets the campaign's type, which
+    refuses a config that the campaign's rows cannot run on (``CampaignType.check_config``). A stored copy that no longer validates is replaced, and its
     stop rule counts as unchanged. The repo's identity is read again too, because a remote may have been added since.
     The status is not this function's: a stopped campaign whose stop rule changed is the caller's to reopen
     (``piloop.campaign.ops.reopen``).
@@ -480,7 +480,7 @@ def sync(s: Session, campaign: Campaign) -> bool:
         changed = cfg.plugins.get(STOP_RULES.name) != campaign.config.plugins.get(STOP_RULES.name)
     except ValidationError:
         changed = False  # the copy is replaced below; what it said about the stop rule is unknown
-    campaign.config = cfg
+    campaign.config, campaign.type = cfg, cfg.type
     CAMPAIGN_TYPES.model_of(campaign.type)().check_config(s, campaign)
     current_evaluator(s, campaign, cfg)
     return changed

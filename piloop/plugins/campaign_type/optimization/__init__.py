@@ -9,6 +9,9 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
 
     from piloop.db.models import Campaign
     from piloop.ids import Revision
+    from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+    from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
+    from piloop.plugins.campaign_type.kit.runs.tables import Run
     from piloop.plugins.contribution import RouteHost, Routes
 
 
@@ -33,6 +36,12 @@ class Optimization(CampaignType):
         from piloop.plugins.contribution import Routes
 
         return Routes(ROUTES)
+
+    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
+        """The idea is done after a finished run with a score, else open again (``release``)."""
+        from piloop.plugins.campaign_type.kit.runs.stop import release
+
+        release(s, run, end, last)
 
     def check_config(self, s: Session, campaign: Campaign) -> None:
         """Every idea's track stays (``check_tracks``)."""

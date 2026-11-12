@@ -1,5 +1,6 @@
 import re
 from collections.abc import Collection
+from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import get_args, get_origin
 
@@ -10,22 +11,26 @@ from pydantic import BaseModel, RootModel, ValidationError
 from pytest_mock import MockerFixture
 from sqlalchemy import select
 
+from piloop.actor import System
 from piloop.campaign.campaigns import (
     BLANK,
     TEMPLATES,
     create_campaign_repo,
+    register,
     stub_untouched,
     sync,
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.db.models import Campaign
+from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
+from piloop.db.triggers.changelog import CampaignTypeChanged
 from piloop.ids import CampaignStatus
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, OPTIMIZATION
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.host import Many, One, Scope, declared
-from tests.conftest import reports_py, store_config
+from tests.conftest import PLUGIN, install_plugins, reports_py, store_config
 
 
 def test_create_campaign_repo(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -314,3 +319,27 @@ def test_init_refuses_a_config_that_drops_a_track_that_ideas_are_on_and_keeps_th
         cfg = row.config
         s.commit()
     assert cfg.track(TrackName('score')).primary.name == 'score2'
+
+
+def test_the_type_key_sets_the_campaign_type_at_registration_and_at_each_init(
+    db: Database, campaign_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_plugins(monkeypatch, [EntryPoint('waiting', f'{PLUGIN}:Waiting', CAMPAIGN_TYPES.group)])
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(f'type = "waiting"\n{toml.read_text()}')
+    with db.session() as s:
+        campaign, _ = register(s, campaign_path, System.HUMAN)
+        s.commit()
+        assert campaign.type == 'waiting'
+    toml.write_text(toml.read_text().replace('type = "waiting"\n', ''))
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        sync(s, row)
+        s.commit()
+        assert row.type == OPTIMIZATION
+        assert s.scalars(select(Event.payload).where(Event.kind == 'campaign.type')).all() == [
+            CampaignTypeChanged(old='waiting', new=OPTIMIZATION)
+        ]
+    toml.write_text(f'type = "nope"\n{toml.read_text()}')
+    with pytest.raises(ConfigError, match="type 'nope' is no installed campaign type; the installed ones are"):
+        load_campaign_config(campaign_path)

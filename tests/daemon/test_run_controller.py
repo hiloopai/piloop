@@ -87,6 +87,7 @@ from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
 from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
+from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.campaign_type.optimization.tables import SCHEMA
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
@@ -669,14 +670,17 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
 
 @pytest.mark.usefixtures('daemon_api')
 def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as_made(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     write_toml(Path(campaign.path), HARNESS_COMMITS_AND_LEAVES_DIRT + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
+    settle = mocker.spy(Optimization, 'settle')
     with scoring(ex, db):
         execute(ex, db, run_id)
+    [(_, _, settled, end, last)] = [c.args for c in settle.call_args_list]
+    assert (settled.id, end, last is not None) == (run_id, RunEnd.FINISHED, True), "the campaign's type settles it"
     assert [(c[0], c[1], c[3]) for c in scored(db, run_id)] == [
         ('the idea', 'best', 1),
         (UNCOMMITTED, Origin.SKIPPED, 0),

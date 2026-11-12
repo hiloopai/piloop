@@ -186,7 +186,7 @@ from piloop.plugins.network.proxy import Proxy
 
 from piloop.ids import Revision
 from piloop.plugins.vcs.contract import VCS, Vcs, Repository, Version, Transfer, Fetch, Captured, Unsaved
-from piloop.plugins.vcs.contract import Pin
+from piloop.plugins.vcs.contract import Pin, Conflict
 from piloop.plugins.vcs.contract import VcsError, NotARepository, UnknownRevision, CloneFailed
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git, GitRepository

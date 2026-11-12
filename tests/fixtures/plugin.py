@@ -9,6 +9,7 @@ from importlib.resources.abc import Traversable
 from typing import Annotated, ClassVar
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from piloop.actor import Agent
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
@@ -16,9 +17,13 @@ from piloop.campaign.campaigns import workspace_dir
 from piloop.db.models import AgentSession, Campaign, Comment, EventModel, utcnow
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import AGENT_SESSIONS
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
 from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.contribution import DaemonHost
 from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_best
 from piloop.plugins.host import Capability, Parameters, Tier
@@ -236,3 +241,10 @@ class Needy(Subprocess):
     """A runtime with a setting that has no default: an instance only through a table that sets it."""
 
     level: int
+
+
+class Waiting(Optimization):
+    """``waiting``: optimization, except that a run's end leaves its idea claimed, for something else to settle."""
+
+    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
+        """Leave the claim: the work is done only when something else says so."""

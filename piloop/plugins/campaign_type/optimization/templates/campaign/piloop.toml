@@ -5,6 +5,7 @@
 # PILOOP_CAMPAIGN_<KEY> overrides a key when `piloop init` reads the file. Join nested keys with __.
 
 name = "my-campaign"                       # required; short identifier; piloop names git refs after it
+type = "optimization"                     # the campaign type: optimization keeps the best version of the code
 evaluate = ["uv", "run", "python", "evaluate.py"]  # required; run in a clean checkout of each version; writes {"status": …, "score": …} to $PILOOP_RESULT_FILE
 evaluate_timeout = 600                    # seconds; a slower evaluation is stopped and recorded as a crash
 link = []                                 # gitignored paths put into every worktree read-only, for example "data" or ".venv"

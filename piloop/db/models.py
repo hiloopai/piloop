@@ -57,6 +57,7 @@ from piloop.ids import (
     TargetKind,
     TargetRef,
 )
+from piloop.plugins.campaign_type.contract import OPTIMIZATION
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.runs.ids import (
     RunId,
@@ -195,8 +196,6 @@ class KindText[K: str](TypeDecorator[K]):
 
 
 NOW = func.now()
-OPTIMIZATION = 'optimization'
-"""The built-in campaign type: improve the code against its evaluate command, candidate by candidate."""
 PROCESS = 'process'
 """The built-in evaluator runner: the evaluate command, run as a process."""
 EMPTY_JSON = text("'{}'")
@@ -459,8 +458,8 @@ class Campaign(Tracked, Base):
     """The home's secret that the clone used (``SecretCredential``), NULL for none or a token given with it: what
     another host clones with again."""
     type: Mapped[str] = mapped_column(default=OPTIMIZATION, server_default=OPTIMIZATION)
-    """What the campaign does: a campaign type, by its name. Every campaign is ``optimization``. Each change is a
-    ``campaign.type`` event."""
+    """What the campaign does: a campaign type, by its name, as ``type`` in its ``piloop.toml`` sets it. Each change is
+    a ``campaign.type`` event."""
     parent_id: Mapped[CampaignId | None] = mapped_column(ForeignKey('campaigns.id'))
     """The campaign that this one is under, for example the one that spawned it, NULL for a root. It makes a tree of
     the campaigns of one piloop home. ``piloop.campaign.ops.set_parent`` sets it, and each change is a

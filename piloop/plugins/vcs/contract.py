@@ -44,6 +44,16 @@ class Version:
 
 
 @dataclass(frozen=True)
+class Conflict:
+    """What ``Repository.merge`` could not combine: the files that both sides changed in ways that do not merge."""
+
+    paths: tuple[str, ...]
+    """The files in conflict, as the repository names them."""
+    detail: str
+    """What the tool said about each conflict, for whoever resolves it."""
+
+
+@dataclass(frozen=True)
 class Transfer(BaseModel):
     """Versions in the CAS, in the provider's own format: what ``head`` has beyond the version that a job started from."""
 
@@ -204,6 +214,17 @@ class Repository(Protocol):
 
     def keep(self, revision: Revision, why: Pin) -> None:
         """Keep ``revision`` for ``why``, also after whatever named it is gone."""
+        ...
+
+    def merge(self, base: Revision, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
+        """Combine the changes that ``ours`` and ``theirs`` each made since ``base`` into a new version, by piloop.
+
+        The new version builds on ``ours`` and then ``theirs``, and says ``summary``. Neither checkout nor any name
+        moves: ``keep`` it to keep it. When the changes do not combine, it makes nothing and returns the ``Conflict``.
+
+        Raises:
+            UnknownRevision: The repository lacks one of the revisions.
+        """
         ...
 
     def checkout(self, revision: Revision, path: Path) -> None:
