@@ -28,6 +28,7 @@ from piloop.daemon.holding import deadline
 from piloop.db.session import Database
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms
 from piloop.plugins.leader.contract import LostTerm, Term
+from tests.conftest import leader_host
 
 TRACES = Path(__file__).parent / 'traces' / 'term'
 BUCKET = 'piloop-term-model'
@@ -150,7 +151,7 @@ class Replay:
     def restart(self, h: int) -> None:
         self.starts[h - 1] += 1
         client = boto3.client('s3')
-        proc = Process(BucketTerms(CONFIG, self.db, client, self.wall(h)), f'h{h}/{self.starts[h - 1]}')
+        proc = Process(BucketTerms(CONFIG, leader_host(self.db), client, self.wall(h)), f'h{h}/{self.starts[h - 1]}')
         client.meta.events.register('before-call.s3.PutObject', lambda **kw: self.write_of(proc).sending(**kw))
         client.meta.events.register('after-call.s3.PutObject', lambda **kw: self.write_of(proc).answered(**kw))
         self.procs[h - 1] = proc

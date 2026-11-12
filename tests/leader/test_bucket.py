@@ -18,6 +18,7 @@ from piloop.db.session import Database
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms
 from piloop.plugins.leader.contract import LostTerm, Term, Unreachable
 from piloop.plugins.leader.local import LocalLeader
+from tests.conftest import leader_host
 
 BUCKET = 'piloop-terms'
 URL = f's3://{BUCKET}/homes/one'
@@ -45,7 +46,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[S3Client]:
 
 
 def host(db: Database, client: S3Client, clock: Clock, url: str = URL) -> BucketTerms:
-    return BucketTerms(BucketLeader(url=url), db, client, clock)
+    return BucketTerms(BucketLeader(url=url), leader_host(db), client, clock)
 
 
 def stored(client: S3Client) -> Term:
@@ -178,7 +179,9 @@ def test_only_s3_urls_and_timings_in_order(db: Database, client: S3Client) -> No
             BucketLeader(url=url)
     with pytest.raises(ValidationError, match='renew'):
         BucketLeader(url=URL, renew=timedelta(seconds=20))
-    assert BucketTerms(BucketLeader(url=f's3://{BUCKET}/'), db, client).key == 'term.json', 'at the root of the bucket'
+    assert BucketTerms(BucketLeader(url=f's3://{BUCKET}/'), leader_host(db), client).key == 'term.json', (
+        'at the root of the bucket'
+    )
 
 
 def test_a_checkout_that_piloop_did_not_clone_is_refused_and_local_refuses_none(tmp_path: Path) -> None:

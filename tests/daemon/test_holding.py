@@ -2,6 +2,7 @@
 
 import threading
 import time
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -50,6 +51,12 @@ class Fake:
 
     def begin(self, s: Session, term: Term) -> None:
         pass
+
+    def restore(self, term: Term) -> bool:
+        return False
+
+    def replicate(self, term: Term) -> AbstractContextManager[None]:
+        return nullcontext()
 
 
 @dataclass

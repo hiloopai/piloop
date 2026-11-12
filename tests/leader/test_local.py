@@ -6,12 +6,13 @@ import threading
 
 from piloop.db import terms
 from piloop.db.session import Database
-from piloop.plugins.leader.contract import LeaderHost, Term
+from piloop.plugins.leader.contract import Term
 from piloop.plugins.leader.local import LocalLeader
+from tests.conftest import leader_host
 
 
 def test_a_take_is_one_above_the_newest_term_and_never_ends(db: Database) -> None:
-    leader = LocalLeader().open(LeaderHost(db))
+    leader = LocalLeader().open(leader_host(db))
     assert leader.renewal is None and leader.current() is None
     first = leader.take('a/1', None, threading.Event())
     assert first == Term(epoch=1, holder='a/1')

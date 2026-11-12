@@ -391,9 +391,14 @@ class Settings(BaseSettings):
         return campaign_defaults(self.plugins)
 
     @property
+    def database(self) -> Path:
+        """The home's database file."""
+        return self.home / 'piloop.db'
+
+    @property
     def database_url(self) -> str:
         """The SQLAlchemy URL of the database."""
-        return f'sqlite:///{self.home / "piloop.db"}'
+        return f'sqlite:///{self.database}'
 
     @property
     def pid_file(self) -> Path:

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from piloop.actor import System
 from piloop.daemon.api import daemon_state
 from piloop.daemon.holding import Holding
+from piloop.daemon.rebuild import RebuildFailed, rebuild
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
@@ -140,6 +141,15 @@ class Daemon:
             self._inherited = inherited or Inherited(set())
             """The children an in-place restart handed over (``piloop.proc.Inherited``): reaped as each one exits."""
             self.tracer = tracer()
+            leader = LEADERS.selected(cfg.providers)
+            self._leader: Leader = leader.open(LeaderHost(cfg.home, cfg.database))
+            self._term = self._take()
+            """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
+            try:  # before anything opens the database: a restore replaces its file
+                self._restored = self._leader.restore(self._term)
+                """Whether the home's database came from the term before's replica: its files come from the CAS."""
+            except LostTerm as e:  # it never served: it leaves the term to the newer daemon
+                raise SystemExit(f'the daemon does not start: {e}') from e
             measures = self.tracer.measures
             self.db = Database(
                 cfg.database_url,
@@ -166,15 +176,12 @@ class Daemon:
             except OlderDaemon, SchemaMismatch, BackupFailed:
                 self.db.close()
                 raise
-            leader = LEADERS.selected(cfg.providers)
             with self.db.session() as s:
                 live = s.scalars(select(Campaign).where(Campaign.status != CampaignStatus.RETIRED)).all()
                 refused = [why for c in live if (why := leader.refuses(cfg.home, Path(c.path))) is not None]
             if refused:
+                self._leader.release(self._term)
                 raise SystemExit(f'the daemon does not start: {"; ".join(refused)}')
-            self._leader: Leader = leader.open(LeaderHost(self.db))
-            self._term = self._take()
-            """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
             with self.db.session() as s:
                 write_transaction(s)
                 try:
@@ -185,6 +192,16 @@ class Daemon:
                 s.commit()
             self._epoch = epoch
             """This daemon's term: what every process that serves its API reads of it (``piloop.db.terms``)."""
+            if self._restored:
+                try:
+                    rebuild(self.db, self._cas, cfg.home, self.tracer)
+                except RebuildFailed as e:
+                    self._leader.release(self._term)
+                    raise SystemExit(f'the daemon does not start: {e}') from e
+            self._replicating = self._leader.replicate(self._term)
+            """Ships the database for the term's life: it starts before the daemon serves, and stops after its last
+            write."""
+            self._replicating.__enter__()
             opened = partial(make_runtime, cfg=cfg)
             self.controller = RunController(
                 self.db,
@@ -333,7 +350,11 @@ class Daemon:
         self.scheduler.interrupt()
 
     def _release_term(self) -> None:
-        """Renew the term no more, and end it after the daemon's last write, so that another daemon may take the next."""
+        """End the term after the daemon's last write, so that another daemon may take the next.
+
+        The replica ships the rest of the database first, and the renewals stop.
+        """
+        self._replicating.__exit__(None, None, None)
         if self._holding is not None:
             self._holding.stop()
         try:

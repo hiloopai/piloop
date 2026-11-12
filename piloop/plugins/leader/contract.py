@@ -1,8 +1,9 @@
 """The leader capability: which host's daemon writes the home, for how long, and the epoch that fences the others.
 
 ``[plugins.leader]`` in ``config.toml`` chooses the home's provider: ``local`` by default. The daemon opens it once,
-after it migrated the home's database, and takes a term (``Leader.take``) before it serves. A daemon that cannot take
-it waits there as a standby. A term whose ``until`` is set lasts until then unless its holder renews it
+before it opens the home's database, and takes a term (``Leader.take``). A daemon that cannot take it waits there as a
+standby. The holder then makes its home what the term before left (``Leader.restore``), migrates it, and replicates it
+for the term's life (``Leader.replicate``). A term whose ``until`` is set lasts until then unless its holder renews it
 (``Leader.renew``), and the daemon writes nothing past it: it begins to stop when renewals fail for
 ``Renewal.deadline``, and exits at once at ``until`` (``piloop.daemon.holding``). Its stop releases the term after its
 last write (``Leader.release``).
@@ -13,6 +14,7 @@ term row in ``terms`` has it.
 
 import threading
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,7 +23,6 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from piloop.db.session import Database
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
 
@@ -63,8 +64,10 @@ class Renewal:
 class LeaderHost:
     """What piloop gives a leader provider."""
 
-    db: Database
-    """The home's database, migrated: a take's epoch is above its newest term's (``piloop.db.terms``)."""
+    home: Path
+    database: Path
+    """The home's database file, which nothing has open yet: a take's epoch is above its newest term's
+    (``piloop.db.terms.newest_in``), and a restore may replace it."""
 
 
 class Leader(Protocol):
@@ -99,6 +102,26 @@ class Leader(Protocol):
 
     def current(self) -> Term | None:
         """The term that a daemon holds now, or None."""
+        ...
+
+    def restore(self, term: Term) -> bool:
+        """Make the home's database what the term before ``term`` left, before anything opens it, and whether it did.
+
+        A restore reads the source that the term record names, and names it again as ``term``'s before it returns: a
+        term that dies before its first replica is restored from there too. The daemon then rebuilds the rest of the
+        home from the database's rows (``piloop.daemon.rebuild``).
+
+        Raises:
+            LostTerm: A term of ``term``'s epoch or newer named the source: another daemon took over meanwhile.
+            Unreachable: The record or the replica could not be read now.
+        """
+        ...
+
+    def replicate(self, term: Term) -> AbstractContextManager[None]:
+        """Ship the home's database while the context runs, where only ``term``'s epoch writes. Its exit ships the rest.
+
+        Once the replica holds the whole database, the term record names it as the source of the next restore.
+        """
         ...
 
     def begin(self, s: Session, term: Term) -> None:

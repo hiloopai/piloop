@@ -6,11 +6,12 @@ take never waits. Its epoch is one above the newest of the home's terms (``piloo
 
 import socket
 import threading
+from contextlib import AbstractContextManager, nullcontext
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from piloop.db import terms
-from piloop.db.session import Database
 from piloop.plugins.leader.contract import LeaderConfig, LeaderHost, Renewal, Term
 
 
@@ -18,7 +19,7 @@ class LocalLeader(LeaderConfig):
     """``[plugins.leader] provider = "local"``: one host, whose lock is the term."""
 
     def open(self, host: LeaderHost) -> LocalTerms:
-        return LocalTerms(host.db)
+        return LocalTerms(host.database)
 
 
 class LocalTerms:
@@ -26,12 +27,11 @@ class LocalTerms:
 
     renewal: Renewal | None = None
 
-    def __init__(self, db: Database) -> None:
-        self._db = db
+    def __init__(self, database: Path) -> None:
+        self._database = database
 
     def take(self, holder: str, url: str | None, stop: threading.Event) -> Term:
-        with self._db.session() as s:
-            return Term(epoch=terms.newest(s) + 1, holder=holder, url=url)
+        return Term(epoch=terms.newest_in(self._database) + 1, holder=holder, url=url)
 
     def renew(self, term: Term) -> Term:
         return term
@@ -39,12 +39,18 @@ class LocalTerms:
     def release(self, term: Term) -> None:
         pass
 
+    def restore(self, term: Term) -> bool:
+        return False  # the home is on this host's disk, as the term before left it
+
+    def replicate(self, term: Term) -> AbstractContextManager[None]:
+        return nullcontext()
+
     def begin(self, s: Session, term: Term) -> None:
         pass  # one host, whose database is never restored under it: its ids stay small
 
     def current(self) -> Term | None:
-        with self._db.session() as s:
-            newest = terms.current(s)
-        if newest is None or newest.stopping_at is not None:
+        newest = terms.running_in(self._database)
+        if newest is None:
             return None
-        return Term(epoch=newest.epoch, holder=f'{socket.gethostname()}/{newest.pid}', url=newest.listen)
+        epoch, pid, listen = newest
+        return Term(epoch=epoch, holder=f'{socket.gethostname()}/{pid}', url=listen)

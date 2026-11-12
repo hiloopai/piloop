@@ -3,23 +3,29 @@ next term once the first stops."""
 
 import os
 import signal
-import sqlite3
 import threading
 from collections.abc import Iterator
-from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 import pytest
 from moto import mock_aws
-from sqlalchemy import text
+from sqlalchemy import select, text
 
+from piloop.actor import System
 from piloop.daemon.main import Daemon
 from piloop.db import terms
+from piloop.db.events import emit
 from piloop.db.ids import EXACT, SHIFT
+from piloop.db.models import Event, Term as TermRow
+from piloop.ids import HOME
+from piloop.plugins.executor.kit.leases import LeaseWorkerJoined
+from piloop.plugins.leader import bucket as bucket_module
+from piloop.plugins.leader.bucket import Record, Source
 from piloop.plugins.leader.contract import Term, Unreachable
 from piloop.settings import Settings
+from tests.leader.replica import FakeReplica
 
 BUCKET = 'piloop-standby'
 CONFIG = f"""[plugins.leader]
@@ -29,18 +35,23 @@ ttl = 2
 renew = 0.05
 deadline = 1
 max_skew = 0
+replica_poll = 0.01
 """
 WAIT = 30
 
 
 @pytest.fixture
-def bucket(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def bucket(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeReplica]:
+    """The bucket on moto's S3, and Litestream faked: one replica of every term, which each daemon's provider uses."""
     for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'):
         monkeypatch.setenv(name, 'testing')
     monkeypatch.setenv('AWS_DEFAULT_REGION', 'us-east-1')
     with mock_aws():
-        boto3.client('s3').create_bucket(Bucket=BUCKET)
-        yield
+        client = boto3.client('s3')
+        client.create_bucket(Bucket=BUCKET)
+        replica = FakeReplica(client)
+        monkeypatch.setattr(bucket_module, 'Litestream', lambda _executable, _region: replica)
+        yield replica
 
 
 def home(tmp_path: Path, name: str) -> Settings:
@@ -56,7 +67,7 @@ def epochs(daemon: Daemon) -> int:
 
 
 def test_a_second_daemon_waits_as_a_standby_and_takes_the_next_term_when_the_first_stops(
-    tmp_path: Path, bucket: None
+    tmp_path: Path, bucket: FakeReplica
 ) -> None:
     first = Daemon(home(tmp_path, 'a'))
     assert epochs(first) == 1
@@ -79,7 +90,7 @@ def test_a_second_daemon_waits_as_a_standby_and_takes_the_next_term_when_the_fir
 
 
 def test_a_standby_stops_on_sigterm_and_a_holder_that_cannot_release_says_so(
-    tmp_path: Path, bucket: None, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, bucket: FakeReplica, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first = Daemon(home(tmp_path, 'a'))
     try:
@@ -110,7 +121,7 @@ def test_a_standby_stops_on_sigterm_and_a_holder_that_cannot_release_says_so(
     assert ('term.not_released', {'error': 'as the test says'}) in events
 
 
-def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_path: Path, bucket: None) -> None:
+def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_path: Path, bucket: FakeReplica) -> None:
     last = EXACT // (1 << SHIFT) - 1
     ended = Term(epoch=last, holder='old/1', until=datetime(2026, 1, 1, tzinfo=UTC))
     boto3.client('s3').put_object(Bucket=BUCKET, Key='cell/term.json', Body=ended.model_dump_json().encode())
@@ -118,12 +129,42 @@ def test_a_daemon_whose_term_would_hand_out_ids_past_2_53_does_not_start(tmp_pat
         Daemon(home(tmp_path, 'a'))
 
 
-def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(tmp_path: Path, bucket: None) -> None:
+def test_a_daemon_with_a_campaign_whose_checkout_is_its_own_does_not_start(tmp_path: Path, bucket: FakeReplica) -> None:
     """Another host could not make its repo again: the daemon refuses before it takes the term."""
     first = home(tmp_path, 'a')
-    Daemon(first).shutdown(timeout=5)
-    with closing(sqlite3.connect(first.home / 'piloop.db')) as con:
-        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('mine', '/srv/mine', '{}')")
-        con.commit()
+    daemon = Daemon(first)
+    with daemon.db.session() as s:  # a campaign that a daemon of an older piloop registered: in its replica too
+        s.execute(text("INSERT INTO campaigns (name, path, config) VALUES ('mine', '/srv/mine', '{}')"))
+        s.commit()
+    daemon.shutdown(timeout=5)
     with pytest.raises(SystemExit, match='^the daemon does not start: /srv/mine is a checkout of your own'):
         Daemon(first)
+
+
+def test_the_next_term_restores_what_the_first_wrote_and_names_its_own_replica_once_it_is_whole(
+    tmp_path: Path, bucket: FakeReplica
+) -> None:
+    first = Daemon(home(tmp_path, 'a'))
+    with first.db.session() as s:
+        written = emit(s, LeaseWorkerJoined(worker='w1', pool='p'), HOME, System.DAEMON)
+        s.commit()
+        mark = written.id
+    first.shutdown(timeout=5)  # its replica ships the rest, then it releases the term
+    second = Daemon(home(tmp_path, 'b'))
+    try:
+        with second.db.session() as s:
+            assert s.get(Event, mark) is not None, 'what term 1 wrote, from its replica'
+            assert [t.epoch for t in s.scalars(select(TermRow).order_by(TermRow.epoch))] == [1, 2]
+        for _ in range(WAIT * 100):
+            if stored().source == Source(epoch=2):
+                break
+            threading.Event().wait(0.01)
+        assert stored().source == Source(epoch=2), 'its own replica, once it holds the whole database'
+        assert bucket.restores == [(f's3://{BUCKET}/cell/terms/1', None)]
+    finally:
+        second.shutdown(timeout=5)
+
+
+def stored() -> Record:
+    body = boto3.client('s3').get_object(Bucket=BUCKET, Key='cell/term.json')['Body'].read()
+    return Record.model_validate_json(body)

@@ -80,6 +80,7 @@ from piloop.plugins.executor.kit.relay import Shipped
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.plugins.harness.contract import Usage, each_provider
+from piloop.plugins.leader.contract import LeaderHost
 from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.network.contract import NetworkConfig, NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
@@ -1095,3 +1096,9 @@ def no_land(job: AgentJob, revision: Revision) -> None:
 def no_take(job: AgentJob, revisions: Sequence[Revision]) -> None:
     """A relay's ``Take`` for a test whose server names no candidate that a checkout started without."""
     raise AssertionError(f'no answer of this test names a candidate: {revisions}')
+
+
+def leader_host(db: Database) -> LeaderHost:
+    """What a leader provider gets on ``db``'s home: its directory and its database file."""
+    path = Path(db.engine.url.database or '')
+    return LeaderHost(path.parent, path)

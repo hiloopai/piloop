@@ -12,7 +12,7 @@ CONSTANTS MAXE, MAXC, FAULTS,
           SNAP_FIRST,  \* a term serves only once its first snapshot is in its prefix
           PIN_FIRST,   \* "pinned": a term serves only once the record names what it restored
           SHARED,      \* every term replicates to one prefix, not terms/<epoch>/ (decision 20)
-          OLDER        \* a restore refuses a source of the term's own epoch or newer: the term is lost then
+          OLDER        \* a restore re-reads the record and goes on only while it is still its term's: else the term exits
 VARIABLES phase, ep, db, seq, mine, shipped, snapped, pinned, from, rep, src, top, started, issued, durable, stale,
           dup, faults, op, arg
 vars == <<phase, ep, db, seq, mine, shipped, snapped, pinned, from, rep, src, top, started, issued, durable, stale,
@@ -51,7 +51,7 @@ Source(e) == CASE SRC = "newest" -> <<MaxOf({f \in 1..(e - 1) : Snapshotted(f)})
                [] SRC = "previous" -> <<e - 1, ALL>>
                [] OTHER -> src
 Restore(h) == LET s == Source(ep[h]) IN LET got == IF s[1] = 0 THEN {} ELSE Upto(rep[P(s[1])], s[2]) IN
-              /\ phase[h] = "taken" /\ (s[1] < ep[h] \/ ~OLDER) /\ db' = [db EXCEPT ![h] = got]
+              /\ phase[h] = "taken" /\ (ep[h] = top \/ ~OLDER) /\ db' = [db EXCEPT ![h] = got]
               /\ from' = [from EXCEPT ![h] = <<s[1], IF s[1] = 0 THEN 0 ELSE IF s[2] = ALL THEN Len(rep[P(s[1])]) ELSE s[2]>>]
               /\ seq' = [seq EXCEPT ![h] = IF LIFT THEN MaxOf(Ids(got) \cup {ep[h] * B}) ELSE MaxOf(Ids(got))]
               /\ phase' = [phase EXCEPT ![h] = "restored"] /\ op' = "restore" /\ arg' = h
@@ -63,7 +63,7 @@ Pin(h) == /\ SRC = "pinned" /\ phase[h] = "restored" /\ ~pinned[h] /\ ep[h] = to
           /\ Keep(<<phase, ep, db, seq, mine, shipped, snapped, from, rep, top, started, issued, durable, stale, dup, faults>>)
 \* `litestream replicate` starts with a snapshot of the whole database into the term's prefix. Under "pinned", the
 \* holder's next renewal names its own prefix, whole, as the source: refused once another term took.
-Snapshot(h) == /\ phase[h] \in Live /\ ~snapped[h] /\ snapped' = [snapped EXCEPT ![h] = TRUE]
+Snapshot(h) == /\ phase[h] \in Live /\ ~snapped[h] /\ (pinned[h] \/ SRC # "pinned") /\ snapped' = [snapped EXCEPT ![h] = TRUE]
                /\ rep' = [rep EXCEPT ![P(ep[h])] = <<db[h]>>] /\ shipped' = [shipped EXCEPT ![h] = mine[h]]
                /\ src' = (IF SRC = "pinned" /\ ep[h] = top /\ pinned[h] THEN <<ep[h], ALL>> ELSE src)
                /\ op' = "snapshot" /\ arg' = h
@@ -87,13 +87,16 @@ Ship(h) == LET left == mine[h] \ shipped[h] IN LET c == CHOOSE x \in left : \A y
            /\ durable' = (IF ep[h] = top THEN durable \cup {c} ELSE durable) /\ op' = "ship" /\ arg' = h
            /\ Keep(<<phase, ep, db, seq, mine, snapped, pinned, from, src, top, started, issued, stale, dup, faults>>)
 \* The holder of an older epoch learns that it lost its term: it goes on (stale) until it exits.
-Lose(h) == /\ phase[h] \in Live /\ ep[h] < top /\ phase' = [phase EXCEPT ![h] = "stale"] /\ op' = "lose" /\ arg' = h
+Lose(h) == /\ phase[h] \in Live /\ (pinned[h] \/ phase[h] = "holding" \/ SRC # "pinned") /\ ep[h] < top /\ phase' = [phase EXCEPT ![h] = "stale"] /\ op' = "lose" /\ arg' = h
            /\ Keep(<<ep, db, seq, mine, shipped, snapped, pinned, from, rep, src, top, started, issued, durable, stale, dup, faults>>)
 Gone(h) == /\ phase' = [phase EXCEPT ![h] = "down"] /\ db' = [db EXCEPT ![h] = {}]
 Exit(h) == /\ phase[h] = "stale" /\ Gone(h) /\ op' = "exit" /\ arg' = h
            /\ Keep(<<ep, seq, mine, shipped, snapped, pinned, from, rep, src, top, started, issued, durable, stale, dup, faults>>)
-\* The record names a source of this term's epoch or newer: another term took over while this one waited to restore.
-Abandon(h) == /\ OLDER /\ phase[h] = "taken" /\ Source(ep[h])[1] >= ep[h] /\ Gone(h) /\ op' = "abandon" /\ arg' = h
+\* bucket.py `restore`: another term took over before this one restored, or before its pin landed (If-Match): the term
+\* exits, and never serves.
+Abandon(h) == /\ OLDER /\ ep[h] < top
+              /\ (phase[h] = "taken" \/ (phase[h] = "restored" /\ SRC = "pinned" /\ ~pinned[h]))
+              /\ Gone(h) /\ op' = "abandon" /\ arg' = h
               /\ Keep(<<ep, seq, mine, shipped, snapped, pinned, from, rep, src, top, started, issued, durable, stale, dup, faults>>)
 Crash(h) == /\ phase[h] \notin {"down", "standby"} /\ faults < FAULTS /\ faults' = faults + 1 /\ Gone(h)
             /\ op' = "crash" /\ arg' = h

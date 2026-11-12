@@ -3,6 +3,10 @@
 A term begins when the daemon serves, and stops when the daemon begins to stop. The newest term is the current one.
 """
 
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -12,6 +16,35 @@ from piloop.db.models import Term, utcnow
 def newest(s: Session) -> int:
     """The newest term's epoch, or 0 before any daemon served this home."""
     return s.scalar(select(func.max(Term.epoch))) or 0
+
+
+def newest_in(database: Path) -> int:
+    """The newest term's epoch in the database file ``database``, read before anything opens it: 0 without one.
+
+    A leader provider reads it before its restore replaces the file (``piloop.plugins.leader``), so a pooled connection
+    must not hold the old file open.
+    """
+    if not database.is_file():
+        return 0
+    with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
+        try:
+            return con.execute('SELECT max(epoch) FROM terms').fetchone()[0] or 0
+        except sqlite3.OperationalError:  # never migrated this far: no terms table
+            return 0
+
+
+def running_in(database: Path) -> tuple[int, int, str | None] | None:
+    """The newest term in the database file ``database`` while its daemon runs: its epoch, pid and listen URL."""
+    if not database.is_file():
+        return None
+    with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
+        try:
+            row = con.execute(
+                'SELECT epoch, pid, listen, stopping_at FROM terms ORDER BY epoch DESC LIMIT 1'
+            ).fetchone()
+        except sqlite3.OperationalError:  # never migrated this far: no terms table
+            return None
+    return None if row is None or row[3] is not None else (row[0], row[1], row[2])
 
 
 def begin(s: Session, epoch: int, pid: int, listen: str | None) -> Term:
