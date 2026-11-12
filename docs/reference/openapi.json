@@ -3144,7 +3144,7 @@
     "/v1/ideas/{idea}/claim": {
       "post": {
         "summary": "Claim",
-        "description": "Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.\n\nWith a ``base``, the run starts from that candidate: the answer names its revision, for the checkout.",
+        "description": "Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.\n\nWith a ``base``, the run starts from that candidate, and without one it may move to the campaign type's base: the\nanswer names the revision that the checkout moves to.",
         "operationId": "claim",
         "parameters": [
           {
@@ -7644,10 +7644,11 @@
           "run",
           "reference",
           "recovered",
-          "skipped"
+          "skipped",
+          "merge"
         ],
         "title": "Origin",
-        "description": "Where a candidate comes from.\n\n``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a\nstarting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted where a\ndaemon stop cut its run, never measured; a new run of the idea starts from it.\n``skipped``: a commit that its run did not submit, never measured. A ``recovered`` or ``skipped`` tree that a later\nsubmission reaches is measured like a new one, and becomes ``run``."
+        "description": "Where a candidate comes from.\n\n``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a\nstarting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted where a\ndaemon stop cut its run, never measured; a new run of the idea starts from it.\n``skipped``: a commit that its run did not submit, never measured. A ``recovered`` or ``skipped`` tree that a later\nsubmission reaches is measured like a new one, and becomes ``run``. ``merge``: the daemon's merge of submissions onto\nthe trunk of an ``accumulating`` campaign, measured once."
       },
       "Overview": {
         "properties": {

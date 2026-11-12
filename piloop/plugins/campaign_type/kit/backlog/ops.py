@@ -1,6 +1,7 @@
 """The operations on the backlog that the API and the CLI run: ideas, claims, links, tracks and statuses."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import ClassVar, Literal
 
 from sqlalchemy import select
@@ -13,6 +14,7 @@ from piloop.db.events import emit
 from piloop.db.models import Campaign, Comment, EventModel, ReadBy
 from piloop.db.session import write_lock
 from piloop.ids import CampaignId, CommentKind, TargetRef
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.backlog.ideas import holders
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -92,10 +94,19 @@ def _added(
     return idea
 
 
-def claim(s: Session, idea_id: IdeaId, *, actor: Actor, base: CandidateId | None = None) -> Idea:
+@dataclass(frozen=True)
+class Claim:
+    """What a claim did: the idea that the run claimed, and the candidate that the run's checkout moves to, if any."""
+
+    idea: Idea
+    base: CandidateId | None
+
+
+def claim(s: Session, idea_id: IdeaId, *, actor: Actor, base: CandidateId | None = None) -> Claim:
     """Claim the open idea for the actor's run: the run works on it, and the idea is ``claimed``. The caller commits.
 
-    With ``base``, the run starts from that candidate instead of the best (``_based``).
+    With ``base``, the run starts from that candidate instead of its campaign type's base (``_based``). Without, a run
+    whose type's base moved since it was queued moves there (``_moved``).
 
     A run claims one idea, and the claim ends with the run (``release``). The checks and the write are one write
     transaction, so two runs never claim one idea, and no claim lands after its run ended. The ``idea.status`` event,
@@ -107,7 +118,33 @@ def claim(s: Session, idea_id: IdeaId, *, actor: Actor, base: CandidateId | None
     write_lock(s)
     run = run_of_actor(s, actor)
     _based(s, run, base, actor)
-    return _claim(s, run, idea_id)
+    idea = _claim(s, run, idea_id)
+    return Claim(idea, base if base is not None else _moved(s, run, actor))
+
+
+class BaseMoved(EventModel):
+    """A run's claim moved it to its campaign type's base, which moved since the run was queued (``_moved``)."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['run.base_moved'] = 'run.base_moved'
+    candidate: CandidateId
+    was: CandidateId
+    """The candidate that the run was queued on."""
+
+
+def _moved(s: Session, run: Run, actor: Actor) -> CandidateId | None:
+    """Move ``run``, which claimed with no base of its own, to its campaign type's base, and return it if it moved.
+
+    The base moves while a run waits to start or to claim: a new best, a new trunk. The run has saved nothing yet,
+    since a run submits only once it claimed, so its checkout moves too: a checkout that has commits of its own refuses
+    to move (``Repository.switch``).
+    """
+    found = CAMPAIGN_TYPES.model_of(run.campaign.type)().base(s, run.campaign)
+    if found is None or found.id == run.base_candidate_id:
+        return None
+    was, run.base_candidate_id = run.base_candidate_id, found.id
+    emit(s, BaseMoved(candidate=found.id, was=was), TargetRef(RUN, run.id), actor)
+    return found.id
 
 
 class BaseChosen(EventModel):
@@ -175,11 +212,11 @@ def propose(
     provenance: str | None = None,
     track: TrackName | None = None,
     base: CandidateId | None = None,
-) -> Idea:
+) -> Claim:
     """Add an open idea to the board of the actor's run and claim it for the run, in one write transaction.
 
-    A worker's own idea: it files no idea for others (``files``), but it may try one of its own. With ``base``, the run
-    starts from that candidate instead of the best (``_based``).
+    A worker's own idea: it files no idea for others (``files``), but it may try one of its own. The base moves as for
+    ``claim``.
 
     Raises:
         Refused: ``run_of_actor`` or ``_claim`` refuses, or the track is not the campaign's.
@@ -188,7 +225,8 @@ def propose(
     run = run_of_actor(s, actor)
     _based(s, run, base, actor)
     idea = _added(s, run.campaign, title, actor, hypothesis, plan, provenance, 2, track, ())
-    return _claim(s, run, idea.id)
+    _claim(s, run, idea.id)
+    return Claim(idea, base if base is not None else _moved(s, run, actor))
 
 
 SETTABLE = (IdeaStatus.OPEN, IdeaStatus.DROPPED)

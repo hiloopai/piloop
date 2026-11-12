@@ -1915,3 +1915,35 @@ def test_optimization_0015_moves_per_unit_results_from_their_files_into_the_cas_
     command.downgrade(chain, '0014')
     assert loads((tmp_path / 'units' / '1.json').read_text()) == {'score': {'a': 1.0}}
     assert 'AUTOINCREMENT' in _schema_of(path, 'measurements')[0], 'the column goes in place'
+
+
+def test_optimization_0016_takes_a_merge_origin_keeps_the_lifted_sequence_and_downgrades_a_merge_to_a_reference(
+    tmp_path: Path,
+) -> None:
+    """The CHECK changes by a copy of ``candidates``, which would restart its AUTOINCREMENT after its largest id."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0015')
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('one', '/one', '{}')")
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'commit')")
+        con.execute("UPDATE sqlite_sequence SET seq = 4294967296 WHERE name = 'candidates'")  # a term lifted it
+        with pytest.raises(sqlite3.IntegrityError, match='CHECK constraint failed: origin'):
+            con.execute(
+                "INSERT INTO candidates (campaign_id, tree_sha, revision, origin) VALUES (1, 't', 'c', 'merge')"
+            )
+    before = _schema_of(path, 'candidates')
+    command.upgrade(chain, '0016')
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute(
+            "INSERT INTO candidates (campaign_id, tree_sha, revision, origin) VALUES (1, 'merged', 'm', 'merge')"
+        )
+        assert con.execute('SELECT id, origin FROM candidates ORDER BY id').fetchall() == [
+            (1, 'run'),
+            (4294967297, 'merge'),
+        ], 'the copy keeps the lifted sequence'
+    command.downgrade(chain, '0015')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT origin FROM candidates ORDER BY id').fetchall() == [('run',), ('reference',)]
+    assert _schema_of(path, 'candidates')[:3] == before[:3], 'the table, its indexes and its triggers as they were'

@@ -93,6 +93,7 @@ def idea_claim(
     Only a worker claims, once per run. An idea that an `after` link holds waits until its prerequisites are done.
     It prints the idea's hypothesis and its plan, which the board does not show, and, with several tracks, what the
     idea's track asks of your run. With `--base`, your run starts from that candidate: your checkout moves to it.
+    Without, a run that the campaign's best (or trunk) passed since it was queued moves to the new one.
     """
     with BacklogClient.connect(daemon_http()) as client:
         claimed = client.claim(idea_id, ClaimBody(base=base))

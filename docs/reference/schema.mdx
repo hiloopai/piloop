@@ -448,7 +448,7 @@ CREATE TABLE candidates (
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	FOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE SET NULL,
 	FOREIGN KEY(parent_id) REFERENCES candidates (id),
-	CONSTRAINT origin CHECK (origin IN ('baseline', 'run', 'reference', 'recovered', 'skipped'))
+	CONSTRAINT origin CHECK (origin IN ('baseline', 'run', 'reference', 'recovered', 'skipped', 'merge'))
 );
 CREATE INDEX ix_candidates_parent ON candidates (parent_id);
 CREATE INDEX ix_candidates_run ON candidates (run_id);

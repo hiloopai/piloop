@@ -20,7 +20,7 @@ from piloop.plugins.campaign_type.consumers import AGENT_SESSIONS
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
-from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization import Optimization
@@ -161,7 +161,8 @@ class Auditor(StartsItsAgents):
         with host.db.session() as s:
             row = s.get_one(AgentSession, agent_session_id)
             campaign = s.get_one(Campaign, row.campaign_id)
-            base = checkout_candidate(s, campaign)
+            base = best_of(s, campaign)
+            assert base is not None, 'an auditor runs on a campaign with a baseline'
             notes = s.scalars(
                 select(Comment)
                 .where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id), Comment.kind == PUSHED)

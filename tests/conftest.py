@@ -468,7 +468,7 @@ def register(db: Database, campaign_path: Path) -> Campaign:
     )
     assert isinstance(result, Measured), result
     with db.session() as s:
-        proj = Campaign(name=cfg.name, path=str(campaign_path), config=cfg)
+        proj = Campaign(name=cfg.name, path=str(campaign_path), config=cfg, type=cfg.type)
         s.add(proj)
         s.flush()
         evaluator = current_evaluator(s, proj, cfg)

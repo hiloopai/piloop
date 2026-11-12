@@ -210,6 +210,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'notification.sent': [],
             'request.answered': [],
             'run.base_chosen': [],
+            'run.base_moved': [],
             'run.brief_cid': [],
             'run.cancel_requested': ['wind_down'],
             'run.end_requested': ['wind_down'],
@@ -223,6 +224,8 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'secret.deleted': ['listeners'],
             'secret.set': ['listeners'],
             'subject.settled': ['archiver'],
+            'trunk.advanced': [],
+            'trunk.retry_alone': [],
             'worker.drained': ['executor'],
         }
     )

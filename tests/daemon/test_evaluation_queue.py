@@ -47,6 +47,7 @@ from piloop.plugins.campaign_type.kit.pool.wire import RemeasureBody
 from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, left
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Job, Settled
@@ -775,7 +776,7 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
         host = TypeHost(
             Tracer(None), tmp_path, ex, lambda _: pytest.fail('held tasks should not start scoring threads')
         )
-        OptimizationPlanner(host).remeasure(s, s.get_one(Campaign, campaign.id))
+        OptimizationPlanner(host, Optimization()).remeasure(s, s.get_one(Campaign, campaign.id))
     wait_until(lambda: still_scoring(db, run_id), 'the run to wait for the score of its submission')
     ex.stop(30)  # the run waits for that score until the measurements resume: a stop leaves it for the next daemon
     ran.join(30)
@@ -867,7 +868,7 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
         for cid in (sibling, b):
             candidate = s.get_one(Candidate, cid)
             emit(s, Submitted(candidate=cid, revision=candidate.revision), TargetRef(RUN, run_id), System.HUMAN)
-        planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, lambda _: Future()))
+        planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, lambda _: Future()), Optimization())
         planner.remeasure(s, s.get_one(Campaign, campaign.id))
         assert f'candidate#{sibling}' not in planner.in_flight() and f'candidate#{b}' in planner.in_flight()
         assert not {a1, a2, sibling}.intersection(c.id for c in due(s, s.get_one(Campaign, campaign.id)))

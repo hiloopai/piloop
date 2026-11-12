@@ -841,6 +841,25 @@ class RunController:
         if run_id is not None:
             self._scored(candidate_id)
 
+    def measure_once(self, candidate_id: CandidateId) -> Measuring:
+        """Evaluate a candidate once with its campaign's current evaluator, up every rung, and confirm nothing.
+
+        For a campaign type that scores a version on one evaluation, such as the merges of an ``accumulating`` campaign.
+        A candidate that the current evaluator answered already (``Status.measured``) is not evaluated again. Return how
+        it ended, as ``_measure`` does.
+        """
+        with self._db.session() as s:
+            candidate = s.get_one(Candidate, candidate_id)
+            campaign = s.get_one(Campaign, candidate.campaign_id)
+            cfg = campaign.config
+            evaluator_id = current_evaluator(s, campaign, cfg).id
+            s.commit()
+            if status(candidate, evaluator_id).measured:
+                return Measuring.MEASURED
+            campaign_id, revision = campaign.id, candidate.revision
+        eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
+        return self._measure(None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir)
+
     def _unsubmitted(
         self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version]
     ) -> CandidateId | None:

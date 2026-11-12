@@ -308,7 +308,7 @@ class ForkOf:
     source: Campaign
     at: str | None
     """A version as the source's vcs names one: a revision, or under ``git`` a branch or tag. None: the version that
-    the source's campaign type picks (``CampaignType.fork_point``)."""
+    the source's campaign type picks (``CampaignType.base``)."""
 
 
 def register(
@@ -358,8 +358,11 @@ def register(
 
 
 def _fork_version(s: Session, repo: Repository, fork: ForkOf) -> Version:
-    """The version of the fork's clone that it starts from: ``fork.at``, else its source's type's ``fork_point``."""
-    at = fork.at if fork.at is not None else CAMPAIGN_TYPES.model_of(fork.source.type)().fork_point(s, fork.source)
+    """The version of the fork's clone that it starts from: ``fork.at``, else its source's type's ``base``."""
+    if (at := fork.at) is None:
+        if (base := CAMPAIGN_TYPES.model_of(fork.source.type)().base(s, fork.source)) is None:
+            raise CampaignError(f'{fork.source.name} has no candidate yet to fork from')
+        at = base.revision
     try:
         return repo.version(at)
     except UnknownRevision as e:

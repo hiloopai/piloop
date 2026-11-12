@@ -43,6 +43,7 @@ KINDS: Final[dict[Origin, NodeKind]] = {
     Origin.REFERENCE: NodeKind(name=KindName('reference'), label='Reference'),
     Origin.RECOVERED: NodeKind(name=KindName('recovered'), label='Recovered'),
     Origin.SKIPPED: NodeKind(name=KindName('skipped'), label='Skipped'),
+    Origin.MERGE: NodeKind(name=KindName('merge'), label='Merge'),
 }
 """The kind of a candidate by its origin."""
 BEST: Final = NodeStatus(name=StatusName('best'), label='Best', tone=Tone.SUCCESS)

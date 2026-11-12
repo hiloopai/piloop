@@ -36,7 +36,6 @@ from piloop.plugins.campaign_type.kit.backlog.wire import (
     TrackBody,
     TrackChanged,
 )
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.controller import track_brief
 
@@ -129,15 +128,16 @@ def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Ide
 def claim(s: Writing, me: Acting, idea: AddressedIdea, body: ClaimBody) -> Claimed:
     """Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.
 
-    With a ``base``, the run starts from that candidate: the answer names its revision, for the checkout.
+    With a ``base``, the run starts from that candidate, and without one it may move to the campaign type's base: the
+    answer names the revision that the checkout moves to.
     """
-    return _claimed(s, backlog_ops.claim(s, idea.id, actor=me, base=body.base), body.base)
+    return _claimed(s, backlog_ops.claim(s, idea.id, actor=me, base=body.base))
 
 
 @router.post('/proposals', operation_id='propose', dependencies=[Depends(actor_access)])
 def propose(s: Writing, me: Acting, body: ProposeBody) -> Claimed:
     """Add a worker's own idea to the board of its run's campaign, and claim it for the run."""
-    idea = backlog_ops.propose(
+    made = backlog_ops.propose(
         s,
         body.title,
         actor=me,
@@ -147,7 +147,7 @@ def propose(s: Writing, me: Acting, body: ProposeBody) -> Claimed:
         track=body.track,
         base=body.base,
     )
-    return _claimed(s, idea, body.base)
+    return _claimed(s, made)
 
 
 @router.post('/ideas/{idea}/status', operation_id='set_status', dependencies=[Depends(actor_access)])
@@ -182,8 +182,9 @@ def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> T
         return TrackChanged(cursor=cursor, idea=idea_view(idea), was=was)
 
 
-def _claimed(s: Session, idea: Idea, base: CandidateId | None) -> Claimed:
+def _claimed(s: Session, made: backlog_ops.Claim) -> Claimed:
     s.commit()
+    idea, base = made.idea, made.base
     chosen = None if base is None else Base(candidate=base, revision=s.get_one(Candidate, base).revision)
     with db_feed.snapshot(s) as cursor:
         return Claimed(

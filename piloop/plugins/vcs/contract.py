@@ -240,7 +240,7 @@ class Repository(Protocol):
         The directory stays, so an agent that works in it goes on there.
 
         Raises:
-            VcsError: the checkout lacks the revision, or has changes that the move would lose.
+            VcsError: the checkout lacks the revision, or has changes or saved versions that the move would lose.
         """
         ...
 

@@ -13,7 +13,6 @@ from math import sqrt
 from statistics import fmean, stdev
 
 from sqlalchemy import Select, select
-from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from piloop.config import CampaignConfig
@@ -502,18 +501,6 @@ def best_scores(s: Session, campaign: Campaign) -> list[BestScore]:
         best = pool.best()
         gain = pool.gain(best, pool.baseline) if best is not None else None
         found.append(BestScore(track, best, pool.mean(best), gain))
-    return found
-
-
-def checkout_candidate(s: Session, campaign: Campaign) -> Candidate:
-    """Return what an agent without a run gets checked out: the best of the first track.
-
-    Raises:
-        NoResultFound: The campaign has no candidate yet (``baseline``).
-    """
-    found = best_of(s, campaign)
-    if found is None:
-        raise NoResultFound(f'campaign {campaign.name} has no candidate yet')
     return found
 
 

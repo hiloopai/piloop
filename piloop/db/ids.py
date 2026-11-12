@@ -8,6 +8,7 @@ no earlier term reached (``lift``): ``floor(epoch)`` (``piloop.plugins.leader``)
 """
 
 import re
+from collections.abc import Callable
 
 from alembic.operations import Operations
 from sqlalchemy import text
@@ -57,23 +58,33 @@ AUTO = re.compile(
 
 
 def rebuild(op: Operations, table: str, *, autoincrement: bool) -> None:
-    """Rebuild ``table`` with or without AUTOINCREMENT on ``id``, keeping its rows, indexes and every trigger.
+    """Rebuild ``table`` with or without AUTOINCREMENT on ``id``, as ``rewrite`` does. SQLite cannot add AUTOINCREMENT."""
 
-    SQLite cannot add AUTOINCREMENT to a table: a revision copies it into a new one. It keeps the table's exact SQL
-    otherwise, partial indexes and generated columns included, which a batch rebuild would reflect and could lose. The
-    triggers that name the table, its own and those on other tables (an ``AFTER INSERT`` that writes ``events``), are
-    dropped first and created again from their SQL: a rename refuses to run while one names a table that is gone.
+    def edit(sql: str) -> str:
+        if autoincrement:
+            new, n = PLAIN.subn(r'id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,\g<rest>', sql, count=1)
+        else:
+            new, n = AUTO.subn(r'id INTEGER NOT NULL,\g<rest>,\n\tPRIMARY KEY (id)\g<end>', sql, count=1)
+        assert n == 1, f'{table}: no id column of the expected form'
+        return new
+
+    rewrite(op, table, edit)
+
+
+def rewrite(op: Operations, table: str, edit: Callable[[str], str]) -> None:
+    """Rebuild ``table`` from the SQL that ``edit`` makes of its own, keeping its rows, indexes, triggers and sequence.
+
+    A revision copies it into a new table. It keeps the table's exact SQL but for ``edit``'s change, partial indexes
+    and generated columns included, which a batch rebuild would reflect and could lose. The triggers that name the
+    table, its own and those on other tables (an ``AFTER INSERT`` that writes ``events``), are dropped first and created
+    again from their SQL: a rename refuses to run while one names a table that is gone. An AUTOINCREMENT table keeps
+    its sequence: its copy would start again after its largest id, below a floor that a term lifted it to (``lift``).
     """
     bind = op.get_bind()
     sql = bind.execute(text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = :t"), {'t': table}).scalar()
     assert isinstance(sql, str), f'no table {table}'
-    if autoincrement:
-        new, n = PLAIN.subn(r'id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,\g<rest>', sql, count=1)
-    else:
-        new, n = AUTO.subn(r'id INTEGER NOT NULL,\g<rest>,\n\tPRIMARY KEY (id)\g<end>', sql, count=1)
-    assert n == 1, f'{table}: no id column of the expected form'
     staged = f'{table}_rebuilt'
-    new = re.sub(rf'^CREATE TABLE "?{table}"?', f'CREATE TABLE "{staged}"', new, count=1)
+    new = re.sub(rf'^CREATE TABLE "?{table}"?', f'CREATE TABLE "{staged}"', edit(sql), count=1)
     indexes = (
         bind.execute(
             text("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = :t AND sql IS NOT NULL"),
@@ -88,6 +99,12 @@ def rebuild(op: Operations, table: str, *, autoincrement: bool) -> None:
         ),
         {'t': table},
     ).all()
+    sequences = bind.execute(text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"))
+    seq = (
+        bind.execute(text('SELECT seq FROM sqlite_sequence WHERE name = :t'), {'t': table}).scalar()
+        if sequences.scalar()
+        else None
+    )
     # Generated columns are computed: the copy leaves them out (``table_xinfo``'s hidden 2 and 3).
     columns = ', '.join(f'"{c[1]}"' for c in bind.execute(text(f'PRAGMA table_xinfo("{table}")')) if c[6] == 0)
     for name, _ in triggers:
@@ -96,6 +113,12 @@ def rebuild(op: Operations, table: str, *, autoincrement: bool) -> None:
     op.execute(f'INSERT INTO "{staged}" ({columns}) SELECT {columns} FROM "{table}"')
     op.execute(f'DROP TABLE "{table}"')
     op.execute(f'ALTER TABLE "{staged}" RENAME TO "{table}"')
+    if seq is not None:  # an empty copy has no row, and a full one starts after its largest id
+        now = bind.execute(text('SELECT max(seq) FROM sqlite_sequence WHERE name = :t'), {'t': table}).scalar() or 0
+        bind.execute(text('DELETE FROM sqlite_sequence WHERE name = :t'), {'t': table})
+        bind.execute(
+            text('INSERT INTO sqlite_sequence (name, seq) VALUES (:t, :seq)'), {'t': table, 'seq': max(seq, now)}
+        )
     for index in indexes:
         op.execute(index)
     for _, trigger in triggers:

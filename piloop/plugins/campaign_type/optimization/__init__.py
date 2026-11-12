@@ -8,7 +8,6 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from sqlalchemy.orm import Session
 
     from piloop.db.models import Campaign
-    from piloop.ids import Revision
     from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -22,13 +21,13 @@ class Optimization(CampaignType):
         """Its run queue, its runs' ends and its measurements."""
         from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner  # config imports this module
 
-        return OptimizationPlanner(host)
+        return OptimizationPlanner(host, self)
 
-    def fork_point(self, s: Session, source: Campaign) -> Revision:
-        """The best of the first track, as an agent without a run gets it checked out."""
-        from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
+    def base(self, s: Session, campaign: Campaign) -> Candidate | None:
+        """The best of the first track."""
+        from piloop.plugins.campaign_type.kit.pool.pool import best_of
 
-        return checkout_candidate(s, source).revision
+        return best_of(s, campaign)
 
     def routes(self, host: RouteHost) -> Routes:
         """Its routes, and those of the components that it uses (``Serves``)."""

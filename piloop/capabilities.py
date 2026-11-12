@@ -136,6 +136,7 @@ from piloop.plugins.campaign_type.contract import (
     TypeHost,
 )
 from piloop.plugins.campaign_type.optimization import Optimization
+from piloop.plugins.campaign_type.accumulating import Accumulating
 
 from piloop.plugins.lineage.contract import LINEAGE, LineageProvider, Graph, LineageNode, NodeKind, NodeStatus
 from piloop.plugins.lineage.contract import ScoreTrack, Judged, RowLink, SessionLink, NodeLink, SeriesPoint, Tone

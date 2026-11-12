@@ -20,7 +20,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from sqlalchemy.orm import Session
 
     from piloop.db.models import AgentSession, Campaign
-    from piloop.ids import AgentSessionId, Revision, TargetRef
+    from piloop.ids import AgentSessionId, TargetRef
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -129,8 +129,12 @@ class CampaignType(Parameters, ABC):
         """The type at work in the daemon process that ``host`` serves. The daemon asks once."""
 
     @abstractmethod
-    def fork_point(self, s: Session, source: Campaign) -> Revision:
-        """The version that a fork of ``source`` starts from when the fork names none (``piloop campaign fork``)."""
+    def base(self, s: Session, campaign: Campaign) -> Candidate | None:
+        """The candidate that new work of ``campaign`` starts from, or None before it has one.
+
+        A queued run starts there, a claim moves a run that saved nothing yet there, and a fork that names no version
+        starts there (``piloop campaign fork``).
+        """
 
     @abstractmethod
     def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:

@@ -96,6 +96,11 @@ def release(s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
             why = 'it finished, but nothing that it saved has a score'
         case _:
             why = f'it ended {end}' + (f': {run.error}' if run.error else '')
+    reopen(s, run, idea, why)
+
+
+def reopen(s: Session, run: Run, idea: Idea, why: str) -> None:
+    """Open the idea that ``run`` gave back again, for another worker, with a note on the idea that says ``why``."""
     idea.status = IdeaStatus.OPEN
     body = f'open: run#{run.id} gave the idea back; {why}'
     s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))

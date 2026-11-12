@@ -143,7 +143,8 @@ def submit(s: Session, run: Run, version: Version, repo: Repository, actor: Acto
 
     Emits ``Submitted``, and keeps the version (``r<run>/s<n>``). The caller commits. A tree that the run submitted
     already is that submission again (``resubmitted``): nothing new, no submission spent, whatever the run's state
-    (``retried``).
+    (``retried``). A tree that a merge onto an ``accumulating`` campaign's trunk made is submitted as that merge, whose
+    measurement stands.
 
     Raises:
         SubmitRefused: ``refuse`` refuses it, or the version's tree is a candidate already.
@@ -158,11 +159,12 @@ def submit(s: Session, run: Run, version: Version, repo: Repository, actor: Acto
     known = s.scalar(
         select(Candidate).where(Candidate.campaign_id == run.campaign_id, Candidate.tree_sha == version.tree)
     )
-    if known is not None and known.origin not in (Origin.RECOVERED, Origin.SKIPPED):
+    if known is not None and known.origin not in (Origin.RECOVERED, Origin.SKIPPED, Origin.MERGE):
         raise SubmitRefused(f'its tree is candidate#{known.id} already ({known.origin}): change something first')
     parent = s.get_one(Candidate, made[-1]) if made else run.base
     candidate, _ = resolve(s, run.campaign_id, version, parent=parent, run_id=run.id, origin=Origin.RUN)
-    candidate.origin = Origin.RUN
+    if candidate.origin is not Origin.MERGE:  # a worker that merged the trunk into its work can reach a merge's tree
+        candidate.origin = Origin.RUN
     repo.keep(version.revision, Pin(run.campaign.name, f'r{run.id}/s{len(made)}'))
     emit(s, Submitted(candidate=candidate.id, revision=version.revision), TargetRef(RUN, run.id), actor)
     return candidate

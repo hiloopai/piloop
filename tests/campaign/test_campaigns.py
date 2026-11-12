@@ -15,6 +15,8 @@ from piloop.actor import System
 from piloop.campaign.campaigns import (
     BLANK,
     TEMPLATES,
+    CampaignError,
+    ForkOf,
     create_campaign_repo,
     register,
     stub_untouched,
@@ -343,3 +345,14 @@ def test_the_type_key_sets_the_campaign_type_at_registration_and_at_each_init(
     toml.write_text(f'type = "nope"\n{toml.read_text()}')
     with pytest.raises(ConfigError, match="type 'nope' is no installed campaign type; the installed ones are"):
         load_campaign_config(campaign_path)
+
+
+def test_a_fork_of_a_campaign_with_no_candidate_yet_names_no_version_and_is_refused(
+    db: Database, campaign_path: Path
+) -> None:
+    with db.session() as s:
+        source = Campaign(name='empty', path='/gone', config=load_campaign_config(campaign_path))
+        s.add(source)
+        s.flush()
+        with pytest.raises(CampaignError, match='^empty has no candidate yet to fork from$'):
+            register(s, campaign_path, System.HUMAN, 'fork', ForkOf(source, None))

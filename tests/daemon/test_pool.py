@@ -6,19 +6,19 @@ from pathlib import Path
 import pytest
 from git import Repo
 from sqlalchemy import delete, select
-from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.campaign.ops import Refused
 from piloop.config import load_campaign_config
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign
+from piloop.db.models import AgentSession, Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import Revision, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ops import BaseMoved
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -35,7 +35,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submit, waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
-from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of, branching, carried, checkout_candidate
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of, branching, carried
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
@@ -304,6 +304,32 @@ def test_a_baseline_whose_evaluate_crashes_before_its_first_rung_is_due_until_no
         now = status(s.get_one(Candidate, base), p.evaluator_id)
         assert (now.state, now.crashes, now.rung, passes) == (Measured.CRASHED, 3, 'screen', 3)
         assert unmeasured(s, p) == [], 'its crash answers it: runs do not wait for it'
+
+
+def test_a_claim_moves_a_run_that_the_best_passed_since_it_was_queued_to_the_best(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A run queued from the baseline claims after a new best: it starts from the new best, and its checkout moves."""
+    configure(db, campaign, evaluator={'noise_runs': 1})
+    ex = controller(db, runtime, tmp_path)
+    late, first = running(db, campaign, claimed=False), baseline(db, campaign.id).id
+    agent = implementer(db, late)
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\nb\nc\n'))
+    ex.score_submission(better)
+    with db.session() as s:
+        ideas = s.scalars(select(Idea.id).where(Idea.status == IdeaStatus.OPEN)).all()
+        claim = backlog_ops.claim(s, ideas[0], actor=agent)
+        s.commit()
+        assert (claim.base, s.get_one(Run, late).base_candidate_id) == (better, better)
+        [moved] = [e.payload for e in s.scalars(select(Event).where(Event.kind == 'run.base_moved'))]
+        assert moved == BaseMoved(candidate=better, was=first)
+    on_time = running(db, campaign, claimed=False)
+    agent = implementer(db, on_time)
+    with db.session() as s:
+        s.get_one(Run, on_time).base_candidate_id = better
+        idea = s.scalars(select(Idea.id).where(Idea.status == IdeaStatus.OPEN)).first()
+        assert idea is not None
+        assert backlog_ops.claim(s, idea, actor=agent).base is None, 'it starts from the best'
 
 
 def test_a_claim_with_a_base_starts_the_run_there_and_its_submission_stands_against_parent_line_and_best(
@@ -607,5 +633,3 @@ def test_a_base_of_another_campaign_is_refused_and_a_campaign_without_a_candidat
         s.add(empty)
         s.flush()
         assert best_of(s, empty) is None
-        with pytest.raises(NoResultFound, match='campaign empty has no candidate yet'):
-            checkout_candidate(s, empty)

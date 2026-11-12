@@ -227,6 +227,7 @@ round_robin = "piloop.plugins.harness_choice.round_robin:RoundRobin"
 
 [project.entry-points."piloop.campaign_types"]
 optimization = "piloop.plugins.campaign_type.optimization:Optimization"
+accumulating = "piloop.plugins.campaign_type.accumulating:Accumulating"
 
 [project.entry-points."piloop.lineages"]
 optimization = "piloop.plugins.campaign_type.optimization.lineage.optimization:OptimizationLineage"

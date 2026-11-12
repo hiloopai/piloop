@@ -152,7 +152,16 @@ def test_switch_moves_the_checkout_in_place_and_refuses_to_lose_a_change_or_reac
             checkout.switch(Revision('0' * 40))
         (campaign_path / 'solve.txt').write_text('base\n')
         checkout.switch(branch)
-    assert repo.head.commit.hexsha == branch
+        assert repo.head.commit.hexsha == branch
+        (campaign_path / 'solve.txt').write_text('base\nmine\n')
+        repo.git.commit('-qam', 'saved, and held by nothing but the checkout')
+        mine = repo.head.commit.hexsha
+        with pytest.raises(VcsError, match=f'^the checkout cannot move to {base}: it would leave 1 commit'):
+            checkout.switch(base)
+        assert repo.head.commit.hexsha == mine, 'a saved version is never left behind'
+        repo.git.update_ref('refs/piloop/demo/r1/s0', mine)
+        checkout.switch(base)
+    assert repo.head.commit.hexsha == base, 'once a ref holds it, the checkout moves'
 
 
 def test_a_merge_combines_both_sides_into_a_version_by_piloop_and_a_clash_is_a_conflict_that_makes_nothing(

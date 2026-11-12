@@ -170,8 +170,19 @@ class GitRepository(Repository):
         git.add_worktree(self.repo, path, revision, {})
 
     def switch(self, revision: Revision) -> None:
-        """A detached ``HEAD`` at ``revision``: git refuses a move that would lose a change."""
+        """A detached ``HEAD`` at ``revision``.
+
+        git refuses a move that would lose a change, and piloop one that would leave commits that no ref holds.
+        """
         try:
+            left = self.repo.git.rev_list(
+                'HEAD', '--not', revision, '--branches', '--tags', '--remotes', '--glob=refs/piloop'
+            )
+            if left:
+                raise VcsError(
+                    f'the checkout cannot move to {revision}: it would leave {len(left.split())} commit(s) behind that'
+                    ' nothing else holds'
+                )
             self.repo.git.checkout('--detach', revision)
         except GitCommandError as e:
             raise VcsError(

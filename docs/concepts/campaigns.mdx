@@ -239,6 +239,39 @@ them again:
 piloop candidate remeasure 2
 ```
 
+## Work that adds up
+
+By default a campaign is of the type `optimization`: each run tries an idea, and piloop keeps the best version. When the
+task is many parts that each add to the whole, such as proofs of separate lemmas, set `type = "accumulating"`. Then
+each accepted submission merges into a **trunk**, and every new run starts from the trunk.
+
+```toml
+type = "accumulating"
+evaluate = ["python3", "evaluate.py"]
+
+[[metrics]]
+name = "proved"
+direction = "higher"
+role = "primary"
+
+[plugins.stop_rule]
+target = 1.0
+max_hours = 4
+```
+
+- **Only the merge is measured.** An agent checks its work locally and submits. The daemon merges every waiting
+  submission onto the trunk, measures the merge once, and takes it when the evaluation scored and its primary is at
+  least the trunk's. When a merge of several fails, each submission is merged again on its own.
+- **A conflict is refused at once.** The agent hears why, with the trunk's revision: it merges the trunk into its work
+  and submits again. A submission that the trunk already holds is refused too.
+- **An idea is done when its work is merged.** A run that ends with nothing merged opens its idea again, with a note.
+  `after` links make the ideas a task tree, and the first claim wins.
+- **A claim moves a run to the trunk** when the trunk moved since the run was queued and the run saved nothing yet.
+- The campaign has one track: its primary decides each merge.
+
+The orchestrator is the lead: it writes the ideas, their `after` links and priorities, and can keep tables of the
+team's own ([team tables](/reference/data-model#team-tables)).
+
 ## Reopen, fork and retire
 
 ```bash

@@ -12,9 +12,10 @@ from piloop.db.triggers.changelog import (
     EvaluationCancelled,
     EvaluationDeleted,
 )
-from piloop.plugins.campaign_type.contract import OPTIMIZATION
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_scores
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
+from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.contribution import Contribution, DaemonHost
 
 for kind in ('slots_idle.seen', 'slots_idle.raised', 'slots_idle.ended'):
@@ -34,7 +35,8 @@ def contribution(host: DaemonHost) -> Contribution:
 
     ``evaluations`` stops the evaluations that someone cancelled, takes those of a retired evaluator from the queue, and
     submits those that a slot freed for. ``scores``
-    tells each running worker where its submissions stand, on a score (``tell_scores``).
+    tells each running worker where its submissions stand, on a score (``tell_scores``), in each campaign of a type
+    that runs ``optimization``'s runs: it or a type built on it.
     """
 
     def evaluations(_turn: Turn) -> datetime | None:
@@ -43,8 +45,9 @@ def contribution(host: DaemonHost) -> Contribution:
         return None
 
     def scores(_turn: Turn) -> datetime | None:
+        ours = [name for name, p in CAMPAIGN_TYPES.providers().items() if issubclass(p.model, Optimization)]
         with host.db.session() as s:
-            for campaign in s.scalars(select(Campaign).where(NOT_RETIRED, Campaign.type == OPTIMIZATION)).all():
+            for campaign in s.scalars(select(Campaign).where(NOT_RETIRED, Campaign.type.in_(ours))).all():
                 if told := tell_scores(s, campaign, host.agents.steer_line_chars):
                     host.tracer.event('campaign.scores_told', campaign=campaign.name, messages=len(told))
             s.commit()

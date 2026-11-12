@@ -440,7 +440,7 @@ def test_a_worker_claims_one_open_idea_for_its_run_and_every_other_claim_is_refu
         with me.session() as s, pytest.raises(ops.Refused, match=error):
             backlog_ops.claim(s, idea, actor=actor)
     with me.session() as s:
-        taken = backlog_ops.claim(s, free, actor=implementer)
+        taken = backlog_ops.claim(s, free, actor=implementer).idea
         s.commit()
         run = s.get_one(Run, run_id)
         assert (taken.status, run.idea_id, run.attempt) == (IdeaStatus.CLAIMED, free, 1)
@@ -457,7 +457,9 @@ def test_a_dropped_prerequisite_frees_a_claim_as_the_board_lists_it(me: Database
         assert set(s.scalars(select(Idea.id).where(claimable()))) == {after}, 'the board lists it'
     _, implementer = worker(me)
     with me.session() as s:
-        assert backlog_ops.claim(s, after, actor=implementer).status is IdeaStatus.CLAIMED, 'and the claim takes it'
+        assert backlog_ops.claim(s, after, actor=implementer).idea.status is IdeaStatus.CLAIMED, (
+            'and the claim takes it'
+        )
 
 
 def test_two_workers_that_claim_one_idea_at_once_get_it_once(me: Database, campaign: Campaign) -> None:
@@ -499,7 +501,7 @@ def test_a_worker_proposes_its_own_idea_and_claims_it_but_files_none_for_others(
     with me.session() as s, pytest.raises(ops.Refused, match='orchestrator has no run'):
         backlog_ops.propose(s, 'mine', actor=ACTOR)
     with me.session() as s:
-        idea = backlog_ops.propose(s, 'mine', actor=implementer, hypothesis='halve the window')
+        idea = backlog_ops.propose(s, 'mine', actor=implementer, hypothesis='halve the window').idea
         s.commit()
         assert (idea.status, idea.created_by, idea.hypothesis) == (
             IdeaStatus.CLAIMED,

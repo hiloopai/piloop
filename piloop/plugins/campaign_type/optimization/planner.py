@@ -17,14 +17,13 @@ from piloop.campaign.launches import choose_harness, full_harnesses, remove_chec
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, EventModel, ReadBy, count
 from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
-from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, CampaignType, CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import status
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_if_exhausted
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
-from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
@@ -71,8 +70,10 @@ def free_slots(s: Session, campaign: Campaign, roles: dict[RoleName, Implementer
 class OptimizationPlanner:
     """The ``optimization`` type at work in one daemon process: the hooks of the campaigns' pass (``TypeHost``)."""
 
-    def __init__(self, host: TypeHost) -> None:
+    def __init__(self, host: TypeHost, kind: CampaignType) -> None:
         self._host = host
+        self._kind = kind
+        """Its campaign type: where new runs start (``CampaignType.base``)."""
         self._tracer = host.tracer
         self._controller = host.controller
         self._scoring: dict[tuple[TargetKind, int], Future[None]] = {}
@@ -108,7 +109,7 @@ class OptimizationPlanner:
         )
         kept = select(AgentSession.subject_id).where(spared, (AgentSession.subject_kind == RUN))
         in_flight = (Run.status == RunStatus.RUNNING) & Run.id.not_in(kept)
-        for run in s.scalars(select(Run).where(in_flight | Run.id.in_(launched))).all():
+        for run in s.scalars(select(Run).where(in_flight | Run.id.in_(launched), self._ours())).all():
             self._fail_run(s, run, end)
             if reaped:
                 remove_checkouts(self._host.home / RUNS / str(run.id), run.campaign, self._tracer)
@@ -133,7 +134,7 @@ class OptimizationPlanner:
     def resume_unscored(self) -> None:
         """Score each closed run whose commits were not all scored (``runs.scoring``): a previous daemon stopped first."""
         with self._controller.launcher.db.session() as s:
-            unscored = s.scalars(select(Run.id).where(Run.scoring).order_by(Run.id)).all()
+            unscored = s.scalars(select(Run.id).where(Run.scoring, self._ours()).order_by(Run.id)).all()
         for run_id in unscored:
             self._tracer.event('run.unscored', run=run_id)
             self._scoring[RUN, run_id] = self._host.submit(partial(self._controller.resume, run_id))
@@ -142,6 +143,10 @@ class OptimizationPlanner:
         """The scoring in flight, by what it scores, after it forgets what ended. Scoring never raises."""
         self._scoring = {key: fut for key, fut in self._scoring.items() if not fut.done()}
         return {f'{kind}#{i}': fut for (kind, i), fut in self._scoring.items()}
+
+    def _ours(self) -> ColumnElement[bool]:
+        """Select the runs of the campaigns of its type: the daemon asks each type's planner about every run."""
+        return Run.campaign_id.in_(select(Campaign.id).where(Campaign.type == CAMPAIGN_TYPES.name_of(self._kind)))
 
     def _fail_run(self, s: Session, run: Run, end: RunEnd) -> None:
         """End ``run`` as ``end``, and its claim (``release``).
@@ -178,6 +183,15 @@ class OptimizationPlanner:
         held_tasks = task_holds.held_keys(s, campaign.id)
         if hold_if_exhausted(s, campaign, held_tasks):
             return
+        self._score_submissions(s, campaign, held_tasks)
+        key = (TargetKind.CAMPAIGN, campaign.id)
+        if ((busy := self._scoring.get(key)) is not None and not busy.done()) or not (todo := due(s, campaign)):
+            return
+        self._tracer.event('candidate.remeasure', campaign=campaign.name, candidate=todo[0].id, left=len(todo))
+        self._scoring[key] = self._host.submit(partial(self._controller.remeasure, todo[0].id))
+
+    def _score_submissions(self, s: Session, campaign: Campaign, held_tasks: Collection[str]) -> None:
+        """Score each submission that waits for its score at once, on a thread of its own (``score_submission``)."""
         for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
             if task_holds.key(submission) in held_tasks:
                 continue
@@ -185,23 +199,18 @@ class OptimizationPlanner:
             if (busy := self._scoring.get(mine)) is None or busy.done():
                 self._tracer.event('candidate.submission', campaign=campaign.name, candidate=submission.id)
                 self._scoring[mine] = self._host.submit(partial(self._controller.score_submission, submission.id))
-        key = (TargetKind.CAMPAIGN, campaign.id)
-        if ((busy := self._scoring.get(key)) is not None and not busy.done()) or not (todo := due(s, campaign)):
-            return
-        self._tracer.event('candidate.remeasure', campaign=campaign.name, candidate=todo[0].id, left=len(todo))
-        self._scoring[key] = self._host.submit(partial(self._controller.remeasure, todo[0].id))
 
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
         """Start a fresh run, and request its worker, for each free slot within the runs ``left``.
 
-        A run starts from the best of the first track, with no idea: its worker claims one from the board, or proposes
+        A run starts from its type's base (``CampaignType.base``), with no idea: its worker claims one from the board, or proposes
         one and claims it, and may start from another candidate then (``--base``). Each role that does runs fills its
         own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the next harness of its rotation that
         is not at its cap. Nothing starts while the campaign has no baseline, or while the current evaluator has not
         measured it, nor the best before an evaluator change (``firsts``: ``remeasure`` measures them first). Nor does a run whose session the
         stop rule's ``hours`` would end within its wrap-up lead: its worker would be told to wrap up as it starts.
         """
-        best = best_of(s, campaign)
+        best = self._kind.base(s, campaign)
         if best is None or not all(status(c, campaign.evaluator_id).settled for c in firsts(s, campaign)):
             return
         cfg = campaign.config
