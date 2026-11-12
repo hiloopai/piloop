@@ -192,6 +192,7 @@ class Forwarding:
                     *(server.serve(sockets=[dup]) for (server, _), dup in zip(self._servers, dups, strict=True))
                 )
             finally:
+                self._end_reads()  # before the loop closes, however it ends: no read lands in a closed loop
                 for dup in dups:
                     dup.close()
 

@@ -878,7 +878,11 @@ def test_the_follower_reads_its_start_again_until_it_answers_and_a_refusal_ends_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     asked: list[str] = []
-    status = {'protocol': 1, 'cursor': 3, 'daemon': {'pid': 1, 'started': '2026-10-29T00:00:00Z', 'listen': None}}
+    status = {
+        'protocol': 1,
+        'cursor': 3,
+        'daemon': {'pid': 1, 'epoch': 1, 'started': '2026-10-29T00:00:00Z', 'listen': None},
+    }
 
     def answer(request: httpx.Request) -> httpx.Response:
         asked.append(request.url.path)
