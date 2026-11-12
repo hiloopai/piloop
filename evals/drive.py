@@ -2,8 +2,8 @@
 
 The driver reads the arm's spend every ``poll_seconds``: the tokens of every agent session in the sandbox, at list
 price, plus the sandbox's own CPU and memory. It stops the run at the first of the budget, ``max_hours``, or a
-campaign's own stop. The export is ``export/``: the repo as a git bundle, piloop's database for a piloop arm, the
-agent session files, and ``spend.jsonl``, beside ``run.json``.
+campaign's own stop. The export is ``export/``: the repo as a git bundle, piloop's database and each campaign's team
+tables for a piloop arm, the agent session files, and ``spend.jsonl``, beside ``run.json``.
 """
 
 import contextlib
@@ -51,6 +51,7 @@ from evals.sandbox import (
 )
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
+from piloop.campaign.dirs import PROJECTS, TEAM_DB
 from piloop.config import CampaignConfig
 from piloop.plugins.executor.kit.scaling import OWNER_FILE
 from piloop.plugins.harness.claude import Claude
@@ -281,7 +282,12 @@ class Piloop:
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(self.settings.poll_seconds / 4)
-        box.run(f'sqlite3 {PILOOP_HOME}/piloop.db ".backup {OUT}/piloop.db" && piloop stop || true')
+        teams = f'{PROJECTS}/*/{TEAM_DB}'  # each campaign's team tables, at the same path under OUT
+        box.run(
+            f'cd {PILOOP_HOME} && sqlite3 piloop.db ".backup {OUT}/piloop.db"'
+            f' && ( for f in {teams}; do [ -f "$f" ] || continue; mkdir -p "{OUT}/${{f%/*}}"'
+            f' && sqlite3 "$f" ".backup {OUT}/$f" || exit 1; done ) && piloop stop || true'
+        )
         if left != '0':
             raise RuntimeError(f'{left} of the team did not end in {DRAIN_SECONDS} s: they end at their TTL')
 

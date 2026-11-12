@@ -875,6 +875,43 @@ def test_cli_writes_as_the_actor_from_the_environment(
 
 
 @pytest.mark.usefixtures('api')
+def test_sql_attaches_the_team_tables_of_the_caller_s_campaign_and_a_fork_starts_without_them(
+    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    run_cli(['campaign', 'fork', 'demo'])
+    create = 'CREATE TABLE team.crews (name TEXT, by TEXT NOT NULL DEFAULT (actor()))'
+    with pytest.raises(SystemExit, match=r"^sql error: unknown database team \(no campaign's team tables are attached"):
+        run_cli(['sql', create])  # two active campaigns, and the cwd is in neither
+    run_cli(['sql', '--campaign', 'demo', create])
+    assert (tmp_path / 'projects' / '1' / 'team.db').is_file()
+    monkeypatch.chdir(campaign_path)
+    run_cli(['sql', "INSERT INTO team.crews (name) VALUES ('lemmas')"])
+    out()
+    run_cli(['sql', 'SELECT name, by FROM team.crews'])
+    assert 'lemmas' in (text := out()) and 'human' in text
+    with pytest.raises(SystemExit, match=r'^sql error: no such table: team\.crews$'):
+        run_cli(['sql', '--campaign', 'demo-2', 'SELECT * FROM team.crews'])
+    now = iter(range(0, 1000, 3))
+    monkeypatch.setattr(sql, 'clock', lambda: next(now))  # 3 s on at each check
+    with pytest.raises(
+        SystemExit, match=r'^sql error: interrupted: the statement ran past 5 s \(\[sql\] statement_seconds\)$'
+    ):
+        run_cli(['sql', 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n'])
+    monkeypatch.setattr(sql, 'clock', lambda: 0)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(common, 'settings', common.settings.model_copy(update=launched(tmp_path, 'implementer#4')))
+    run_cli(['sql', "INSERT INTO team.crews (name) VALUES ('rings')"])
+    out()
+    run_cli(['sql', "SELECT by FROM team.crews WHERE name = 'rings'"])
+    assert 'implementer#4' in out(), 'the token finds its campaign, wherever the cwd is'
+    with pytest.raises(
+        SystemExit, match=r'^sql error: implementer#4 reaches only the team tables of its own campaign$'
+    ):
+        run_cli(['sql', '--campaign', 'demo-2', 'SELECT 1'])
+
+
+@pytest.mark.usefixtures('api')
 def test_candidate_import_registers_a_reference_shown_apart_and_refuses_a_bad_ref_or_a_known_tree(
     campaign_path: Path, out
 ) -> None:

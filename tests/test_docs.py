@@ -13,6 +13,7 @@ import shlex
 import sqlite3
 import subprocess
 import tomllib
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
@@ -216,16 +217,27 @@ def check_shell(block: Block, db: Path) -> None:
         if command is sql_cmd:
             statement = bound.arguments['statement']
             assert statement != '-' or stdin, f'{block.at(offset)}: piloop sql - without a heredoc reads nothing'
-            explain(block.at(offset), stdin if statement == '-' else statement, db)
+            with closing(piloop_sql(db)) as con:
+                explain(block.at(offset), stdin if statement == '-' else statement, con)
 
 
-def explain(where: str, statement: str, db: Path) -> None:
-    """Compile ``statement`` with EXPLAIN on a migrated database, through the connection that ``piloop sql`` uses."""
-    with closing(sql.connect(db, actor=System.HUMAN)) as con:
-        try:
+TEAM_CREATE = re.compile(rf'\s*CREATE\s+(TABLE|INDEX|VIEW)\s+{sql.TEAM}\.', re.IGNORECASE)
+
+
+def piloop_sql(db: Path) -> sql.Connection:
+    """The connection that ``piloop sql`` makes to the migrated database ``db``, with team tables of its own."""
+    return sql.connect(db, actor=System.HUMAN, team=db.parent / 'teams' / f'{uuid.uuid4().hex}.db')
+
+
+def explain(where: str, statement: str, con: sql.Connection) -> None:
+    """Compile ``statement`` with EXPLAIN on ``con``. A CREATE in ``team`` runs, so the statements after it compile."""
+    try:
+        if TEAM_CREATE.match(statement):
+            sql.run(con, statement)
+        else:
             con.execute(f'EXPLAIN {statement}')
-        except sqlite3.Error as e:
-            raise AssertionError(f'{where}: {e}: {statement.strip().splitlines()[0]}') from e
+    except sqlite3.Error as e:
+        raise AssertionError(f'{where}: {e}: {statement.strip().splitlines()[0]}') from e
 
 
 def statements(code: str) -> Iterator[tuple[int, str]]:
@@ -254,8 +266,9 @@ def check_sql(block: Block, db: Path) -> None:
         with closing(sqlite3.connect(':memory:')) as con:
             con.executescript(block.code)
         return
-    for offset, statement in found:
-        explain(block.at(offset), statement, db)
+    with closing(piloop_sql(db)) as con:
+        for offset, statement in found:
+            explain(block.at(offset), statement, con)
 
 
 def check_python(block: Block, _db: Path) -> None:

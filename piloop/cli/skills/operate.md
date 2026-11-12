@@ -21,6 +21,10 @@ The database is the contract. Everything below is a `piloop` command in your she
 - Limit your queries to the campaigns that you orchestrate: the campaign in the current directory
   (`SELECT id, name FROM campaigns WHERE path = '<cwd>'` gives `<p>` and `<name>`), or each campaign that the human names.
   For several campaigns, leave the name out of `piloop inbox wait`: it then waits for every campaign.
+- Make the tables that the team needs and piloop lacks (crews, verdicts, a register of what is done) in the schema
+  `team`: `CREATE TABLE team.<name> (…, by TEXT NOT NULL DEFAULT (actor()))`. Only `team` takes a schema change, and
+  each campaign has its own. Pass `--campaign <name>` to `piloop sql` outside the campaign's directory. The agents
+  read and write the same tables. Keep ideas, links and claims in piloop's tables: the daemon acts on those.
 
 ## The loop
 

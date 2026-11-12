@@ -39,12 +39,12 @@ from piloop.agents.roles import briefing, compose_brief, compose_resumed, read_b
 from piloop.campaign.campaigns import (
     WORKSPACE,
     Sources,
-    campaign_dir,
     checkout_of,
     record_of,
     vcs_of,
     workspace_dir,
 )
+from piloop.campaign.dirs import campaign_dir
 from piloop.campaign.stop import run_cancel, seconds, timeout as agent_timeout
 from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.events import Topic, emit, has, latest

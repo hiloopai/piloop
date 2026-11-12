@@ -28,7 +28,8 @@ from sqlalchemy import Select, exists, func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
-from piloop.campaign.campaigns import WORKSPACE, campaign_dir, cloned, vcs_of, workspace_dir
+from piloop.campaign.campaigns import WORKSPACE, cloned, vcs_of, workspace_dir
+from piloop.campaign.dirs import campaign_dir
 from piloop.db.events import SubjectSettled, emit, has, latest
 from piloop.db.models import ENDED, AgentSession, Campaign, Event, count, known_kinds, utcnow
 from piloop.db.session import Database

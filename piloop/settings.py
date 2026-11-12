@@ -97,6 +97,25 @@ class EvaluationSettings(BaseModel):
         return int(self.max_evidence_mb * 1024**2)
 
 
+class SqlSettings(BaseModel):
+    """``[sql]``: the limits of ``piloop sql``. They bind every caller: the agents, the orchestrator and you."""
+
+    model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
+
+    statement_seconds: float = Field(default=5, gt=0)
+    """How long one statement may run, in seconds. A longer one is interrupted, and changes nothing. A wait for the
+    write lock does not count."""
+
+    team_mb: float = Field(default=256, gt=0)
+    """The size of a campaign's team tables (``team.db``), in MiB. A write that would grow the file past it fails with
+    ``database or disk is full``."""
+
+    @property
+    def team_bytes(self) -> int:
+        """``team_mb`` in bytes."""
+        return int(self.team_mb * 1024**2)
+
+
 class TracingSettings(BaseModel):
     """``[tracing]``: what this home measures for the spans that it exports (``OTEL_EXPORTER_OTLP_ENDPOINT``)."""
 
@@ -326,6 +345,9 @@ class Settings(BaseSettings):
 
     watch: WatchSettings = WatchSettings()
     """``[watch]`` in ``config.toml``: how ``piloop watch`` reads the API."""
+
+    sql: SqlSettings = SqlSettings()
+    """``[sql]`` in ``config.toml``: the limits of ``piloop sql``."""
 
     @classmethod
     def settings_customise_sources(

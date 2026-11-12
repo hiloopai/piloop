@@ -36,7 +36,7 @@ def integrity(path: Path) -> None:
             con.execute(f"INSERT INTO {table} ({table}) VALUES ('integrity-check')")
 
 
-def hits(con: sqlite3.Connection, table: str, query: str) -> list[object]:
+def hits(con: sql.Connection, table: str, query: str) -> list[object]:
     """The matching rowids, best match first."""
     fts = f'{table}_fts'
     return [

@@ -23,17 +23,18 @@ from piloop.db.schema import tables
 from piloop.db.session import Database
 from piloop.ids import CommentKind
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
+from piloop.settings import SqlSettings
 from tests.conftest import WRITER, bare_config
 
 
 @pytest.fixture
-def con(db: Database, tmp_path: Path) -> Iterator[sqlite3.Connection]:
+def con(db: Database, tmp_path: Path) -> Iterator[sql.Connection]:
     connection = sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)
     yield connection
     connection.close()
 
 
-def test_anything_but_schema_changes(con: sqlite3.Connection) -> None:
+def test_anything_but_schema_changes(con: sql.Connection) -> None:
     r = sql.run(con, "INSERT INTO campaigns (name, path, config, created_at) VALUES ('p', '/p', '{}', '2026-01-01')")
     assert (r.changes, r.last_insert_rowid, r.columns) == (1, 1, [])
     r = sql.run(con, 'SELECT id, name FROM campaigns')
@@ -63,7 +64,7 @@ def test_anything_but_schema_changes(con: sqlite3.Connection) -> None:
     assert 'name' in sql.run(con, 'PRAGMA table_info(campaigns)').columns
 
 
-def test_row_limit(con: sqlite3.Connection) -> None:
+def test_row_limit(con: sql.Connection) -> None:
     con.executemany(
         "INSERT INTO comments (target_kind, target_id, author, kind, body, created_at) VALUES ('idea', 1, 'a', 'note', ?, '2026-01-01')",
         [(str(i),) for i in range(5)],
@@ -115,7 +116,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
     )
 
 
-def test_documented_procedures_work_verbatim(con: sqlite3.Connection) -> None:
+def test_documented_procedures_work_verbatim(con: sql.Connection) -> None:
     """The INSERTs in sql_procedures.md rely on server defaults for timestamps, statuses and priorities."""
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
     idea = sql.run(
@@ -309,14 +310,14 @@ def test_connect_requires_an_existing_database(tmp_path: Path) -> None:
         sql.connect(tmp_path / 'missing.db', actor=System.HUMAN)
 
 
-def events(con: sqlite3.Connection, since: int = 0) -> list[tuple[object, ...]]:
+def events(con: sql.Connection, since: int = 0) -> list[tuple[object, ...]]:
     return sql.run(
         con, f'SELECT kind, actor, target_kind, target_id, payload FROM events WHERE id > {since} ORDER BY id'
     ).rows
 
 
 def test_one_update_of_a_tracked_column_is_one_event_and_the_provenance_stamps_still_land(
-    con: sqlite3.Connection,
+    con: sql.Connection,
 ) -> None:
     """The change-log trigger, the updated_at trigger and the updated_by trigger each do their own UPDATE: one event."""
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
@@ -350,7 +351,7 @@ MINE, COMPOSED, REVISED = (
 
 
 def test_exclusion_brief_and_campaign_status_changes_carry_what_the_feed_needs(
-    db: Database, tmp_path: Path, con: sqlite3.Connection
+    db: Database, tmp_path: Path, con: sql.Connection
 ) -> None:
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
     sql.run(
@@ -408,7 +409,7 @@ def test_exclusion_brief_and_campaign_status_changes_carry_what_the_feed_needs(
     assert f"= '{ACTOR}'" in sql.declared().actor_sql, 'the SQL names the daemon by its actor string'
 
 
-def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> None:
+def test_deletes_leave_tombstones_and_cascades_too(con: sql.Connection) -> None:
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
     sql.run(
         con, "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 't', 'h', 'me')"
@@ -454,7 +455,7 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
     ), 'a cascade deletes the child rows too, and each one leaves a tombstone'
 
 
-def test_every_comment_kind_is_an_event_shaped_like_the_escalation_one(con: sqlite3.Connection) -> None:
+def test_every_comment_kind_is_an_event_shaped_like_the_escalation_one(con: sql.Connection) -> None:
     for kind in (CommentKind.NOTE, DECISION, ESCALATION, CommentKind.MESSAGE):
         sql.run(
             con,
@@ -510,7 +511,7 @@ def test_an_agent_files_an_escalation_with_its_form_only(db: Database, tmp_path:
         sql.run(agent, insert.format(', form', ", '{}'"))
 
 
-def test_only_the_daemon_writes_an_agents_usage_and_session_file(con: sqlite3.Connection) -> None:
+def test_only_the_daemon_writes_an_agents_usage_and_session_file(con: sql.Connection) -> None:
     """``usage`` loads as a ``Usage`` and ``session_file`` as a CID: an agent's UPDATE of either is denied, its other
     columns are not."""
     sql.run(
@@ -530,7 +531,7 @@ EVENT = """INSERT INTO events (actor, target_kind, target_id, payload{cols}) VAL
 
 
 @pytest.fixture
-def daemon_con(db: Database, tmp_path: Path) -> Iterator[sqlite3.Connection]:
+def daemon_con(db: Database, tmp_path: Path) -> Iterator[sql.Connection]:
     """A connection with the actor's TEMP triggers and no authorizer, as the daemon's engine has."""
     connection = sql.connect(tmp_path / 'piloop.db', actor=ACTOR)
     connection.set_authorizer(None)
@@ -538,11 +539,11 @@ def daemon_con(db: Database, tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection.close()
 
 
-def event(con: sqlite3.Connection, cols: str = '', vals: str = '', verb: str = 'INSERT') -> None:
+def event(con: sql.Connection, cols: str = '', vals: str = '', verb: str = 'INSERT') -> None:
     sql.run(con, EVENT.format(cols=cols, vals=vals).replace('INSERT', verb, 1))
 
 
-def test_only_a_trigger_writes_an_event_through_piloop_sql(con: sqlite3.Connection) -> None:
+def test_only_a_trigger_writes_an_event_through_piloop_sql(con: sql.Connection) -> None:
     """So every event that an agent's statement writes has the shape of its model."""
     with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
         event(con)
@@ -552,7 +553,7 @@ def test_only_a_trigger_writes_an_event_through_piloop_sql(con: sqlite3.Connecti
 
 
 def test_events_are_append_only_so_an_id_is_never_reused_nor_moved(
-    con: sqlite3.Connection, daemon_con: sqlite3.Connection
+    con: sql.Connection, daemon_con: sql.Connection
 ) -> None:
     for _ in range(3):
         event(daemon_con)
@@ -579,7 +580,7 @@ def test_events_are_append_only_so_an_id_is_never_reused_nor_moved(
     assert sql.run(con, 'SELECT max(id) FROM events').rows == [(4,)], 'without an id, an event takes the next one'
 
 
-def test_an_event_that_piloop_could_not_read_is_refused(daemon_con: sqlite3.Connection) -> None:
+def test_an_event_that_piloop_could_not_read_is_refused(daemon_con: sql.Connection) -> None:
     con = daemon_con
     for cols, vals, message in (
         ('', '', None),
@@ -605,7 +606,7 @@ def test_an_event_that_piloop_could_not_read_is_refused(daemon_con: sqlite3.Conn
             sql.run(con, insert + values)
 
 
-def test_acknowledging_an_inbox_item_is_logged_with_the_connection_actor(con: sqlite3.Connection) -> None:
+def test_acknowledging_an_inbox_item_is_logged_with_the_connection_actor(con: sql.Connection) -> None:
     sql.run(
         con,
         'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
@@ -642,3 +643,106 @@ def test_a_connection_whose_setup_fails_is_closed(
             sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)
         gc.collect()
     assert [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)] == []
+
+
+@pytest.fixture
+def team(db: Database, tmp_path: Path) -> Iterator[sql.Connection]:
+    """An implementer's connection, with its campaign's team tables attached."""
+    connection = sql.connect(
+        tmp_path / 'piloop.db', actor=Agent(role='implementer', session=3), team=tmp_path / 'projects' / '1' / 'team.db'
+    )
+    yield connection
+    connection.close()
+
+
+def test_agents_change_the_schema_of_team_alone_and_record_who_wrote_a_row(team: sql.Connection) -> None:
+    for statement in (
+        'CREATE TABLE team.lemmas (name TEXT PRIMARY KEY, status TEXT, by TEXT NOT NULL DEFAULT (actor()))',
+        'CREATE INDEX team.lemmas_status ON lemmas (status)',
+        'ALTER TABLE team.lemmas ADD COLUMN note TEXT',
+        "CREATE VIEW team.open_lemmas AS SELECT name FROM lemmas WHERE status = 'open'",
+        "INSERT INTO team.lemmas (name, status) VALUES ('add_comm', 'open')",
+        'CREATE TABLE team.events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)',
+        "INSERT INTO team.events (value) VALUES ('a name of piloop is no rule of team')",
+        "UPDATE team.events SET value = 'moved'",
+    ):
+        sql.run(team, statement)
+    assert sql.run(team, 'SELECT name, by FROM team.open_lemmas JOIN team.lemmas USING (name)').rows == [
+        ('add_comm', 'implementer#3')
+    ]
+    assert sql.run(team, 'SELECT value FROM team.events').rows == [('moved',)]
+    sql.run(team, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
+    assert sql.run(team, 'SELECT c.name, l.name FROM campaigns c JOIN team.lemmas l').rows == [('p', 'add_comm')]
+    with pytest.raises(sqlite3.OperationalError, match='view v cannot reference objects in database main'):
+        sql.run(team, 'CREATE VIEW team.v AS SELECT * FROM main.campaigns')
+    for statement in ('DROP VIEW team.open_lemmas', 'DROP INDEX team.lemmas_status', 'DROP TABLE team.events'):
+        sql.run(team, statement)
+    for statement in (
+        'CREATE TRIGGER team.t AFTER INSERT ON lemmas BEGIN SELECT 1; END',
+        'CREATE VIRTUAL TABLE team.v USING fts5(body)',
+        'PRAGMA team.max_page_count=1000000000',
+        'PRAGMA team.journal_mode=DELETE',
+        "ATTACH DATABASE ':memory:' AS m",
+        'CREATE TEMP TABLE t (x)',
+        'DELETE FROM alembic_version',
+    ):
+        with pytest.raises(sqlite3.DatabaseError, match='^not authorized$'):
+            sql.run(team, statement)
+    for statement in ('CREATE TABLE notes (x)', 'DROP TABLE campaigns', 'ALTER TABLE campaigns ADD COLUMN x'):
+        with pytest.raises(sqlite3.DatabaseError, match=re.escape(f'not authorized: {sql.TEAM_HINT}')):
+            sql.run(team, statement)
+
+
+def test_a_hidden_column_stays_hidden_from_a_copy_into_team(team: sql.Connection) -> None:
+    team.set_authorizer(None)
+    team.execute("INSERT INTO secrets (name, value) VALUES ('KEY', 'sk-1')")
+    team.set_authorizer(team.authorize)
+    sql.run(team, 'CREATE TABLE team.copied AS SELECT name, value FROM secrets')
+    assert sql.run(team, 'SELECT name, value FROM team.copied').rows == [('KEY', None)]
+
+
+def test_a_write_to_team_does_not_wait_for_the_lock_of_piloop_db(
+    team: sql.Connection, writer: subprocess.Popen[str]
+) -> None:
+    """The daemon never attaches ``team.db``: its write transactions on ``piloop.db`` never hold an agent's back."""
+    team.set_authorizer(None)
+    team.execute('PRAGMA busy_timeout=0')
+    team.set_authorizer(team.authorize)
+    sql.run(team, 'CREATE TABLE team.notes (body TEXT)')
+    sql.run(team, "INSERT INTO team.notes SELECT name FROM campaigns UNION ALL SELECT 'read main too'")
+    assert sql.run(team, 'SELECT body FROM team.notes').rows == [('read main too',)]
+    with pytest.raises(sqlite3.OperationalError, match='^database is locked$'):
+        sql.run(team, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
+
+
+def test_a_statement_past_its_seconds_is_interrupted_and_changes_nothing(
+    team: sql.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sql.run(team, 'CREATE TABLE team.n (i INTEGER)')
+    now = iter(range(0, 1000, 3))
+    monkeypatch.setattr(sql, 'clock', lambda: next(now))  # 3 s on at each check
+    forever = 'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) INSERT INTO team.n SELECT i FROM n'
+    with pytest.raises(
+        sqlite3.OperationalError, match=r'^interrupted: the statement ran past 5 s \(\[sql\] statement_seconds\)$'
+    ):
+        sql.run(team, forever)
+    monkeypatch.setattr(sql, 'clock', lambda: 0)
+    assert sql.run(team, 'SELECT count(*) FROM team.n').rows == [(0,)]
+
+
+def test_team_grows_to_its_limit_only(db: Database, tmp_path: Path) -> None:
+    path = tmp_path / 'team.db'
+    with closing(
+        sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN, team=path, limits=SqlSettings(team_mb=0.25))
+    ) as con:
+        sql.run(con, 'CREATE TABLE team.blobs (b BLOB)')
+        fill = (
+            'WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100)'
+            ' INSERT INTO team.blobs SELECT randomblob(4000) FROM n'
+        )
+        with pytest.raises(
+            sqlite3.OperationalError, match=r'^database or disk is full: the team tables hold at most 0.25 MiB'
+        ):
+            sql.run(con, fill)
+        assert sql.run(con, 'SELECT count(*) FROM team.blobs').rows == [(0,)]
+    assert path.stat().st_size <= 0.25 * 1024**2

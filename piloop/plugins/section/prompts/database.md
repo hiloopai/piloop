@@ -1,5 +1,9 @@
 `piloop sql` runs one SQL statement on piloop's SQLite database: any statement except schema changes and transactions,
-each a transaction of its own. Timestamps are UTC ISO-8601 strings.
+each a transaction of its own, for at most 5 s. Timestamps are UTC ISO-8601 strings.
+
+Your campaign's team shares tables of its own in the schema `team`: make them there (`CREATE TABLE team.<name>`), read
+them with piloop's tables in one query, and give each a `by TEXT NOT NULL DEFAULT (actor())` column, so each row says
+who wrote it. A view in `team` reads only `team`.
 
 Never put your own text inside a double-quoted shell argument: pipe it in. In double quotes, the shell runs what is in
 backticks and `$(…)`, and expands `$VAR`, before piloop sees the text. `piloop sql -` reads the statement from stdin,

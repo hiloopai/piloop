@@ -1,6 +1,6 @@
-"""Raw SQL access for agents: any statement except a schema change.
+"""Raw SQL access for agents: any statement except a schema change of piloop's tables.
 
-The same rules apply to every client (``piloop sql``, any agent). SQLite's authorizer denies DDL,
+The same rules apply to every client (``piloop sql``, any agent). SQLite's authorizer denies DDL outside ``team``,
 ATTACH, transactions, writes to ``alembic_version``, ``session_actor``, ``tokens`` and ``secrets``, and all PRAGMAs
 except the read-only ones that describe the schema. ``secrets.value`` reads as NULL. The connection is in autocommit
 mode, because a forgotten BEGIN would lock the database. Everything else is allowed, DELETE included. The schema
@@ -24,10 +24,21 @@ model (``piloop.db.models.EventModel``).
 ``events`` is append-only: an UPDATE or a DELETE of it is denied, and TEMP triggers refuse an insert that does not take
 the next id (``piloop.db.triggers.immutable``). An UPDATE of a column that only the daemon writes (``DAEMON_COLUMNS``)
 is denied too.
+
+A campaign's agents make tables of their own in the schema ``team``: the campaign's ``team.db``, which ``connect``
+attaches before the authorizer is on. There, CREATE and DROP of a TABLE, an INDEX or a VIEW, and ALTER TABLE, are
+allowed, and none of the rules above applies. SQLite keeps the two files apart: a view in ``team`` cannot read
+``main`` (a query JOINs them instead), and a write to ``team`` takes ``team.db``'s lock only, so the daemon, which never
+attaches it, never waits for one. The daemon reads none of these tables. ``actor()`` returns the connection's actor,
+so a table can record who wrote a row: ``by TEXT NOT NULL DEFAULT (actor())``.
+
+Every statement runs for at most ``[sql] statement_seconds``, and ``team.db`` grows to at most ``[sql] team_mb``
+(``piloop.settings.SqlSettings``).
 """
 
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -41,6 +52,7 @@ from piloop.db.triggers import temp_sql
 from piloop.db.triggers.fts import FTS_COLUMNS, FTS_TABLES, FTS_TRIGGER_NAMES, fts_table
 from piloop.db.triggers.immutable import APPEND_ONLY
 from piloop.proc import command_line
+from piloop.settings import SqlSettings
 
 DENIED = {
     sqlite3.SQLITE_CREATE_INDEX,
@@ -83,6 +95,27 @@ ACTOR_TABLE = 'session_actor'
 MACHINERY = frozenset({MIGRATION_TABLE, ACTOR_TABLE})
 """Tables of no schema that ``piloop sql`` cannot write. Each schema names its own too (``Schema.protected``)."""
 WRITES = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
+TEAM = 'team'
+"""The schema of a campaign's own tables, which its agents make (``connect``)."""
+TEAM_DDL = frozenset(
+    {
+        sqlite3.SQLITE_CREATE_TABLE,
+        sqlite3.SQLITE_CREATE_INDEX,
+        sqlite3.SQLITE_CREATE_VIEW,
+        sqlite3.SQLITE_DROP_TABLE,
+        sqlite3.SQLITE_DROP_INDEX,
+        sqlite3.SQLITE_DROP_VIEW,
+        sqlite3.SQLITE_ALTER_TABLE,
+    }
+)
+"""The schema changes that ``team`` allows. A trigger or a virtual table stays denied there too."""
+TEAM_HINT = "piloop's own tables take no schema change; make yours in the team schema: CREATE TABLE team.<name> (…)"
+DEFAULT_LIMITS = SqlSettings()
+"""The limits of a connection whose caller names none: ``[sql]``'s defaults."""
+PROGRESS_STEPS = 1000
+"""How many SQLite VM instructions run between two checks of a statement's deadline (``run``)."""
+clock = time.monotonic
+"""What a statement's deadline is read from (``run``): a test sets a fake one."""
 BUSY_TIMEOUT_MS = 5000
 JOURNAL_SIZE_LIMIT = 64 * 2**20
 """The bytes that the WAL file keeps once a checkpoint reset it: what readers in many processes made it grow to is given
@@ -125,8 +158,15 @@ DAEMON_COLUMNS = frozenset({('agent_sessions', 'usage'), ('agent_sessions', 'ses
 daemon's."""
 
 
-def _authorize(action: int, arg1: str | None, arg2: str | None, _db: str | None, source: str | None) -> int:
+def _schema(action: int, arg1: str | None, db: str | None) -> str | None:
+    """The schema that an action is on: ALTER TABLE names it in its first argument, every other action in ``db``."""
+    return arg1 if action == sqlite3.SQLITE_ALTER_TABLE else db
+
+
+def _authorize(action: int, arg1: str | None, arg2: str | None, db: str | None, source: str | None) -> int:
     """SQLite's authorizer callback. ``source`` names the trigger (or view) whose body has the statement, or is None."""
+    if action != sqlite3.SQLITE_PRAGMA and _schema(action, arg1, db) == TEAM:
+        return sqlite3.SQLITE_OK if action in TEAM_DDL or action not in DENIED else sqlite3.SQLITE_DENY
     if action in DENIED:
         return sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_PRAGMA:
@@ -252,12 +292,26 @@ def _write_lock_pid(shm: Path) -> int | None:
 
 
 class Connection(sqlite3.Connection):
-    """A connection whose ``close`` runs ``optimize`` first, with the authorizer turned off for it.
+    """An agent's connection (``connect``), whose ``close`` runs ``optimize`` first, with the authorizer turned off.
 
     The authorizer denies agents every PRAGMA except the ones that describe the schema, for the life of the
     connection. The optimize comes from piloop, not from the agent, so it skips the authorizer, as the pragmas at
-    connect time do.
+    connect time do. The connection also keeps its limits, and whether the authorizer denied a schema change of the
+    running statement.
     """
+
+    limits: SqlSettings = DEFAULT_LIMITS
+    team: bool = False
+    """Whether a campaign's ``team.db`` is attached."""
+    ddl_denied: bool = False
+    """Whether the authorizer denied a schema change of the statement that runs: ``run`` then says where to make it."""
+
+    def authorize(self, action: int, arg1: str | None, arg2: str | None, db: str | None, source: str | None) -> int:
+        """``_authorize``, which also records a denied schema change."""
+        verdict = _authorize(action, arg1, arg2, db, source)
+        if verdict == sqlite3.SQLITE_DENY and action in TEAM_DDL:
+            self.ddl_denied = True
+        return verdict
 
     def close(self) -> None:
         self.set_authorizer(None)
@@ -265,32 +319,53 @@ class Connection(sqlite3.Connection):
         super().close()
 
 
-def connect(path: Path, *, actor: Actor) -> sqlite3.Connection:
-    """A connection for agents to an existing database: no DDL, and the same pragmas as the daemon's engine.
+def connect(path: Path, *, actor: Actor, team: Path | None = None, limits: SqlSettings = DEFAULT_LIMITS) -> Connection:
+    """A connection for agents to an existing database: no DDL outside ``team``, and the daemon's engine's pragmas.
 
-    The pragmas and the actor's TEMP objects are set before the authorizer is turned on. After that, every statement
-    is the agent's and goes through the authorizer.
+    The pragmas, the actor's TEMP objects and ``team`` are set up before the authorizer is turned on. After that, every
+    statement is the agent's and goes through the authorizer.
 
     Args:
         path: The database file. It must exist (``piloop serve`` creates it).
-        actor: The value that every UPDATE on this connection records in ``updated_by``.
+        actor: The value that every UPDATE on this connection records in ``updated_by``, and ``actor()`` returns.
+        team: The campaign's ``team.db``, attached as ``team``, and created with its directory when it is missing.
+            None attaches nothing.
+        limits: How long a statement runs (``run``) and how large ``team`` grows.
     """
     if not path.is_file():
         raise FileNotFoundError(f'no piloop database at {path}; run `piloop serve` first')
     con = sqlite3.connect(
         f'file:{path}?mode=rw', uri=True, timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None, factory=Connection
     )
+    con.limits = limits
     try:
         for pragma in CONNECTION_PRAGMAS:
             con.execute(f'PRAGMA {pragma}')
         install_actor(con, actor)
+        con.create_function('actor', 0, lambda: actor.signature)
+        if team is not None:
+            _attach_team(con, team, limits)
         con.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)  # only FTS5 itself may write the shadow tables
-        con.set_authorizer(_authorize)
+        con.set_authorizer(con.authorize)
     except BaseException:  # a locked database fails the setup: close, or the connection leaks
         con.close()
         raise
     con.row_factory = sqlite3.Row
     return con
+
+
+def _attach_team(con: Connection, team: Path, limits: SqlSettings) -> None:
+    """Attach ``team`` as ``TEAM``, in WAL mode, capped at ``limits.team_bytes``.
+
+    ``max_page_count`` is a setting of the connection, not of the file, so every connection sets it.
+    """
+    team.parent.mkdir(parents=True, exist_ok=True)
+    con.execute(f'ATTACH DATABASE ? AS {TEAM}', (f'file:{team}?mode=rwc',))
+    for pragma in ('journal_mode=WAL', 'synchronous=NORMAL', f'journal_size_limit={JOURNAL_SIZE_LIMIT}'):
+        con.execute(f'PRAGMA {TEAM}.{pragma}')
+    (page_size,) = con.execute(f'PRAGMA {TEAM}.page_size').fetchone()
+    con.execute(f'PRAGMA {TEAM}.max_page_count={limits.team_bytes // page_size}')
+    con.team = True
 
 
 @dataclass(frozen=True)
@@ -316,13 +391,43 @@ def dot_command(sql: str) -> str | None:
     return DOT_COMMAND.format(command=sql.split()[0]) if sql.lstrip().startswith('.') else None
 
 
-def run(con: sqlite3.Connection, sql: str, limit: int = ROW_LIMIT) -> Result:
-    """Run one statement. Errors, including denials of the authorizer, are raised as ``sqlite3.Error``."""
-    cur = con.execute(sql)
-    columns = [d[0] for d in cur.description or []]
-    rows = [tuple(r) for r in cur.fetchmany(limit + 1)] if columns else []
+def run(con: Connection, sql: str, limit: int = ROW_LIMIT) -> Result:
+    """Run one statement, for at most ``[sql] statement_seconds``.
+
+    Errors, including denials of the authorizer, are raised as ``sqlite3.Error``. One that a limit or a denied schema
+    change caused says so.
+    """
+    deadline = clock() + con.limits.statement_seconds
+    con.set_progress_handler(lambda: clock() > deadline, PROGRESS_STEPS)
+    con.ddl_denied = False
+    try:
+        cur = con.execute(sql)
+        columns = [d[0] for d in cur.description or []]
+        rows = [tuple(r) for r in cur.fetchmany(limit + 1)] if columns else []
+    except sqlite3.Error as e:
+        if (why := _explained(con, e)) is None:
+            raise
+        explained = type(e)(f'{e}: {why}')
+        explained.sqlite_errorcode, explained.sqlite_errorname = e.sqlite_errorcode, e.sqlite_errorname
+        raise explained from e
+    finally:
+        con.set_progress_handler(None, 0)
     truncated = len(rows) > limit
     return Result(columns, rows[:limit], cur.rowcount if not columns else 0, cur.lastrowid or 0, truncated)
+
+
+def _explained(con: Connection, e: sqlite3.Error) -> str | None:
+    """Why ``e`` failed the statement, when a limit of ``piloop sql`` or a denied schema change caused it. Else None."""
+    code: int | None = getattr(e, 'sqlite_errorcode', None)  # an error of the sqlite3 module itself has none
+    match None if code is None else code & 0xFF:
+        case sqlite3.SQLITE_INTERRUPT:
+            return f'the statement ran past {con.limits.statement_seconds:g} s ([sql] statement_seconds)'
+        case sqlite3.SQLITE_FULL if con.team:
+            return f'the team tables hold at most {con.limits.team_mb:g} MiB ([sql] team_mb)'
+        case sqlite3.SQLITE_AUTH if con.ddl_denied:
+            return TEAM_HINT
+        case _:
+            return None
 
 
 def schema_ddl(name: str | None = None) -> str:

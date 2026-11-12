@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import time
+from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,7 +12,9 @@ from covalence import Cid
 from sqlalchemy import delete, select, text
 
 from piloop.actor import System
-from piloop.campaign.campaigns import campaign_dir, fork, workspace_dir
+from piloop.campaign.campaigns import fork, workspace_dir
+from piloop.campaign.dirs import campaign_dir, team_db
+from piloop.db import sql
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers import changelog
@@ -616,6 +619,10 @@ def test_a_retired_campaign_s_files_go_to_the_cas_once_archived_and_restore_brin
     write(workspace_dir(home, campaign.id) / 'NOTES.md', 'what we learned')
     write(workspace_dir(home, campaign.id) / 'idea7' / 'a.txt', 'a')
     write(directory / 'measure' / '1-e1' / 'stdout', 'METRIC score=1')
+    database = Path(db.engine.url.database or '')
+    with closing(sql.connect(database, actor=System.HUMAN, team=team_db(home, campaign.id))) as con:
+        sql.run(con, 'CREATE TABLE team.crews (name TEXT)')
+    team = team_db(home, campaign.id).read_bytes()
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.path, row.status, row.stopped_reason = str(checkout), CampaignStatus.RETIRED, 'by the test'
@@ -640,6 +647,7 @@ def test_a_retired_campaign_s_files_go_to_the_cas_once_archived_and_restore_brin
         restore(s, store, home, row, None)
     assert files(directory) == {
         'measure/1-e1/stdout': b'METRIC score=1',
+        'team.db': team,
         'workspace/NOTES.md': b'what we learned',
         'workspace/idea7/a.txt': b'a',
     }, 'the live files and the evaluation logs too'

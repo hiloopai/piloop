@@ -580,6 +580,15 @@ A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `brief_
 | `spark` | integer | `40` | How many of the last new bests the sparkline of the candidates panel draws. |
 | `notice` | duration | `"PT6S"` | How long a note stays on the screen: what a key did, or why a read failed. |
 
+### `[sql]`
+
+`[sql]`: the limits of `piloop sql`. They bind every caller: the agents, the orchestrator and you.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `statement_seconds` | number | `5` | How long one statement may run, in seconds. A longer one is interrupted, and changes nothing. A wait for the write lock does not count. |
+| `team_mb` | number | `256` | The size of a campaign's team tables (`team.db`), in MiB. A write that would grow the file past it fails with `database or disk is full`. |
+
 ### `[plugins]`
 
 `[plugins]` of `config.toml` holds the plugins of the home, which the daemon checks before it starts. A capability that has one instance takes `[plugins.<capability>]`: `provider`, the name of its entry point (the default without it), and the keys of that provider. One that has several takes `[plugins.<capability>.<name>]` for each: its `provider` is the one called `<name>` when the table has none, and each provider that needs no keys is an instance of its own name with its defaults. `[plugins.<capability>]` itself holds the settings of such a capability: `use` names the instances that the campaign uses, and is unset for the providers that are on by default (`DEFAULT`). No instance is called `use`.

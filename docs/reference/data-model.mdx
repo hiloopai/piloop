@@ -25,7 +25,28 @@ plugin that owns each table.
 
 <DataModel />
 
-## Statuses
+## Team tables
+
+The agents of a campaign can make tables of their own, for what piloop's tables do not hold: who works with whom,
+what is done, verdicts on parts of the task. They live in the schema `team` of `piloop sql`: one SQLite file per
+campaign, `$PILOOP_HOME/projects/<campaign id>/team.db`. An agent reaches only its own campaign's. You reach the
+one that `--campaign` names, else the only campaign that is not retired, else the one of the current directory.
+
+```sql
+CREATE TABLE team.verdicts (idea_id INTEGER NOT NULL, verdict TEXT NOT NULL, by TEXT NOT NULL DEFAULT (actor()));
+INSERT INTO team.verdicts (idea_id, verdict) VALUES (12, 'hard: needs a new lemma');
+SELECT i.id, i.title, v.verdict, v.by FROM ideas i JOIN team.verdicts v ON v.idea_id = i.id;
+```
+
+- `CREATE` and `DROP` of a `TABLE`, an `INDEX` or a `VIEW`, and `ALTER TABLE`, work in `team` only. A trigger or a
+  virtual table does not.
+- `actor()` returns whom the statement signs as, such as `implementer#12`. Nothing makes a table use it.
+- A view in `team` reads only `team`. To combine them with piloop's tables, JOIN them in the query.
+- A write to `team` never waits for the daemon's writes, and the daemon never reads these tables.
+- Each statement runs for at most 5 s, and the file grows to at most 256 MiB (`[sql]` in
+  [`config.toml`](/reference/configuration)). These limits apply to every caller of `piloop sql`.
+- A fork starts with no team tables. Retiring the campaign archives the file with the campaign's other files.
+
 
 The daemon and the CLI move a row from one value to the next, as [ideas and runs](/concepts/ideas-and-runs),
 [the pool](/concepts/pool) and [agents](/concepts/roles#watch-and-steer-an-agent) show. `piloop sql` can set any value.

@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
+from piloop.campaign.dirs import campaign_dir
 from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigMissing, load_campaign_config
 from piloop.db.events import emit, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
@@ -61,9 +62,6 @@ class CampaignAdded(EventModel):
 
 WORKSPACE = 'workspace'
 """A per-campaign directory, linked into every worktree, for files that runs share. It is never committed."""
-PROJECTS = 'projects'
-"""The directory under the piloop home that holds each campaign's directory. It keeps the name of 0.1.0: a rename would
-move every home's files and buy nothing."""
 REPOS = 'repos'
 """The directory under the piloop home that holds the checkout of each campaign that the daemon cloned, by its id
 (``register_clone``)."""
@@ -491,16 +489,6 @@ def tree(s: Session) -> list[tuple[int, Campaign]]:
 
     walk(None, 0)
     return ordered
-
-
-def campaigns_dir(home: Path) -> Path:
-    """The parent of the directory of each campaign under the piloop home ``home``."""
-    return home / PROJECTS
-
-
-def campaign_dir(home: Path, campaign_id: CampaignId) -> Path:
-    """The directory of a campaign: its shared workspace and the evaluations of its candidates."""
-    return campaigns_dir(home) / str(campaign_id)
 
 
 def workspace_dir(home: Path, campaign_id: CampaignId) -> Path:

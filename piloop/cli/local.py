@@ -77,6 +77,13 @@ def campaigns(s: Session, ref: str | None) -> list[Campaign]:
         raise SystemExit(str(e)) from e
 
 
+def checked_out(s: Session) -> Campaign | None:
+    """The campaign that cwd is in, or None."""
+    from piloop.campaign.campaigns import checked_out  # only now, as in ``campaign``
+
+    return checked_out(s, Path.cwd())
+
+
 def cas() -> Cas:
     """The CAS of this home, as ``[plugins.cas]`` selects it."""
     return CAS.selected(common.settings.providers).open(common.settings.home)

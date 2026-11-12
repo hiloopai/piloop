@@ -530,6 +530,7 @@ def test_a_piloop_run_drains_its_team_before_it_keeps_the_database_and_stops_the
     ], 'min first: a max below min is refused'
     backup = next(i for i, c in enumerate(box.commands) if '.backup' in c)
     assert max(drains) < backup and 'piloop stop' in box.commands[backup]
+    assert 'sqlite3 "$f" ".backup' in box.commands[backup], "each campaign's team tables too"
     assert not any('|| true' in box.commands[i] for i in drains), 'a drain that fails says so'
 
 

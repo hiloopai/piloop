@@ -1123,19 +1123,26 @@ harnesses and of the registered campaigns' harnesses name.
 ### piloop sql
 
 ```text
-piloop sql STATEMENT
+piloop sql [OPTIONS] STATEMENT
 ```
 
-Run one SQL statement on the piloop database.
+Run one SQL statement on the piloop database, with the campaign's own tables attached as the schema `team`.
 
-These are denied: schema changes, ATTACH, transactions, and writes to `alembic_version` and `session_actor`. Only
-the PRAGMAs that describe the schema are allowed. A query prints at most 500 rows. With `-`, the statement is read
-from stdin: piped in from a quoted heredoc (`<<'EOF'`), an agent's text reaches the database as written, where a
-double-quoted argument would let the shell run what is in backticks or `$(…)` first.
+These are denied: schema changes outside `team`, ATTACH, transactions, and writes to `alembic_version` and
+`session_actor`. In `team`, CREATE and DROP of a TABLE, an INDEX or a VIEW, and ALTER TABLE, are allowed. Only
+the PRAGMAs that describe the schema are allowed. A statement runs for at most 5 s and `team` grows to at most
+256 MiB (`[sql]` in config.toml). `actor()` returns whom the statement signs as. A query prints at most 500 rows.
+With `-`, the statement is read from stdin: piped in from a quoted heredoc (`<<'EOF'`), an agent's text reaches
+the database as written, where a double-quoted argument would let the shell run what is in backticks or `$(…)`
+first.
 
 **Arguments**:
 
 * `STATEMENT`: One SQL statement, or - to read it from stdin. **[required]**
+
+**Parameters**:
+
+* `--campaign STR`: The campaign whose team tables are attached: its name or id. By default the only campaign that is not retired, else the one cwd is in. An agent's are always its own campaign's.
 
 ### piloop status
 
