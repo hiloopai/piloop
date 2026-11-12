@@ -42,6 +42,7 @@ section.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | A short name for the campaign: letters, digits, `.`, `_` and `-`, not all digits. A campaign gets it when it is registered, unless the registration names another, and piloop names its git refs after it. |
+| `type` | string | `"optimization"` | The campaign type: what the campaign does with its agents' work. `optimization` keeps the best version of the code. Another installed type does what its plugin documents. A change takes effect at the next `piloop init`. |
 | `metrics` | list\[[Metric](#metric)\] | required | Every metric that the evaluate command reports, each with its `role`. Each track has one `primary`, so a campaign with one track has exactly one. |
 | `tracks` | dict\[string, [TrackConfig](#trackconfig)\] | `{}` | `[tracks.<name>]`: the addendum of each track, where one has one. |
 | `evaluate` | list\[string\] | required | The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line, `{"status": "ok", "score": <primary>, "direction": "higher", "metrics": {"<name>": <value>}}`, to `$PILOOP_RESULT_FILE`. |
