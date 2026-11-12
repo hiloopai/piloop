@@ -20,7 +20,7 @@
 | `Repository.send(cas: Cas, revisions: Sequence[Revision], have: Sequence[Revision]) -> Cid \| None` | Put what `revisions` have beyond `have` into `cas`, as a `Transfer`'s blob, or None when nothing is. |
 | `Repository.fetch(cas: Cas, revisions: Sequence[Revision], ask: Fetch) -> None` | Take those of `revisions` that the repository lacks: `ask` puts them into `cas`. |
 | `Repository.keep(revision: Revision, why: Pin) -> None` | Keep `revision` for `why`, also after whatever named it is gone. |
-| `Repository.merge(base: Revision, ours: Revision, theirs: Revision, summary: str) -> Version \| Conflict` | Combine the changes that `ours` and `theirs` each made since `base` into a new version, by piloop. |
+| `Repository.merge(ours: Revision, theirs: Revision, summary: str) -> Version \| Conflict` | Combine the changes that `ours` and `theirs` each made since their last common version, by piloop. |
 | `Repository.checkout(revision: Revision, path: Path) -> None` | Put the files of `revision` at `path`, where an agent or an evaluator works on them. |
 | `Repository.switch(revision: Revision) -> None` | Move this checkout, an agent's, to `revision`: its files and the history that it builds on. |
 | `Repository.discard(path: Path) -> None` | Remove what `checkout` put at `path`. Nothing fails if it is gone, or a directory of something else. |

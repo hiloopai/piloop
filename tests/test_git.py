@@ -175,18 +175,18 @@ def test_a_merge_combines_both_sides_into_a_version_by_piloop_and_a_clash_is_a_c
     clash = commit({'solve.txt': 'base\nclash\n'}, 'clash')
     refs = repo.git.for_each_ref()
     with closing(Git().open(campaign_path)) as record:
-        merged = record.merge(base, ours, theirs, 'merge run#4')
+        merged = record.merge(ours, theirs, 'merge run#4')
         assert isinstance(merged, Version) and merged.summary == 'merge run#4'
-        conflict = record.merge(base, ours, clash, 'merge run#5')
+        conflict = record.merge(ours, clash, 'merge run#5')
         with pytest.raises(UnknownRevision):
-            record.merge(base, ours, Revision('0' * 40), 'merge run#6')
+            record.merge(ours, Revision('0' * 40), 'merge run#6')
         objects = Path(repo.git_dir) / 'objects'
         writable = [(d, d.stat().st_mode) for d in [objects, *objects.iterdir()] if d.is_dir()]
         for d, mode in writable:
             d.chmod(mode & ~0o222)
         try:
             with pytest.raises(VcsError, match=f'^git merge-tree of {clash} onto {theirs} failed: '):
-                record.merge(base, theirs, clash, 'a merge that git cannot write')
+                record.merge(theirs, clash, 'a merge that git cannot write')
         finally:
             for d, mode in writable:
                 d.chmod(mode)

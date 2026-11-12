@@ -39,7 +39,7 @@ from piloop.plugins.vcs.contract import (
 from piloop.plugins.vcs.git import bundles, commands as git
 
 NEEDED = (2, 40)
-"""The oldest git that the provider works with: it merges by tree with ``git merge-tree --merge-base``, new in 2.40."""
+"""The oldest git that the provider works with. ``Repository.merge`` runs ``git merge-tree --write-tree``, new in 2.38."""
 RECOVERED = 'Piloop-Recovered'
 """The trailer of the commit that ``capture`` makes of what an agent left uncommitted, with its subject:
 ``Piloop-Recovered: run#12``."""
@@ -145,14 +145,14 @@ class GitRepository(Repository):
     def keep(self, revision: Revision, why: Pin) -> None:
         git.pin(self.repo, ref(why), revision)
 
-    def merge(self, base: Revision, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
-        """``git merge-tree --write-tree --merge-base``, in the object store alone, then ``git commit-tree``.
+    def merge(self, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
+        """``git merge-tree --write-tree``, in the object store alone, then ``git commit-tree``.
 
         git prints the tree, then the files in conflict if there are any, then a blank line and its messages.
         """
-        for revision in (base, ours, theirs):
+        for revision in (ours, theirs):
             self.version(revision)
-        argv = ('--write-tree', '--name-only', f'--merge-base={base}', ours, theirs)
+        argv = ('--write-tree', '--name-only', ours, theirs)
         code, out, err = self.repo.git.merge_tree(*argv, with_extended_output=True, with_exceptions=False)
         if code not in (0, 1):  # 1 is a conflict; any other code is a failure, with nothing on stdout
             raise VcsError(f'git merge-tree of {theirs} onto {ours} failed: {err.strip()}')

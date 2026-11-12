@@ -216,8 +216,8 @@ class Repository(Protocol):
         """Keep ``revision`` for ``why``, also after whatever named it is gone."""
         ...
 
-    def merge(self, base: Revision, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
-        """Combine the changes that ``ours`` and ``theirs`` each made since ``base`` into a new version, by piloop.
+    def merge(self, ours: Revision, theirs: Revision, summary: str) -> Version | Conflict:
+        """Combine the changes that ``ours`` and ``theirs`` each made since their last common version, by piloop.
 
         The new version builds on ``ours`` and then ``theirs``, and says ``summary``. Neither checkout nor any name
         moves: ``keep`` it to keep it. When the changes do not combine, it makes nothing and returns the ``Conflict``.
