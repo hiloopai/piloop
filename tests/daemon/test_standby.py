@@ -14,7 +14,10 @@ from moto import mock_aws
 from sqlalchemy import select, text
 
 from piloop.actor import System
+from piloop.daemon import main
+from piloop.daemon.holding import Holding
 from piloop.daemon.main import Daemon
+from piloop.daemon.rebuild import RebuildFailed
 from piloop.db import terms
 from piloop.db.events import emit
 from piloop.db.ids import EXACT, SHIFT
@@ -22,8 +25,8 @@ from piloop.db.models import Event, Term as TermRow
 from piloop.ids import HOME
 from piloop.plugins.executor.kit.leases import LeaseWorkerJoined
 from piloop.plugins.leader import bucket as bucket_module
-from piloop.plugins.leader.bucket import Record, Source
-from piloop.plugins.leader.contract import Term, Unreachable
+from piloop.plugins.leader.bucket import BucketTerms, Record, Source
+from piloop.plugins.leader.contract import LostTerm, Term, Unreachable
 from piloop.settings import Settings
 from tests.leader.replica import FakeReplica
 
@@ -168,3 +171,35 @@ def test_the_next_term_restores_what_the_first_wrote_and_names_its_own_replica_o
 def stored() -> Record:
     body = boto3.client('s3').get_object(Bucket=BUCKET, Key='cell/term.json')['Body'].read()
     return Record.model_validate_json(body)
+
+
+def test_a_daemon_that_loses_its_term_restores_badly_or_cannot_renew_while_it_starts_does_not_serve(
+    tmp_path: Path, bucket: FakeReplica, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def taken(self: BucketTerms, term: Term) -> bool:
+        raise LostTerm('another daemon took over')
+
+    with monkeypatch.context() as m:
+        m.setattr(BucketTerms, 'restore', taken)
+        with pytest.raises(SystemExit, match='^the daemon does not start: another daemon took over$'):
+            Daemon(home(tmp_path, 'a'))
+
+    def failed(*_: object) -> None:
+        raise RebuildFailed('campaign c: the origin is gone')
+
+    with monkeypatch.context() as m:
+        m.setattr(BucketTerms, 'restore', lambda self, term: True)
+        m.setattr(main, 'rebuild', failed)
+        with pytest.raises(SystemExit, match='^the daemon does not start: campaign c: the origin is gone$'):
+            Daemon(home(tmp_path, 'b'))
+
+    start = Holding.start
+
+    def unrenewed(self: Holding) -> None:
+        start(self)
+        self._lost('term 3 was not renewed')
+
+    with monkeypatch.context() as m:
+        m.setattr(Holding, 'start', unrenewed)
+        with pytest.raises(SystemExit, match='^the daemon does not start: term 3 was not renewed$'):
+            Daemon(home(tmp_path, 'c'))

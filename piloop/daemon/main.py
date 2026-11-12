@@ -137,6 +137,7 @@ class Daemon:
         self._cfg = cfg
         self._lock = acquire(cfg)
         """The lock of the home's only daemon, taken before the migration: another daemon may run an older schema."""
+        self._holding: Holding | None = None
         try:
             self._inherited = inherited or Inherited(set())
             """The children an in-place restart handed over (``piloop.proc.Inherited``): reaped as each one exits."""
@@ -145,6 +146,21 @@ class Daemon:
             self._leader: Leader = leader.open(LeaderHost(cfg.home, cfg.database))
             self._term = self._take()
             """The term that lets this daemon write the home. A daemon that does not hold one waits in ``_take``."""
+            self._lost: str | None = None
+            """Why the term's renewals failed, once they did."""
+            self._stop_on_loss: Callable[[], None] = lambda: None
+            """What a failed renewal stops: nothing while the daemon starts (it checks ``_lost`` before it serves),
+            then the scheduler."""
+            renewal = self._leader.renewal
+            self._holding = (
+                None
+                if renewal is None or self._term.until is None
+                else Holding(self._leader, self._term, renewal, self._lost_term)
+            )
+            """What renews a term that ends, from its take on, and ends the process at its end: a restore and a
+            migration may take longer than the term."""
+            if self._holding is not None:
+                self._holding.start()
             try:  # before anything opens the database: a restore replaces its file
                 self._restored = self._leader.restore(self._term)
                 """Whether the home's database came from the term before's replica: its files come from the CAS."""
@@ -232,17 +248,13 @@ class Daemon:
                 plugins=cfg.providers,
                 defaults=cfg.campaign_defaults,
             )
-            renewal = self._leader.renewal
-            self._holding = (
-                None
-                if renewal is None or self._term.until is None
-                else Holding(self._leader, self._term, renewal, self._lost_term)
-            )
-            """What renews a term that ends, and ends the process at its end."""
-            if self._holding is not None:
-                self._holding.start()
+            self._stop_on_loss = self.scheduler.interrupt
+            if self._lost is not None:  # the renewals failed while it started: it stops before it serves
+                raise SystemExit(f'the daemon does not start: {self._lost}')
             self._restart = False
         except BaseException:  # no file names a daemon that never served
+            if self._holding is not None:  # nor does a daemon that never served keep renewing, or exit at the end
+                self._holding.stop()
             self._release()
             raise
 
@@ -347,7 +359,8 @@ class Daemon:
     def _lost_term(self, why: str) -> None:
         """The term was not renewed in time: the daemon stops, as on SIGTERM, before the term ends."""
         self.tracer.event('term.lost', error=why)
-        self.scheduler.interrupt()
+        self._lost = why
+        self._stop_on_loss()
 
     def _release_term(self) -> None:
         """End the term after the daemon's last write, so that another daemon may take the next.

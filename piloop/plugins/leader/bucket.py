@@ -78,7 +78,9 @@ class Record(Term):
 class Replicating(Protocol):
     """A replication that runs: ``stop`` ends it once it shipped what it has."""
 
-    def stop(self) -> None: ...
+    def stop(self) -> None:
+        """Ship what it has, then end."""
+        ...
 
 
 class Replica(Protocol):

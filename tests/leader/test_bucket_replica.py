@@ -163,11 +163,11 @@ def test_the_watch_names_the_replica_soon_after_it_is_whole_and_the_stop_ships_t
     first = a.attempt('a/1', None)
     assert first is not None
     with a.replicate(first):
-        for _ in range(500):
-            if record(client).source is not None:
+        for _ in range(500):  # the holder's own copy of its last write: moto serves no read beside a write
+            if a._held is not None and a._held[0].source is not None:
                 break
             threading.Event().wait(0.01)
-        assert record(client).source == Source(epoch=1)
+    assert record(client).source == Source(epoch=1), 'named within a few polls'
     assert len(replica.segments[f'{URL}/terms/1']) == 2, 'its start and its stop each ship the whole database'
 
 
@@ -211,3 +211,31 @@ def test_its_check_finds_litestream_on_path_or_says_to_install_it(tmp_path: Path
 def test_a_record_of_l5a_without_a_source_reads(client: S3Client) -> None:
     client.put_object(Bucket=BUCKET, Key=KEY, Body=json.dumps({'epoch': 3, 'holder': 'x/1'}).encode())
     assert record(client) == Record(epoch=3, holder='x/1') and isinstance(record(client), Term)
+
+
+def test_the_watch_asks_again_when_s3_does_not_answer_and_stops_when_the_term_is_lost(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = BucketLeader(url=URL, replica_poll=timedelta(milliseconds=5))
+    a = BucketTerms(config, home_of(db, tmp_path / 'a'), client, Clock(), FakeReplica(client, automatic=False))
+    first = a.attempt('a/1', None)
+    assert first is not None
+    answers = iter([Unreachable('slow'), False, True])
+    asked: list[object] = []
+
+    def named(term: Term) -> bool:
+        asked.append(term)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(a, 'named', named)
+    a._watch(first, threading.Event())
+    assert len(asked) == 3 and 'term 1 looks again for its replica: slow' in capsys.readouterr().err
+
+    def lost(term: Term) -> bool:
+        raise LostTerm('taken')
+
+    monkeypatch.setattr(a, 'named', lost)
+    a._watch(first, threading.Event())  # returns: the renewals end the daemon

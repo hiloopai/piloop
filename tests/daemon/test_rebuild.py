@@ -10,14 +10,16 @@ from pathlib import Path
 import pytest
 from covalence import Cid
 from git import Repo
+from sqlalchemy import delete, update
 
 from piloop.actor import System
 from piloop.agents.results import JOB_FILES
 from piloop.campaign.campaigns import FromUrl, register_clone, workspace_dir
+from piloop.config import load_campaign_config
 from piloop.daemon.rebuild import RebuildFailed, rebuild
-from piloop.db.models import JobFiles, RepoTransfer, WorkspaceSnapshot
+from piloop.db.models import Campaign, JobFiles, RepoTransfer, WorkspaceSnapshot
 from piloop.db.session import Database
-from piloop.ids import Revision
+from piloop.ids import CampaignId, Revision
 from piloop.otel import Tracer
 from piloop.plugins.vcs.git import Git
 from piloop.store.tree import put_tree
@@ -75,3 +77,71 @@ def test_a_row_whose_blob_the_cas_lacks_fails_the_rebuild_and_says_which(
         s.commit()
     with pytest.raises(RebuildFailed, match='the files of runs/7 .* are not in the CAS'):
         rebuild(db, cas, home, Tracer(None))
+
+
+def test_what_cannot_be_made_again_fails_the_rebuild_and_says_why(
+    db: Database, campaign_path: Path, tmp_path: Path
+) -> None:
+    """A campaign with no URL, an origin that is gone, a transfer that the CAS lacks, a job file that it lacks."""
+    home, cas = tmp_path / 'home', disk(tmp_path / 'cas')
+    checkout = home / 'repos' / '1'
+    with db.session() as s:
+        s.add(Campaign(name='lost', path=str(checkout), config=load_campaign_config(campaign_path)))
+        s.commit()
+    with pytest.raises(RebuildFailed, match=f'campaign lost: no URL to clone {checkout} from'):
+        rebuild(db, cas, home, Tracer(None))
+    with db.session() as s:
+        s.execute(update(Campaign).values(repo=(tmp_path / 'gone.git').as_uri()))
+        s.commit()
+    with pytest.raises(RebuildFailed, match=f'campaign lost: {checkout} could not be made again'):
+        rebuild(db, cas, home, Tracer(None))
+    Repo.init(checkout).git.commit('-q', '--allow-empty', '-m', 'base')
+    base = Repo(checkout).head.commit.hexsha
+    with db.session() as s:
+        s.add(RepoTransfer(campaign_id=1, base=base, head='f' * 40, blob=disk(tmp_path / 'other').put(b'x')))
+        s.commit()
+    with pytest.raises(RebuildFailed, match=f'campaign lost: transfer 1 \\({"f" * 40}\\)'):
+        rebuild(db, cas, home, Tracer(None))
+    with db.session() as s:
+        s.execute(delete(RepoTransfer))
+        s.add(JobFiles(place='runs/2', files=cas.put(JOB_FILES.dump_json({'log.txt': cas.put(b'x')}))))
+        s.add(
+            JobFiles(
+                place='runs/3', files=cas.put(JOB_FILES.dump_json({'log.txt': disk(tmp_path / 'other').put(b'y')}))
+            )
+        )
+        s.commit()
+    with pytest.raises(RebuildFailed, match='^runs/3: the blob'):
+        rebuild(db, cas, home, Tracer(None))
+    assert (home / 'runs' / '2' / 'log.txt').read_bytes() == b'x', 'what it could make, it made'
+
+
+def test_a_campaign_with_a_checkout_of_its_own_or_no_snapshot_keeps_what_it_has(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """Under ``local``, nothing restores; the rebuild still leaves a checkout of one's own and an unknown workspace."""
+    home = tmp_path / 'home'
+    (workspace_dir(home, campaign.id) / 'notes.md').parent.mkdir(parents=True)
+    (workspace_dir(home, campaign.id) / 'notes.md').write_text('kept\\n')
+    rebuild(db, disk(tmp_path / 'cas'), home, Tracer(None))
+    assert (workspace_dir(home, campaign.id) / 'notes.md').read_text() == 'kept\\n'
+    assert (Path(campaign.path) / 'piloop.toml').is_file()
+
+
+def test_a_workspace_rebuilt_where_none_was_and_after_a_rebuild_that_stopped_halfway(
+    db: Database, campaign_path: Path, tmp_path: Path
+) -> None:
+    home, cas = tmp_path / 'home', disk(tmp_path / 'cas')
+    files = tmp_path / 'files'
+    files.mkdir()
+    (files / 'a.txt').write_text('a\\n')
+    manifest = put_tree(cas, files, ['a.txt']).manifest.put(cas)
+    with db.session() as s:
+        s.add(Campaign(name='c', path=str(tmp_path / 'mine'), config=load_campaign_config(campaign_path)))
+        s.flush()
+        s.add(WorkspaceSnapshot(campaign_id=1, manifest=manifest))
+        s.commit()
+    root = workspace_dir(home, CampaignId(1))
+    (root.with_name(f'{root.name}.rebuilding') / 'half').mkdir(parents=True)
+    rebuild(db, cas, home, Tracer(None))
+    assert [p.name for p in root.iterdir()] == ['a.txt'] and not root.with_name(f'{root.name}.rebuilding').exists()
