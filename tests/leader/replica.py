@@ -29,6 +29,11 @@ class Replicating:
     database: Path
     url: str
     stopped: bool = False
+    ended: str | None = None
+    """Why the replication ended by itself: a test sets it."""
+
+    def exited(self) -> str | None:
+        return self.ended
 
     def stop(self) -> None:
         """Ship the whole database once more, as Litestream ships its last frames."""

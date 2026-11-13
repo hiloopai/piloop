@@ -15,22 +15,21 @@ Each term replicates the home's database with Litestream to ``terms/<epoch>/`` b
 stale writer never writes where a newer term reads. The record names the source of the next restore (``Source``): the
 prefix and the transaction that the holder restored, until its own replica holds the whole database, then its own
 prefix. A term restores from that source, and names it as its own before it serves, so a term that dies before its first
-replica leaves the source as it found it. A term whose replica does not hold the whole database within
-``replica_wait`` stops rather than go on serving writes that nothing ships. The protocol is model-checked in ``tests/models/replica.tla``.
+replica leaves the source as it found it. A term whose Litestream exits, or whose replica does not hold the whole
+database within ``replica_wait``, stops rather than go on serving writes that nothing ships. The protocol is model-checked in ``tests/models/replica.tla``.
 
 boto3 is imported when the record opens, not with this module: it takes ~0.5 s, and every command reads the settings
 that name this provider. Credentials are boto3's own chain: the environment, a profile, an instance role.
 """
 
 import json
-import os
 import shutil
 import subprocess
 import sys
 import threading
+from collections import deque
 from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
@@ -58,6 +57,8 @@ FIRST = '0000/0000000000000001-'
 REFUSED = ('PreconditionFailed', 'ConditionalRequestConflict')
 """What S3 answers a conditional write that another write beat: 412, or 409 while the other is under way."""
 NOT_FOUND = ('404', 'NoSuchKey', 'NotFound')
+TAIL = 5
+"""How many of Litestream's last log lines say why it exited."""
 
 
 class Source(BaseModel):
@@ -79,6 +80,10 @@ class Record(Term):
 
 class Replicating(Protocol):
     """A replication that runs: ``stop`` ends it once it shipped what it has."""
+
+    def exited(self) -> str | None:
+        """Why the replication ended by itself, or None while it runs."""
+        ...
 
     def stop(self) -> None:
         """Ship what it has, then end."""
@@ -104,17 +109,26 @@ class Replica(Protocol):
 
 
 class Litestream:
-    """``litestream`` (0.5) in a child process: what the hosted image holds."""
+    """``litestream`` (0.5) in a child process: what the hosted image holds.
+
+    Each ``s3://`` URL names the bucket's region: the region of the provider's own S3 client. Without one, Litestream
+    asks S3 for it (``s3:GetBucketLocation``), a right that the home's objects do not otherwise need, and exits when
+    it is refused.
+    """
 
     def __init__(self, executable: str, region: str | None) -> None:
         self._executable = executable
-        self._env = {**os.environ, **({'AWS_REGION': region} if region else {})}
+        self._region = region
+
+    def _located(self, url: str) -> str:
+        return f'{url}?region={self._region}' if self._region and url.startswith('s3://') else url
 
     def restore(self, url: str, txid: str | None, out: Path) -> str:
-        argv = [self._executable, 'restore', '-json', '-o', str(out), *(['-txid', txid] if txid else []), url]
-        done = subprocess.run(argv, capture_output=True, text=True, env=self._env, check=False)
+        located = self._located(url)
+        argv = [self._executable, 'restore', '-json', '-o', str(out), *(['-txid', txid] if txid else []), located]
+        done = subprocess.run(argv, capture_output=True, text=True, check=False)
         if done.returncode != 0:
-            raise Unreachable(f'litestream restore {url}: {done.stderr.strip()[-500:]}')
+            raise Unreachable(f'litestream restore {located}: {done.stderr.strip()[-500:]}')
         return str(json.loads(done.stdout)['txid'])
 
     def replicate(self, database: Path, url: str) -> Replicating:
@@ -126,18 +140,36 @@ class Litestream:
         """
         with suppress(FileNotFoundError):
             shutil.rmtree(database.with_name(f'.{database.name}-litestream'))
-        argv = [self._executable, 'replicate', str(database), url]
-        return _Child(subprocess.Popen(argv, stdout=subprocess.DEVNULL, env=self._env))  # its log goes to the daemon's
+        return _Child([self._executable, 'replicate', str(database), self._located(url)])
 
 
-@dataclass(frozen=True)
 class _Child:
-    process: subprocess.Popen[bytes]
+    """Litestream's ``replicate``. Its log goes on to the daemon's, and its last lines say why when it exits."""
+
+    def __init__(self, argv: list[str]) -> None:
+        self.process = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self._tail: deque[str] = deque(maxlen=TAIL)
+        self._log = threading.Thread(target=self._relay, name='litestream-log', daemon=True)
+        self._log.start()
+
+    def _relay(self) -> None:
+        assert self.process.stderr is not None
+        with self.process.stderr:
+            for line in self.process.stderr:
+                self._tail.append(line.rstrip())
+                sys.stderr.write(line)
+
+    def exited(self) -> str | None:
+        if (code := self.process.poll()) is None:
+            return None
+        self._log.join()
+        return f'Litestream exited with status {code}: ' + ' / '.join(self._tail)
 
     def stop(self) -> None:
         """SIGTERM: Litestream ships its last frames, then exits."""
         self.process.terminate()
         self.process.wait()
+        self._log.join()
 
 
 class BucketLeader(LeaderConfig):
@@ -295,7 +327,7 @@ class BucketTerms:
     def replicate(self, term: Term, unreplicated: Callable[[str], None]) -> Generator[None]:
         replicating = self.replica.replicate(self._host.database, self._url(term.epoch))
         stop = threading.Event()
-        args = (term, stop, unreplicated)
+        args = (term, stop, replicating, unreplicated)
         watch = threading.Thread(target=self._watch, args=args, name='replica-watch', daemon=True)
         watch.start()
         try:
@@ -305,29 +337,40 @@ class BucketTerms:
             watch.join()
             replicating.stop()
 
-    def _watch(self, term: Term, stop: threading.Event, unreplicated: Callable[[str], None]) -> None:
+    def _watch(
+        self, term: Term, stop: threading.Event, replicating: Replicating, unreplicated: Callable[[str], None]
+    ) -> None:
         """Name this term's own replica as the source once it holds the whole database: a restore needs no other.
 
         S3 that does not answer is asked again at the next poll. A lost term stops the watch: the renewals end the
-        daemon then. Past ``replica_wait`` without the replica, it says why to ``unreplicated``, and stops.
+        daemon then. The watch says why to ``unreplicated``, and stops, as soon as the replication ends by itself, or
+        past ``replica_wait`` without the replica.
         """
         until = self._clock() + self.config.replica_wait
+        named = False
         while not stop.wait(self.config.replica_poll.total_seconds()):
+            if (ended := replicating.exited()) is not None:
+                return self._unreplicated(term, ended, unreplicated)
+            if named:
+                continue
             try:
-                if self.named(term):
-                    return
+                named = self.named(term)
             except (self._client_error, self._boto_error, Unreachable) as e:
                 print(f'piloop: term {term.epoch} looks again for its replica: {e}', file=sys.stderr)
             except LostTerm:
-                return
-            if self._clock() >= until:
-                why = (
-                    f'term {term.epoch}: its replica {self._url(term.epoch)} does not hold the whole database'
-                    f" {self.config.replica_wait} after its start, so nothing ships its writes (Litestream's log says why)"
+                return None
+            if not named and self._clock() >= until:
+                late = (
+                    f'its replica {self._url(term.epoch)} does not hold the whole database {self.config.replica_wait}'
                 )
-                print(f'piloop: error: {why}', file=sys.stderr, flush=True)
-                unreplicated(why)
-                return
+                return self._unreplicated(term, f'{late} after its start', unreplicated)
+        return None
+
+    def _unreplicated(self, term: Term, why: str, unreplicated: Callable[[str], None]) -> None:
+        """Say, as an error, that nothing ships ``term``'s writes now, and tell the daemon."""
+        said = f'term {term.epoch}: {why}: nothing ships its writes'
+        print(f'piloop: error: {said}', file=sys.stderr, flush=True)
+        unreplicated(said)
 
     def named(self, term: Term) -> bool:
         """Name ``term``'s own replica as the source if it holds the whole database now, and whether it does.

@@ -410,7 +410,7 @@ class Daemon:
         self._give_up('term.lost', why)
 
     def _unreplicated(self, why: str) -> None:
-        """The term's replica did not hold the whole database in time: the daemon stops, as on a lost term."""
+        """Nothing ships the term's writes: Litestream exited, or its replica was not whole in time. It stops."""
         self._give_up('term.unreplicated', why)
 
     def _give_up(self, event: str, why: str) -> None:

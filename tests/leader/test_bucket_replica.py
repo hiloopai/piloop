@@ -18,6 +18,7 @@ from mypy_boto3_s3 import S3Client
 from piloop.db.session import Database
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Litestream, Record, Source
 from piloop.plugins.leader.contract import LeaderHost, LostTerm, Term, Unreachable
+from tests.conftest import wait_until
 from tests.leader.replica import FakeReplica
 from tests.leader.test_bucket import BUCKET, SKEW, TTL, URL, Clock
 
@@ -199,11 +200,26 @@ def test_litestream_runs_as_a_child_and_its_errors_are_unreachable(tmp_path: Pat
         threading.Event().wait(0.01)
     replicating.stop()
     assert (tmp_path / 'argv').read_text().splitlines() == [
-        f'restore -json -o {tmp_path / "out.db"} s3://b/terms/1',
-        f'restore -json -o {tmp_path / "out.db"} -txid 0000000000000003 s3://b/terms/1',
-        f'restore -json -o {tmp_path / "out.db"} s3://gone',
-        f'replicate {tmp_path / "piloop.db"} s3://b/terms/2',
-    ]
+        f'restore -json -o {tmp_path / "out.db"} s3://b/terms/1?region=us-east-1',
+        f'restore -json -o {tmp_path / "out.db"} -txid 0000000000000003 s3://b/terms/1?region=us-east-1',
+        f'restore -json -o {tmp_path / "out.db"} s3://gone?region=us-east-1',
+        f'replicate {tmp_path / "piloop.db"} s3://b/terms/2?region=us-east-1',
+    ], 'each URL names the region: Litestream asks S3 for none'
+    assert Litestream(str(fake), None)._located('s3://b/terms/1') == 's3://b/terms/1', 'no region known: none named'
+    assert Litestream(str(fake), 'eu-west-1')._located('file:///r') == 'file:///r'
+
+
+def test_a_litestream_that_exits_says_why_with_its_last_lines(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    fake = tmp_path / 'litestream'
+    fake.write_text('#!/bin/sh\nfor i in 1 2 3 4 5 6 7; do echo "line $i" >&2; done\nexit 1\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    replicating = Litestream(str(fake), None).replicate(tmp_path / 'piloop.db', 'file:///r')
+    wait_until(lambda: replicating.exited() is not None, 'Litestream to exit')
+    assert replicating.exited() == 'Litestream exited with status 1: line 3 / line 4 / line 5 / line 6 / line 7'
+    assert 'line 1\n' in capfd.readouterr().err, "its whole log goes on to the daemon's"
+    replicating.stop()
 
 
 def test_its_check_finds_litestream_on_path_or_says_to_install_it(tmp_path: Path) -> None:
@@ -235,14 +251,45 @@ def test_the_watch_asks_again_when_s3_does_not_answer_and_stops_when_the_term_is
         return answer
 
     monkeypatch.setattr(a, 'named', named)
-    a._watch(first, threading.Event(), never)
+    running = a.replica.replicate(tmp_path / 'a' / 'piloop.db', f'{URL}/terms/1')
+    stop = threading.Event()
+    later = threading.Timer(0.2, stop.set)  # once named, it watches Litestream only, until the term stops
+    later.start()
+    a._watch(first, stop, running, never)
+    later.join()
     assert len(asked) == 3 and 'term 1 looks again for its replica: slow' in capsys.readouterr().err
 
     def lost(term: Term) -> bool:
         raise LostTerm('taken')
 
     monkeypatch.setattr(a, 'named', lost)
-    a._watch(first, threading.Event(), never)  # returns: the renewals end the daemon
+    a._watch(first, threading.Event(), running, never)  # returns: the renewals end the daemon
+
+
+def test_a_term_whose_litestream_exits_stops_the_daemon_at_once_before_or_after_its_replica_is_whole(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Not at ``replica_wait``: nothing ships the term's writes from the moment Litestream exits."""
+    clock = Clock()
+    config = BucketLeader(url=URL, replica_poll=timedelta(milliseconds=1))
+    replica = FakeReplica(client, automatic=False)
+    a = BucketTerms(config, home_of(db, tmp_path / 'a'), client, clock, replica)
+    first = a.attempt('a/1', None)
+    assert first is not None
+    running = replica.replicate(tmp_path / 'a' / 'piloop.db', f'{URL}/terms/1')
+    running.ended = 'Litestream exited with status 1: Error: cannot open store'
+    unreplicated: list[str] = []
+    a._watch(first, threading.Event(), running, unreplicated.append)
+    why = 'term 1: Litestream exited with status 1: Error: cannot open store: nothing ships its writes'
+    assert unreplicated == [why] and f'piloop: error: {why}' in capsys.readouterr().err
+    assert clock.now == Clock().now, 'at once'
+
+    exits = iter([None, None, 'Litestream exited with status 2: killed'])  # it exits after its replica is named
+    monkeypatch.setattr(running, 'exited', lambda: next(exits))
+    monkeypatch.setattr(a, 'named', lambda term: True)
+    unreplicated.clear()
+    a._watch(first, threading.Event(), running, unreplicated.append)
+    assert unreplicated == ['term 1: Litestream exited with status 2: killed: nothing ships its writes']
 
 
 def test_a_term_whose_replica_is_not_whole_in_time_says_why_and_stops_the_daemon(
@@ -263,8 +310,8 @@ def test_a_term_whose_replica_is_not_whole_in_time_says_why_and_stops_the_daemon
 
     monkeypatch.setattr(a, 'named', not_yet)
     unreplicated: list[str] = []
-    a._watch(first, threading.Event(), unreplicated.append)
-    why = f'term 1: its replica {URL}/terms/1 does not hold the whole database 0:01:00 after its start'
+    a._watch(first, threading.Event(), a.replica.replicate(tmp_path / 'a' / 'piloop.db', URL), unreplicated.append)
+    why = f'term 1: its replica {URL}/terms/1 does not hold the whole database 0:01:00 after its start: nothing ships'
     assert len(polls) == 3 and len(unreplicated) == 1 and unreplicated[0].startswith(why), 'once, at its bound'
     assert f'piloop: error: {why}' in capsys.readouterr().err
     assert record(client).source is None, 'the record still names no replica of this term'
