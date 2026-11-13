@@ -8,7 +8,7 @@ import pytest
 from git import Repo
 from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.kit.transfers import BUILDS
+from piloop.plugins.leader.local import LocalLeader
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (
@@ -155,6 +156,21 @@ def test_serve_runs_until_interrupted(tmp_path: Path, mocker: MockerFixture) -> 
     daemon.serve()
     assert loop.called
     assert not (tmp_path / 'home' / 'serve.pid').exists()
+
+
+def test_a_daemon_whose_leader_refuses_a_campaign_does_not_start_even_without_renewals(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """``local`` refuses no checkout, but any provider may: one whose terms never end has no renewals to stop."""
+    cfg = Settings(home=tmp_path / 'home')
+    daemon = Daemon(cfg)
+    with daemon.db.session() as s:
+        s.execute(text("INSERT INTO campaigns (name, path, config) VALUES ('mine', '/srv/mine', '{}')"))
+        s.commit()
+    daemon.shutdown(timeout=5)
+    mocker.patch.object(LocalLeader, 'refuses', return_value='as the test says')
+    with pytest.raises(SystemExit, match='^the daemon does not start: as the test says$'):
+        Daemon(cfg)
 
 
 def test_a_daemon_that_gives_its_term_up_stops_and_exits_with_why(tmp_path: Path, mocker: MockerFixture) -> None:
