@@ -7,8 +7,14 @@ thread held at its pin (the PUT of the record), as the model's ``Restore`` and `
 the daemon writes (``emit``); its id is what a worker holds. After each step: no id was handed out twice, each host's
 database holds exactly the model's commits, and the record's source is the model's.
 
-The traces cover every kind of transition of ``replica_graph.cfg`` that the replay tells apart (``--by`` below);
-``scripts/graph_traces.py`` wrote them from TLC's ``-dump dot,actionlabels``.
+With ``SWITCH``, a clean stop keeps the host's disk for its next process, and the home runs once under the ``local``
+leader on one host's database, then under ``bucket`` again.
+
+The traces cover every kind of transition of ``replica_graph.cfg`` that the replay tells apart;
+``scripts/graph_traces.py`` wrote them from TLC's ``-dump dot,actionlabels``::
+
+    python3 -I scripts/graph_traces.py graph.dot tests/daemon/traces/replica --record s \\
+        --keep phase,mine,src,from,op,pinned,db,ep,shipped,arg --by op,arg,phase,pinned,kterm
 """
 
 import json
@@ -34,6 +40,7 @@ from piloop.ids import HOME
 from piloop.plugins.executor.kit.leases import LeaseWorkerJoined
 from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Record, Source
 from piloop.plugins.leader.contract import LeaderHost, LostTerm, Term
+from piloop.plugins.leader.local import LocalLeader
 from tests.leader.replica import FakeReplica
 from tests.leader.test_bucket import SKEW, TTL, Clock
 
@@ -151,11 +158,13 @@ class Replay:
         assert proc is not None, f'host {h} runs no daemon'
         return proc
 
-    def restart(self, h: int) -> None:
+    def restart(self, h: int, home: Path | None = None) -> None:
+        """A new process on host ``h``: on a new disk, or on ``home``, the disk that its last process left."""
         self.started += 1
-        home = self.tmp / f'home-{self.started}'
-        home.mkdir()
-        shutil.copy(self.template, home / 'piloop.db')
+        if home is None:
+            home = self.tmp / f'home-{self.started}'
+            home.mkdir()
+            shutil.copy(self.template, home / 'piloop.db')
         client = boto3.client('s3')
         config = BucketLeader(url=URL, ttl=TTL, max_skew=SKEW)
         leader = BucketTerms(config, LeaderHost(home, home / 'piloop.db'), client, self.clock, self.replica)
@@ -181,15 +190,7 @@ class Replay:
             case 'pin':
                 self.pinned(self.proc(h))
             case 'abandon':
-                proc = self.proc(h)
-                if proc.pin is None:  # it never began its restore
-                    assert proc.term is not None
-                    with pytest.raises(LostTerm):
-                        proc.terms.restore(proc.term)
-                else:
-                    proc.pin.finish()
-                    assert isinstance(proc.pin.error, LostTerm), 'its pin is refused'
-                self.gone(h)
+                self.abandon(h)
             case 'snapshot':
                 proc = self.proc(h)
                 assert proc.term is not None
@@ -215,12 +216,40 @@ class Replay:
                     self.replica.ship(self.url(proc), self.row(proc, proc.real[c]))
             case 'crash' | 'exit':
                 self.gone(h)
-            case 'serve' | 'lose':
-                pass  # the daemon serves, or learns that it lost its term: it writes nothing here
+            case 'stop':  # a clean stop: the disk stays, and the next process starts on it
+                home = self.proc(h).home
+                self.gone(h)
+                self.restart(h, home)
+            case 'local':
+                self.local(self.proc(h), ints(state['ep'])[h - 1])
+            case 'serve' | 'lose' | 'to_local' | 'to_bucket':
+                pass  # the daemon serves, learns that it lost its term, or the operator moves the home: no write here
             case 'restart':
                 self.restart(h)
             case _:
                 raise AssertionError(f'no step for {op}')
+
+    def abandon(self, h: int) -> None:
+        proc = self.proc(h)
+        if proc.pin is None:  # it never began its restore
+            assert proc.term is not None
+            with pytest.raises(LostTerm):
+                proc.terms.restore(proc.term)
+        else:
+            proc.pin.finish()
+            assert isinstance(proc.pin.error, LostTerm), 'its pin is refused'
+        self.gone(h)
+
+    def local(self, proc: Process, epoch: int) -> None:
+        """The home runs under `local` on this host: a term of the `local` leader, on the database that it has."""
+        proc.term = (
+            LocalLeader().open(LeaderHost(proc.home, proc.home / 'piloop.db')).take(proc.name, None, threading.Event())
+        )
+        assert proc.term.epoch == epoch, 'one above the newest term of its database'
+        proc.db = Database(f'sqlite:///{proc.home / "piloop.db"}', actor=System.DAEMON)
+        with proc.db.session() as s:
+            terms.begin(s, proc.term.epoch, 1, None)
+            s.commit()
 
     def url(self, proc: Process) -> str:
         assert proc.term is not None
@@ -265,7 +294,7 @@ class Replay:
         phase, src = state['phase'], ints(state['src'])
         assert isinstance(phase, list)
         for h, proc in self.procs.items():
-            if proc is not None and phase[h - 1] in ('restored', 'holding', 'stale'):
+            if proc is not None and phase[h - 1] in ('restored', 'holding', 'stale', 'local'):
                 with closing(sqlite3.connect(proc.home / 'piloop.db')) as con:
                     held = {r[0] for r in con.execute('SELECT id FROM events')}
                 assert held & set(self.issued) == {self.ids[c] for c in of(state, 'db', h)}, (

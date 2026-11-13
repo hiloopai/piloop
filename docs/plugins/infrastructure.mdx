@@ -385,7 +385,9 @@ readiness probe of a load balancer. Each term streams the home's
 database with [Litestream](https://litestream.io) 0.5 to `terms/<epoch>/` beside the object. The next term restores
 it, then makes the rest of the home again from the CAS: each campaign's repo from its URL and what it received, its
 workspace, and the jobs' logs. A takeover loses what the old holder wrote in its last second or so, which Litestream had
-not shipped. A holder whose Litestream exits, or whose replica does not hold the whole database within
+not shipped. A home that went back to `local` and then to `bucket` again keeps what it wrote under `local`: a host
+whose database holds a newer term than the bucket's record serves that database rather than restore an older replica.
+Move it back with one daemon first, on the host that ran `local`, then add the others. A holder whose Litestream exits, or whose replica does not hold the whole database within
 `replica_wait` (60 s), logs an error, stops, and exits with a failure: it never goes on serving writes that nothing
 ships. Litestream gets the bucket's region from piloop (the region of its S3 client: `AWS_REGION` or the profile's), so
 it needs no `s3:GetBucketLocation`.

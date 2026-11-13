@@ -15,7 +15,9 @@ Each term replicates the home's database with Litestream to ``terms/<epoch>/`` b
 stale writer never writes where a newer term reads. The record names the source of the next restore (``Source``): the
 prefix and the transaction that the holder restored, until its own replica holds the whole database, then its own
 prefix. A term restores from that source, and names it as its own before it serves, so a term that dies before its first
-replica leaves the source as it found it. A term whose Litestream exits, or whose replica does not hold the whole
+replica leaves the source as it found it. A host whose database holds a term newer than every one the record has
+seen (the home ran under ``local`` there since) keeps that database rather than restore an older replica over it. A
+term whose Litestream exits, or whose replica does not hold the whole
 database within ``replica_wait``, stops rather than go on serving writes that nothing ships. The protocol is model-checked in ``tests/models/replica.tla``.
 
 boto3 is imported when the record opens, not with this module: it takes ~0.5 s, and every command reads the settings
@@ -277,6 +279,9 @@ class BucketTerms:
         self._boto_error: type[BotoCoreError] = BotoCoreError
         self._held: tuple[Record, str] | None = None
         """The record of the holder's last write, and that write's ETag."""
+        self._took: dict[int, int] = {}
+        """The record's epoch that each of this process's takes read, by the epoch it took: what its restore compares
+        the home's database with."""
 
     def take(self, holder: str, url: str | None, stop: threading.Event) -> Term | None:
         while not stop.is_set():
@@ -296,7 +301,10 @@ class BucketTerms:
         taken = Record(
             epoch=epoch, holder=holder, url=url, until=until, source=None if record is None else record.source
         )
-        return _term(taken) if self._write(taken, etag) else None
+        if not self._write(taken, etag):
+            return None
+        self._took[epoch] = 0 if record is None else record.epoch
+        return _term(taken)
 
     def renew(self, term: Term) -> Term:
         return self._again(term, self._clock() + self.config.ttl)
@@ -310,10 +318,19 @@ class BucketTerms:
         if record is None or record.epoch != term.epoch:
             raise LostTerm(f'term {term.epoch} is no longer the newest: another daemon took over before it restored')
         source = record.source
-        if source is None:  # the first term of the bucket: the home is as this host has it
+        database = self._host.database
+        newest = terms.newest_in(database)
+        if source is None or newest > self._took[term.epoch]:
+            # No replica, or this host's database holds a term that no take recorded: the home ran under `local` here
+            # since. Either way, the home is as this host has it, and newer than any replica.
+            if source is not None:
+                print(
+                    f"piloop: term {term.epoch} keeps this host's database: it holds term {newest}, newer than every"
+                    f' term of the record ({self._took[term.epoch]}), so newer than the replica of term {source.epoch}',
+                    file=sys.stderr,
+                )
             self._again(term, None)  # the pin, as for a restore: the term is still this one's before it serves
             return False
-        database = self._host.database
         staged = database.with_name(f'{database.name}.restoring')
         staged.unlink(missing_ok=True)
         txid = self.replica.restore(self._url(source.epoch), source.txid, staged)

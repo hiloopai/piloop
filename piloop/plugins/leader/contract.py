@@ -119,6 +119,8 @@ class Leader(Protocol):
     def restore(self, term: Term) -> bool:
         """Make the home's database what the term before ``term`` left, before anything opens it, and whether it did.
 
+        A database that is newer than what the term before left (the home ran under another provider since) stays.
+
         A restore reads the source that the term record names, and names it again as ``term``'s before it returns: a
         term that dies before its first replica is restored from there too. The daemon then rebuilds the rest of the
         home from the database's rows (``piloop.daemon.rebuild``).

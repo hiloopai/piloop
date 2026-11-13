@@ -9,16 +9,28 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
+import boto3
 import pytest
+from moto import mock_aws
+from mypy_boto3_s3 import S3Client
 
-from piloop.plugins.leader.bucket import Litestream
+from piloop.actor import System
+from piloop.db import terms
+from piloop.db.session import Database
+from piloop.plugins.leader import bucket
+from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Litestream, Replicating
 from piloop.plugins.leader.contract import Unreachable
+from piloop.plugins.leader.local import LocalLeader
 from scripts.litestream import VERSION
 from tests.conftest import wait_until
+from tests.leader.test_bucket import BUCKET, SKEW, TTL, URL, Clock
+from tests.leader.test_bucket_replica import home_of, note
 
 FIRST = 'ltx/0/0000000000000001-0000000000000001.ltx'
 """A ``file://`` replica's first file, which holds the whole database: ``bucket.FIRST`` on S3."""
@@ -46,7 +58,7 @@ def add(database: Path, body: str) -> None:
 
 def notes(database: Path) -> list[str]:
     with closing(sqlite3.connect(database)) as con:
-        return [r[0] for r in con.execute('SELECT body FROM notes ORDER BY id')]
+        return [r[0] for r in con.execute('SELECT body FROM notes ORDER BY rowid')]
 
 
 def restored(litestream: Litestream, url: str, out: Path) -> list[str]:
@@ -170,3 +182,86 @@ def test_litestream_given_the_region_asks_s3_for_no_location(executable: str, s3
     with pytest.raises(Unreachable, match=r'litestream restore s3://piloop-b/terms/1\?region=us-east-1'):
         located.restore('s3://piloop-b/terms/1', None, tmp_path / 'r.db')
     assert not any('location' in path for path in s3), 'nor does its restore'
+
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[S3Client]:
+    """The record's bucket on moto's S3."""
+    for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'):
+        monkeypatch.setenv(name, 'testing')
+    monkeypatch.setenv('AWS_DEFAULT_REGION', 'us-east-1')
+    with mock_aws():
+        s3 = boto3.client('s3')
+        s3.create_bucket(Bucket=BUCKET)
+        yield s3
+
+
+@dataclass(frozen=True)
+class OnDisk:
+    """Real Litestream for the ``bucket`` leader: each ``s3://`` replica that the provider names is a directory."""
+
+    litestream: Litestream
+    root: Path
+
+    def _file(self, url: str) -> str:
+        return f'file://{self.root / urlparse(url).path.strip("/")}'
+
+    def restore(self, url: str, txid: str | None, out: Path) -> str:
+        return self.litestream.restore(self._file(url), txid, out)
+
+    def replicate(self, database: Path, url: str) -> Replicating:
+        return self.litestream.replicate(database, self._file(url))
+
+
+def never(why: str) -> None:
+    raise AssertionError(f'the replica went whole: {why}')
+
+
+def test_a_home_that_ran_under_local_since_its_last_bucket_term_keeps_its_writes_when_it_moves_back(
+    litestream: Litestream, client: S3Client, db: Database, tmp_path: Path
+) -> None:
+    """Staging, 2026-11-13: a `bucket` term, then `local` on the same volume, then `bucket` again.
+
+    The record still names the first term's replica. The next term must serve the newer database it has, not restore
+    the older replica over it, and its own replica must then hold every row.
+    """
+    host = home_of(db, tmp_path / 'home')
+    replica = OnDisk(litestream, tmp_path / 'replicas')
+    first = BucketTerms(BucketLeader(url=URL), host, client, Clock(), replica)
+    term = first.attempt('pod-0/1', None)
+    assert term is not None and term.epoch == 1 and first.restore(term) is False
+    begin(host.database, term.epoch)
+    with first.replicate(term, never):
+        note(host.database, 'bucket term 1')
+        wait_until(lambda: (replica.root / 'homes/one/terms/1' / FIRST).is_file(), "term 1's first file")
+        client.put_object(Bucket=BUCKET, Key=f'homes/one/terms/1/{bucket.FIRST}1.ltx', Body=b'')  # as on S3
+        assert first.named(term)
+    first.release(term)
+
+    local = LocalLeader().open(host).take('pod-0/2', None, threading.Event())
+    assert local.epoch == 2, 'local counts on from the terms in the database: above the bucket term'
+    begin(host.database, local.epoch)
+    note(host.database, 'written under local')
+
+    clock = Clock()
+    clock.now += TTL + SKEW
+    again = BucketTerms(BucketLeader(url=URL), host, client, clock, replica)
+    term = again.attempt('pod-0/3', None)
+    assert term is not None and term.epoch == 3, 'one above the local term, which the record never saw'
+    assert again.restore(term) is False, 'it keeps the newer database'
+    assert notes(host.database) == ['bucket term 1', 'written under local']
+    begin(host.database, term.epoch)
+    with again.replicate(term, never):
+        wait_until(lambda: (replica.root / 'homes/one/terms/3' / FIRST).is_file(), "term 3's first file")
+        note(host.database, 'bucket term 3')
+        want = notes(host.database)
+        wait_until(lambda: restored(litestream, f'file://{replica.root}/homes/one/terms/3', tmp_path / 'r.db') == want)
+    assert want == ['bucket term 1', 'written under local', 'bucket term 3']
+    assert restored(litestream, f'file://{replica.root}/homes/one/terms/3', tmp_path / 'r.db') == want
+
+
+def begin(database: Path, epoch: int) -> None:
+    """The term's row in the home's database, as the daemon writes it before it serves."""
+    with Database(f'sqlite:///{database}', actor=System.DAEMON).session() as s:
+        terms.begin(s, epoch, 1, None)
+        s.commit()
