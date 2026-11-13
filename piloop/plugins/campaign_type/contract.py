@@ -27,6 +27,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.campaign_type.kit.runs.tables import Run
     from piloop.plugins.fact_source.facts import Facts
+    from piloop.plugins.vcs.contract import Version
 
 
 OPTIMIZATION: Final = 'optimization'
@@ -142,6 +143,14 @@ class CampaignType(Parameters, ABC):
 
         ``last`` is the newest of its versions' candidates that has a score. The type decides whether the idea is done,
         open again or still waits. The caller commits.
+        """
+
+    @abstractmethod
+    def answers(self, s: Session, submission: Candidate, version: Version) -> bool:
+        """Whether the answer to ``submission``, given or awaited, answers ``version``, which its run submits again.
+
+        ``version`` has the tree of ``submission``. When it does, the submit is a retry, answered as it is. Else
+        ``version`` is a new submission of that candidate, which a run spends one of its submissions on.
         """
 
     @abstractmethod

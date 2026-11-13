@@ -12,6 +12,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.campaign_type.kit.runs.tables import Run
     from piloop.plugins.contribution import RouteHost, Routes
+    from piloop.plugins.vcs.contract import Version
 
 
 class Optimization(CampaignType):
@@ -41,6 +42,10 @@ class Optimization(CampaignType):
         from piloop.plugins.campaign_type.kit.runs.stop import release
 
         release(s, run, end, last)
+
+    def answers(self, s: Session, submission: Candidate, version: Version) -> bool:
+        """Always: a score is the tree's, whichever version reached it."""
+        return True
 
     def check_config(self, s: Session, campaign: Campaign) -> None:
         """Every idea's track stays (``check_tracks``)."""

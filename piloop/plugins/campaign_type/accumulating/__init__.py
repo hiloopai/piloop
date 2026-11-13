@@ -19,6 +19,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.campaign_type.kit.runs.tables import Run
+    from piloop.plugins.vcs.contract import Version
 
 ACCUMULATING: Final = 'accumulating'
 
@@ -58,6 +59,12 @@ class Accumulating(Optimization):
             settle_cancelled(s, run, idea)
         else:
             reopen(s, run, idea, f'none of its work merged into the trunk; it ended {end}')
+
+    def answers(self, s: Session, submission: Candidate, version: Version) -> bool:
+        """When the trunk holds it, else when it is the same merge: the same version onto the same trunk (``trunk``)."""
+        from piloop.plugins.campaign_type.accumulating.trunk import answers
+
+        return answers(s, submission, version)
 
     def check_config(self, s: Session, campaign: Campaign) -> None:
         """As ``optimization``, and one track: the trunk takes a merge on its primary."""

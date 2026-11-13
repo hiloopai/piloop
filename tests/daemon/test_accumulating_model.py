@@ -94,9 +94,13 @@ class Replay:
         self.check(state)
 
     def _work(self, r: int) -> Revision:
-        """Run ``r``'s work: a file of its own, its line of ``solve.txt`` if it clashes, and ``bad`` if it fails."""
+        """Run ``r``'s work: a file of its own, its line of ``solve.txt`` if it clashes, and ``bad`` if it fails.
+
+        The last run of a clashing pair writes only its line: a merge of it into the other's work keeps that one's tree.
+        """
         path = self.worktrees[r]
-        (path / f'work{r}.txt').write_text(f'run {r}\n')
+        if not any(r == max(pair) for pair in self.clash):
+            (path / f'work{r}.txt').write_text(f'run {r}\n')
         if any(r in pair for pair in self.clash):
             (path / 'solve.txt').write_text(f'run {r}\n')
         if r in self.bad:

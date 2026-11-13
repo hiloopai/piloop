@@ -83,6 +83,24 @@ def merged(s: Session, campaign: Campaign) -> set[CandidateId]:
     return {c for _, done in in_order(s, TrunkAdvanced, Event.target == _on_campaign(campaign)) for c in done.merged}
 
 
+def answers(s: Session, submission: Candidate, version: Version) -> bool:
+    """Whether the answer to ``submission`` answers ``version``, a version of its tree that its run submits again.
+
+    A merge is of one version onto one trunk. Another version merges otherwise: one that merged the trunk into its work
+    and kept its own files has the same tree, and now merges cleanly. A trunk that moved since a refusal is another
+    merge too. Only a merge into the trunk answers every version of its tree: the trunk holds it.
+    """
+    campaign = s.get_one(Campaign, submission.campaign_id)
+    if submission.id in merged(s, campaign):
+        return True
+    if version.revision != submission.revision:
+        return False
+    if submission.id in {c.id for c in submissions.waiting(s, campaign)}:
+        return True
+    decided, trunk = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, submission.id)), head(s, campaign)
+    return decided is None or (trunk is not None and decided[1].best == trunk.id)
+
+
 def alone(s: Session, candidate: Candidate) -> bool:
     """Whether ``candidate`` waits to be merged on its own: a batch of it failed since its last decision."""
     retry = latest(s, RetryAlone, Event.target == TargetRef(CANDIDATE, candidate.id))
@@ -167,8 +185,11 @@ def decide(s: Session, batch: Batch) -> bool:
 
 
 def refuse(s: Session, candidate: Candidate, trunk: Candidate, why: str) -> None:
-    """Refuse a submission: its worker hears why, and the trunk to merge into its work before it submits again."""
-    told = f'not merged: {why}. Merge the trunk ({trunk.revision}) into your work, then submit again.'
+    """Refuse a submission: its worker hears the trunk to merge into its work before it submits again, and why.
+
+    What to do comes first: ``tell_scores`` cuts a long line, and only the end of ``why`` (git's output) may go.
+    """
+    told = f'not merged: merge the trunk ({trunk.revision}) into your work, then submit again. Why: {why}'
     decided(s, candidate, trunk, told)
 
 

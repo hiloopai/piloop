@@ -17,6 +17,7 @@ from piloop.db.events import emit, in_order, latest
 from piloop.db.models import AgentSession, Campaign, Event, EventModel, ReadBy
 from piloop.db.session import write_transaction
 from piloop.ids import CommentId, Revision, TargetRef
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -75,11 +76,16 @@ def run_of_agent(s: Session, actor: Actor) -> Run:
 
 
 def resubmitted(s: Session, run: Run, version: Version) -> Candidate | None:
-    """The submission of ``run`` that is ``version``'s tree, if the run submitted it: a retry, answered as it is."""
+    """The submission of ``run`` that is ``version``'s tree, if its answer answers ``version``: a retry, answered as it is.
+
+    The campaign's type says what its answer answers (``CampaignType.answers``).
+    """
     known = s.scalar(
         select(Candidate).where(Candidate.campaign_id == run.campaign_id, Candidate.tree_sha == version.tree)
     )
-    return known if known is not None and known.id in submitted(s, run.id) else None
+    if known is None or known.id not in submitted(s, run.id):
+        return None
+    return known if CAMPAIGN_TYPES.model_of(run.campaign.type)().answers(s, known, version) else None
 
 
 def retried(s: Session, own: Candidate, actor: Actor) -> None:
@@ -106,7 +112,8 @@ def tell_scores(s: Session, campaign: Campaign, chars: int) -> list[CommentId]:
         if agent is None:
             continue
         sent = {made.scored for _, made in in_order(s, ScoreTold, Event.target == on_run)}
-        for event, made in in_order(s, Submitted, Event.target == on_run):
+        newest = {made.candidate: (event, made) for event, made in in_order(s, Submitted, Event.target == on_run)}
+        for event, made in newest.values():  # a later submission of a tree is the one that its answer answers
             found = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, made.candidate))
             if found is None or found[0].id < event.id or found[0].id in sent:
                 continue
@@ -142,9 +149,10 @@ def submit(s: Session, run: Run, version: Version, repo: Repository, actor: Acto
     """Submit ``version`` of ``run``: its candidate, a child of the run's last submission, else of its base.
 
     Emits ``Submitted``, and keeps the version (``r<run>/s<n>``). The caller commits. A tree that the run submitted
-    already is that submission again (``resubmitted``): nothing new, no submission spent, whatever the run's state
-    (``retried``). A tree that a merge onto an ``accumulating`` campaign's trunk made is submitted as that merge, whose
-    measurement stands.
+    already, whose answer answers this version, is that submission again (``resubmitted``): nothing new, no submission
+    spent, whatever the run's state (``retried``). One whose answer does not is submitted again, as this version. A
+    tree that a merge onto an ``accumulating`` campaign's trunk made is submitted as that merge, whose measurement
+    stands.
 
     Raises:
         SubmitRefused: ``refuse`` refuses it, or the version's tree is a candidate already.
@@ -159,12 +167,17 @@ def submit(s: Session, run: Run, version: Version, repo: Repository, actor: Acto
     known = s.scalar(
         select(Candidate).where(Candidate.campaign_id == run.campaign_id, Candidate.tree_sha == version.tree)
     )
-    if known is not None and known.origin not in (Origin.RECOVERED, Origin.SKIPPED, Origin.MERGE):
+    if (
+        known is not None
+        and known.id not in made
+        and known.origin not in (Origin.RECOVERED, Origin.SKIPPED, Origin.MERGE)
+    ):
         raise SubmitRefused(f'its tree is candidate#{known.id} already ({known.origin}): change something first')
     parent = s.get_one(Candidate, made[-1]) if made else run.base
     candidate, _ = resolve(s, run.campaign_id, version, parent=parent, run_id=run.id, origin=Origin.RUN)
     if candidate.origin is not Origin.MERGE:  # a worker that merged the trunk into its work can reach a merge's tree
         candidate.origin = Origin.RUN
+    candidate.revision = version.revision  # a merge onto a trunk takes the history of the version submitted last
     repo.keep(version.revision, Pin(run.campaign.name, f'r{run.id}/s{len(made)}'))
     emit(s, Submitted(candidate=candidate.id, revision=version.revision), TargetRef(RUN, run.id), actor)
     return candidate

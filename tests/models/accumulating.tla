@@ -21,7 +21,7 @@ vars == <<sub, why, ended, idea, trunk, resolved, rebases, jobs, solo, at, clock
 Waiting == {r \in Runs : sub[r] = "waiting"}
 \* r's work conflicts with work of S that it was not rebased onto.
 Clashes(r, S) == \E t \in S \ resolved[r] : {r, t} \in Clash
-\* What a refusal does to a run's idea: an ended run's idea opens again, with a note (accumulating/__init__.py:41).
+\* What a refusal does to a run's idea: an ended run's idea opens again, with a note (accumulating/__init__.py:42).
 Reopened(r) == IF ended[r] THEN "open" ELSE idea[r]
 \* The submissions of S, oldest first: the order that a merge takes them in.
 RECURSIVE Oldest(_)
@@ -37,7 +37,7 @@ Init == /\ sub = [r \in Runs |-> "none"] /\ why = [r \in Runs |-> "none"]
         /\ trunk = {} /\ resolved = [r \in Runs |-> {}] /\ rebases = [r \in Runs |-> 0]
         /\ jobs = {} /\ solo = {} /\ at = [r \in Runs |-> 0] /\ clock = 0 /\ op = "init" /\ arg = {}
 
-\* piloop/plugins/campaign_type/kit/evaluation/submissions.py:141 submit. The accumulating planner scores no
+\* piloop/plugins/campaign_type/kit/evaluation/submissions.py:148 submit. The accumulating planner scores no
 \* submission of its own (piloop/plugins/campaign_type/accumulating/planner.py:33): only the merge is measured.
 Submit(r) == /\ sub[r] = "none" /\ ~ended[r]
              /\ sub' = [sub EXCEPT ![r] = "waiting"]
@@ -46,7 +46,7 @@ Submit(r) == /\ sub[r] = "none" /\ ~ended[r]
              /\ UNCHANGED <<why, ended, idea, trunk, resolved, rebases, jobs, solo>>
 
 \* The run ends. piloop/plugins/campaign_type/kit/runs/controller.py:1220 waits until its submissions are decided, then
-\* piloop/plugins/campaign_type/accumulating/__init__.py:41 settles its idea: done when merged, else open. A run whose
+\* piloop/plugins/campaign_type/accumulating/__init__.py:42 settles its idea: done when merged, else open. A run whose
 \* submission still waits keeps its idea claimed here; Finish (or a refusal in StartBatch) settles it then.
 EndRun(r) == /\ ~ended[r]
              /\ ended' = [ended EXCEPT ![r] = TRUE]
@@ -56,10 +56,10 @@ EndRun(r) == /\ ~ended[r]
              /\ op' = "end" /\ arg' = {r}
              /\ UNCHANGED <<sub, why, trunk, resolved, rebases, jobs, solo, at, clock>>
 
-\* piloop/plugins/campaign_type/accumulating/trunk.py:93 start, from the merge job of
+\* piloop/plugins/campaign_type/accumulating/trunk.py:111 start, from the merge job of
 \* piloop/plugins/campaign_type/accumulating/planner.py:46 (one per campaign: Checkers = 1). Every waiting submission,
 \* oldest first, merges onto the trunk in turn; one that conflicts with the trunk or an earlier one is refused at once
-\* (trunk.py:109). After a failed batch, the oldest one that goes alone goes by itself (SOLO; trunk.py:86).
+\* (trunk.py:127). After a failed batch, the oldest one that goes alone goes by itself (SOLO; trunk.py:104).
 StartBatch ==
   LET soloing == SOLO /\ solo \cap Waiting # {}
       pool == IF soloing THEN {Head(Oldest(solo \cap Waiting))} ELSE Waiting
@@ -75,7 +75,7 @@ StartBatch ==
      /\ UNCHANGED <<ended, trunk, resolved, rebases, solo, at, clock>>
 
 \* The merge is measured once (piloop/plugins/campaign_type/kit/runs/controller.py:838 measure_once), then
-\* piloop/plugins/campaign_type/accumulating/trunk.py:130 decide: taken when it scored and its primary is at least the
+\* piloop/plugins/campaign_type/accumulating/trunk.py:147 decide: taken when it scored and its primary is at least the
 \* trunk's (the primary never drops here: see the header), and the trunk is still its base (CAS).
 Finish(j) ==
   LET ok == j.batch \cap Bad = {}
@@ -91,11 +91,11 @@ Finish(j) ==
           [] ok ->  \* the trunk moved meanwhile: merge them again onto the new trunk
                /\ sub' = [r \in Runs |-> IF r \in j.batch THEN "waiting" ELSE sub[r]]
                /\ UNCHANGED <<trunk, idea, solo, why>>
-          [] SOLO /\ Cardinality(j.batch) > 1 ->  \* trunk.py:157: a failed batch's members go one at a time
+          [] SOLO /\ Cardinality(j.batch) > 1 ->  \* trunk.py:174: a failed batch's members go one at a time
                /\ sub' = [r \in Runs |-> IF r \in j.batch THEN "waiting" ELSE sub[r]]
                /\ solo' = solo \cup j.batch
                /\ UNCHANGED <<trunk, idea, why>>
-          [] OTHER ->  \* trunk.py:170 refuse: the worker hears why, and the trunk to merge
+          [] OTHER ->  \* trunk.py:187 refuse: the worker hears why, and the trunk to merge
                /\ sub' = [r \in Runs |-> IF r \in j.batch THEN "refused" ELSE sub[r]]
                /\ why' = [r \in Runs |-> IF r \in j.batch THEN "check" ELSE why[r]]
                /\ idea' = [r \in Runs |-> IF r \in j.batch THEN Reopened(r) ELSE idea[r]]
@@ -103,10 +103,11 @@ Finish(j) ==
                /\ UNCHANGED trunk
      /\ UNCHANGED <<ended, resolved, rebases, at, clock>>
 
-\* The worker merges the trunk that its refusal names into its work (trunk.py:170), and submits again
-\* (submissions.py:141; a tree that it submitted already is that submission, answered as it was).
+\* The worker merges the trunk that its refusal names into its work (trunk.py:187), and submits again
+\* (submissions.py:148). That is a new submission, also when the worker kept its own files and so its tree: a merge
+\* is of one version onto one trunk (trunk.py:86 answers). Only the same version onto the same trunk is a retry.
 Rebase(r) == /\ sub[r] = "refused" /\ ~ended[r] /\ rebases[r] < MaxRebase
-             \* a merge of a trunk that the work holds changes nothing: the same tree is the same submission, decided
+             \* a merge of a trunk that the work holds changes nothing: the same version, answered as it was
              /\ trunk \ (resolved[r] \cup {r}) # {}
              /\ sub' = [sub EXCEPT ![r] = "waiting"]
              /\ resolved' = [resolved EXCEPT ![r] = trunk]
