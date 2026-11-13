@@ -4,3 +4,4 @@
 
 [858]
 title = "the standby tests teardown finds a term ended (#858)"
+unmeasured = ["piloop/daemon/main.py"]
