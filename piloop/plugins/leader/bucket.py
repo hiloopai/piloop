@@ -399,6 +399,15 @@ class BucketTerms:
             return None
         return _term(record)
 
+    def here(self) -> bool:
+        """Whether the daemon of this host holds the current term: its database is the newest term's, and it runs.
+
+        A standby has no database, or one that an earlier term left on this host: it is stale.
+        """
+        term = self.current()
+        running = terms.running_in(self._host.database)
+        return term is not None and running is not None and running[0] == term.epoch
+
     def _again(self, term: Term, until: datetime | None, source: Source | None = None) -> Term:
         """Write the holder's record again: a later ``until`` (None: as it was), and ``source`` (None: as it was)."""
         with self._lock:

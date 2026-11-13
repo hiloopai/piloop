@@ -49,6 +49,9 @@ class LocalTerms:
     def begin(self, s: Session, term: Term) -> None:
         pass  # one host, whose database is never restored under it: its ids stay small
 
+    def here(self) -> bool:
+        return True  # the home has one host: its database is the home's, whether its daemon runs or not
+
     def current(self) -> Term | None:
         newest = terms.running_in(self._database)
         if newest is None:

@@ -327,6 +327,9 @@ piloop cas serve --listen STR
 
 Serve the CAS of `[plugins.cas]` until Ctrl-C or SIGTERM. Each caller sends a worker's token.
 
+Where the home's daemon does not hold its term (a standby under `[plugins.leader] provider = "bucket"`), it forwards
+each request to the CAS server of the daemon that does, at the same port, and answers 503 while none does.
+
 **Parameters**:
 
 * `--listen STR`: Serve on HOST:PORT. An address that is not loopback needs TLS ([plugins.network]). **[required]**

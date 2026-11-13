@@ -6,6 +6,7 @@ import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import httpx2 as httpx
 import pytest
@@ -18,11 +19,13 @@ from piloop.actor import System
 from piloop.api.contract import Access
 from piloop.cli import common
 from piloop.db.session import Database
+from piloop.net import cas_server
 from piloop.net.tokens import Tokens
 from piloop.plugins.cas.cached import Cached, CachedCas
 from piloop.plugins.cas.disk import Disk, DiskCas
 from piloop.plugins.cas.http import Http, HttpCas
 from piloop.plugins.cas.kit.conformance import check_cas
+from piloop.plugins.leader.contract import Leader, Unreachable
 from piloop.plugins.network.https import TOKEN_ENV
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
@@ -42,11 +45,18 @@ def out(tmp_path: Path, schema: Path, monkeypatch: pytest.MonkeyPatch):
     return lambda: console.export_text(clear=True)
 
 
-def test_cas_serve_prints_its_url_and_serves_until_it_stops(out, mocker: MockerFixture) -> None:
-    ran = mocker.patch.object(uvicorn.Server, 'run', side_effect=KeyboardInterrupt)  # a Ctrl-C, once it shut down
-    run_cli(['cas', 'serve', '--listen', '127.0.0.1:0'])
-    (listener,) = ran.call_args.kwargs['sockets']
-    assert listener.fileno() == -1, 'the socket is closed'
+def test_cas_serve_prints_its_url_and_serves_until_a_ctrl_c(out, mocker: MockerFixture) -> None:
+    served: list[socket.socket] = []
+    real = uvicorn.Server.serve
+
+    async def serve(self: uvicorn.Server, sockets: list[socket.socket]) -> None:
+        served.extend(sockets)
+        signal.raise_signal(signal.SIGINT)  # a Ctrl-C once it serves
+        await real(self, sockets=sockets)
+
+    mocker.patch.object(uvicorn.Server, 'serve', serve)
+    run_cli(['cas', 'serve', '--listen', '127.0.0.1:0'])  # returns: the Ctrl-C ends it quietly
+    assert [each.fileno() for each in served] == [-1], "the server's socket is closed"
     assert out().startswith('cas serving on http://127.0.0.1:')
 
 
@@ -122,3 +132,23 @@ def test_cas_get_prints_a_blob_or_a_chunked_file_and_names_what_the_cas_lacks(
     mocker.patch.object(DiskCas, 'get', side_effect=IntegrityError('changed under the store'))
     with pytest.raises(SystemExit, match=f'{cid}: the bytes in the CAS do not match it'):
         run_cli(['cas', 'get', str(cid)])
+
+
+def test_cas_serve_under_local_with_no_database_says_how_to_make_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `local` leader's database is the home's whether its daemon runs or not: it must exist."""
+    monkeypatch.setattr(common, 'settings', Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools'))
+    monkeypatch.setattr(common, 'console', Console(record=True, width=200, force_terminal=False))
+    with pytest.raises(SystemExit, match='piloop.db does not exist'):
+        run_cli(['cas', 'serve', '--listen', '127.0.0.1:0'])
+
+
+def test_a_cas_server_that_cannot_read_the_term_keeps_what_it_does(capsys: pytest.CaptureFixture[str]) -> None:
+    class Unread:
+        def here(self) -> bool:
+            raise Unreachable('S3 is slow')
+
+    leader = cast(Leader, Unread())
+    assert cas_server._holds(leader, here=True) is True and cas_server._holds(leader, here=False) is False
+    assert capsys.readouterr().err.count('piloop: the CAS server could not read the term: S3 is slow') == 2

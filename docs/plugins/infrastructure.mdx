@@ -396,6 +396,7 @@ Under `bucket`:
 - A campaign cloned with a home's secret is cloned again with that secret. A token given with `piloop init <url>` is kept nowhere: give a secret instead.
 - Register campaigns by their URL (`piloop init <url>`): a checkout of your own is refused, since another host could not make it again.
 - Each daemon must reach the holder's address: set `[daemon] advertise_url` to where the others reach this host, such as `http://piloop-0.piloop:8443`, never a load balancer's URL. Without it, the URL is the network's `listen`, with the host's name for `0.0.0.0`.
+- `piloop cas serve` beside a standby forwards each request to the holder's CAS server, at the holder's host and the same port, and answers 503 while no daemon holds the term. Run the CAS servers of a home's hosts on one port.
 - A standby forwards nothing that comes on the home's Unix socket: its caller is known on that host alone. Run commands on the holder's host, or through the server with a token.
 - A network that knows a caller by its connection (its address, or its TLS certificate), rather than by a header, does not reach the holder through a standby.
 

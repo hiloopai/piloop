@@ -9,6 +9,7 @@
 | `Leader.renew(term: Term) -> Term` | `term` again, ending later. |
 | `Leader.release(term: Term) -> None` | End `term` now: the holder wrote its last. Another daemon may take the next one at once. |
 | `Leader.current() -> Term \| None` | The term that a daemon holds now, or None. |
+| `Leader.here() -> bool` | Whether this host's database is the home's now, so that a server beside the daemon may answer from it. |
 | `Leader.restore(term: Term) -> bool` | Make the home's database what the term before `term` left, before anything opens it, and whether it did. |
 | `Leader.replicate(term: Term, unreplicated: Callable[[str], None]) -> AbstractContextManager[None]` | Ship the home's database while the context runs, where only `term`'s epoch writes. Its exit ships the rest. |
 | `Leader.begin(s: Session, term: Term) -> None` | Write what the provider needs in `term`'s first transaction, before the daemon writes anything else. |

@@ -106,6 +106,16 @@ class Leader(Protocol):
         """The term that a daemon holds now, or None."""
         ...
 
+    def here(self) -> bool:
+        """Whether this host's database is the home's now, so that a server beside the daemon may answer from it.
+
+        ``piloop cas serve`` does; otherwise it forwards to the holder of ``current``.
+
+        Raises:
+            Unreachable: The record of the terms could not be read now.
+        """
+        ...
+
     def restore(self, term: Term) -> bool:
         """Make the home's database what the term before ``term`` left, before anything opens it, and whether it did.
 

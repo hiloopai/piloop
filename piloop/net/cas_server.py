@@ -10,12 +10,15 @@ Retirement: deleted, with ``piloop/cli/cas.py``, when covalence's HTTP CAS serve
 directory backend, and piloop serves that instead.
 """
 
+import sys
 import tempfile
-from collections.abc import Mapping
-from contextlib import ExitStack
+import threading
+from collections.abc import Generator, Mapping
+from contextlib import ExitStack, contextmanager
 from functools import partial
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from covalence import Cid, StoreError
 from fastapi import Depends, Request, Response
@@ -26,11 +29,17 @@ from starlette.exceptions import HTTPException
 from starlette.types import Receive, Scope, Send
 
 from piloop.api.contract import Access
+from piloop.daemon.serve import running_pid
+from piloop.db.session import Database, schema_mismatch
 from piloop.net.cas import ROUTE, Code, ErrorBody
-from piloop.net.server import App, authorized
+from piloop.net.forward import Forwarding
+from piloop.net.server import App, Server, authorized, listening
 from piloop.net.tokens import Tokens
-from piloop.plugins.cas.contract import UNBOUNDED, BlobAddress, Cas
-from piloop.plugins.network.contract import Network
+from piloop.plugins.cas.contract import CAS, UNBOUNDED, BlobAddress, Cas
+from piloop.plugins.leader.contract import Leader, Term, Unreachable
+from piloop.plugins.network.contract import Listener, Network, NetworkConfig, NetworkHost
+from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
+from piloop.settings import Settings
 
 ADDRESS = TypeAdapter(BlobAddress)
 CHUNK = 1 << 20
@@ -153,3 +162,90 @@ class _Spooled(StreamingResponse):
 
 def _answer(status: int, code: Code, message: str, headers: Mapping[str, str] | None = None) -> JSONResponse:
     return JSONResponse(ErrorBody(code=code, message=message).model_dump(), status, headers)
+
+
+def bind(cfg: Settings, network: NetworkConfig) -> Listener:
+    """Bind ``network``'s listener, before anything opens the database: a standby has none.
+
+    Raises:
+        OSError: It could not bind.
+    """
+    unopened = Database(cfg.database_url, actor=cfg.actor)  # a network's open keeps it, and binding reads nothing
+    try:
+        listener = listening(
+            network.open(NetworkHost(Tokens(unopened), HomeSecrets(unopened, SECRETS.selected(cfg.providers))))
+        )
+    finally:
+        unopened.close()
+    assert listener is not None  # the network listens: `listening` set its address
+    return listener
+
+
+def serve(cfg: Settings, network: NetworkConfig, listener: Listener, leader: Leader, stop: threading.Event) -> None:
+    """Serve the CAS on ``listener`` until ``stop``, switching as the home's term moves (``Leader.here``).
+
+    While the daemon of this host holds the term, it answers from this host's database. Otherwise it forwards each
+    request to the holder's CAS server, or answers 503 while none holds it (``piloop.net.forward``): a standby has no
+    database, or a stale one, so it checks no token itself, and it never exits for want of one.
+    """
+    here = _holds(leader, here=False)
+    every = cfg.daemon.forward_refresh.total_seconds()
+    while not stop.is_set():
+        with (_here if here else _forward)(cfg, network, listener, leader):
+            while not stop.wait(every) and _holds(leader, here=here) == here:
+                pass
+        here = not here
+
+
+def _holds(leader: Leader, *, here: bool) -> bool:
+    """Whether the daemon of this host holds the home's term; ``here``, as it was, while the record is unreadable."""
+    try:
+        return leader.here()
+    except Unreachable as e:
+        print(f'piloop: the CAS server could not read the term: {e}', file=sys.stderr)
+        return here
+
+
+@contextmanager
+def _here(cfg: Settings, network: NetworkConfig, listener: Listener, leader: Leader) -> Generator[None]:
+    """Serve from this host's database, which the daemon here holds the term of, in a thread."""
+    if (e := schema_mismatch(cfg.database, running_pid(cfg), cfg.actor)) is not None:
+        raise SystemExit(str(e)) from e
+    db = Database(cfg.database_url, actor=cfg.actor)
+    try:
+        tokens = Tokens(db, cfg.daemon.token_trust.total_seconds())
+        net = network.open(NetworkHost(tokens, HomeSecrets(db, SECRETS.selected(cfg.providers))))
+        cas = CAS.selected(cfg.providers).open(cfg.home)
+        server = Server(app(tokens, net, cas, cfg.home / TMP), Listener(listener.socket.dup(), listener.tls))
+        server.start()  # it closes its duplicate of the socket as it ends; the next server takes the socket
+        try:
+            yield
+        finally:
+            server.close()
+    finally:
+        db.close()
+
+
+@contextmanager
+def _forward(cfg: Settings, network: NetworkConfig, listener: Listener, leader: Leader) -> Generator[None]:
+    """Forward each request to the CAS server of the term's holder, in a thread."""
+    port = listener.socket.getsockname()[1]
+    forwarding = Forwarding(lambda: _cas_of(leader.current(), port), [listener], cfg.daemon)
+    forwarding.start()
+    try:
+        yield
+    finally:
+        forwarding.close()
+
+
+def _cas_of(term: Term | None, port: int) -> Term | None:
+    """``term``, with the URL of its holder's CAS server: the host of the term's URL, at ``port``.
+
+    The CAS servers of a home's hosts listen on one port, as a StatefulSet's pods do.
+    """
+    if term is None or term.url is None:
+        return term
+    parts = urlsplit(term.url)
+    host = parts.hostname or ''
+    netloc = f'[{host}]:{port}' if ':' in host else f'{host}:{port}'
+    return term.model_copy(update={'url': parts._replace(netloc=netloc).geturl()})

@@ -50,6 +50,9 @@ class Fake:
     def current(self) -> Term | None:
         return None
 
+    def here(self) -> bool:
+        return True
+
     def begin(self, s: Session, term: Term) -> None:
         pass
 
