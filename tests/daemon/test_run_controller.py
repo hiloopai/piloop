@@ -743,6 +743,32 @@ def test_timeout(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_p
         assert agent_session.state is AgentSessionState.KILLED
 
 
+@pytest.mark.usefixtures('daemon_api')
+def test_a_run_that_times_out_after_a_scored_submission_finishes_and_its_idea_is_done(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A timeout ends the work, not the attempt: the scored submission settles the idea, which never opens again."""
+    write_toml(Path(campaign.path), HARNESS_APPEND + SUBMIT + 'touch ../submitted\nsleep 30 &\nwait\n')
+    reload_campaign(db, campaign)
+    run_id = make_run(db, campaign)
+    wait = runtime.wait
+
+    def time_out_after_the_submit(handle: Handle, deadline: Deadline) -> AgentExit:
+        wait_until((tmp_path / 'runs' / str(run_id) / 'submitted').exists)
+        return wait(handle, Deadline.after(0))
+
+    mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_submit)
+    ex = controller(db, runtime, tmp_path)
+    with scoring(ex, db):
+        execute(ex, db, run_id)
+    with db.session() as s:
+        run = s.get_one(Run, run_id)
+        assert (run.status, run.end, run.error) == (RunStatus.SUCCEEDED, RunEnd.FINISHED, None)
+        assert s.scalars(select(AgentSession.error).where(working_on(run_id))).one() == 'agent timeout after 0s'
+        assert idea_of(run).status is IdeaStatus.DONE, 'its submission scored'
+        assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
+
+
 def test_a_run_whose_session_the_stop_cut_short_ends_as_cut_by_the_stop_and_is_no_attempt(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -1552,6 +1578,9 @@ STALLED = AgentEnded(reason='no output for 0:20:00', end=RunEnd.STALLED)
         pytest.param(
             RunFacts(timed_out=True, stop_cut=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-cut'
         ),
+        pytest.param(
+            RunFacts(timed_out=True, error=TIMEOUT, submitted=True), (RunEnd.FINISHED, None), id='timeout-submitted'
+        ),
         pytest.param(RunFacts(timed_out=True, error=TIMEOUT), (RunEnd.TIMED_OUT, TIMEOUT), id='timeout'),
         pytest.param(RunFacts(error='implementer exit 1'), (RunEnd.FAILED, 'implementer exit 1'), id='error'),
         pytest.param(RunFacts(unsaved='refused'), (RunEnd.FAILED, f'{UNSAVED}: refused'), id='unsaved'),
@@ -1575,6 +1604,16 @@ STALLED = AgentEnded(reason='no output for 0:20:00', end=RunEnd.STALLED)
         ),
         pytest.param(
             RunFacts(cancelled=True, timed_out=True, error=TIMEOUT), (RunEnd.CANCELLED, None), id='cancel-timeout'
+        ),
+        pytest.param(
+            RunFacts(timed_out=True, stop_cut=True, error=TIMEOUT, submitted=True),
+            (RunEnd.CAMPAIGN_STOPPED, None),
+            id='stop-cut-submitted',
+        ),
+        pytest.param(
+            RunFacts(timed_out=True, error=TIMEOUT, unsaved='refused', submitted=True),
+            (RunEnd.FINISHED, None),
+            id='timeout-submitted-unsaved',
         ),
         pytest.param(
             RunFacts(error='implementer exit 1', unsaved='refused'),

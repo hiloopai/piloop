@@ -1381,7 +1381,10 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
         # It ran into the campaign's stop, which cut its session short: no attempt at its idea.
         case RunFacts(timed_out=True, stop_cut=True):
             return RunEnd.CAMPAIGN_STOPPED, None
-        # It ran into its role's timeout.
+        # A timeout ends the work, not the attempt: what it submitted settles its idea, as after a clean exit.
+        case RunFacts(timed_out=True, submitted=True):
+            return RunEnd.FINISHED, None
+        # It ran into its role's timeout with nothing submitted.
         case RunFacts(timed_out=True, error=error):
             return RunEnd.TIMED_OUT, error
         # Its process failed.

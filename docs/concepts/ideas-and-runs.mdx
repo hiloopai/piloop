@@ -61,8 +61,8 @@ gives it more time. What the implementer left uncommitted becomes a `recovered` 
 
 | How the run ended | What happens to its idea |
 |---|---|
-| `submitted` | `done` once its last commit has a score. |
-| `gave_up`, failed, timed out, `stalled` or stopped | Back to `open`, for another implementer. |
+| `submitted`, or timed out after a submission | `done` once its last commit has a score. |
+| `gave_up`, failed, timed out with nothing submitted, `stalled` or stopped | Back to `open`, for another implementer. |
 | Cancelled | `dropped`. |
 
 An implementer that failed to start claimed nothing: its run starts again with a new one, up to two times.

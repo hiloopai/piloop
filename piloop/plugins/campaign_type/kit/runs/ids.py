@@ -46,9 +46,10 @@ class RunEnding(StrEnum):
 class RunEnd(StrEnum):
     """How a run ended. ``runs.error`` adds the detail, when there is one.
 
-    ``finished``: its worker submitted a version, and ended its run or exited. ``gave_up``: its worker ended it without
-    a result, or exited without submitting (the error says why, if the worker said). ``failed``: its process failed,
-    or the save of what it left unsaved did (the error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,
+    ``finished``: its worker submitted a version, and ended its run, exited or ran into its role's timeout. ``gave_up``:
+    its worker ended it without a result, or exited without submitting (the error says why, if the worker said).
+    ``failed``: its process failed, or the save of what it left unsaved did (the error says which). ``timed_out``: its
+    role's timeout, before it submitted anything. ``cancelled``: someone cancelled it. ``campaign_stopped``,
     ``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.
     ``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to
     work. ``stalled``: the campaign's liveness policy ended its agent, which did not start or went quiet
