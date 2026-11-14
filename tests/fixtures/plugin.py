@@ -3,6 +3,7 @@ a runtime, a stop rule, a capability of its own with a provider and a best rule 
 type."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -22,7 +23,7 @@ from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import RunClaim
 from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.contribution import DaemonHost
 from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_best
@@ -247,5 +248,5 @@ class Needy(Subprocess):
 class Waiting(Optimization):
     """``waiting``: optimization, except that a run's end leaves its idea claimed, for something else to settle."""
 
-    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
+    def settle(self, s: Session, claim: RunClaim, end: RunEnd, submissions: Sequence[Candidate]) -> None:
         """Leave the claim: the work is done only when something else says so."""

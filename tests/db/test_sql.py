@@ -100,8 +100,10 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
             'migrations',
             'owners',
             'repo_transfers',
+            'run_claims',
             'runs',
             'secrets',
+            'submissions',
             'target_kinds',
             'techniques',
             'terms',
@@ -364,7 +366,7 @@ def test_exclusion_brief_and_campaign_status_changes_carry_what_the_feed_needs(
     sql.run(con, "INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'sha')")
     sql.run(
         con,
-        "INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 1, 'pi', 'm')",
+        "INSERT INTO runs (campaign_id, base_candidate_id, harness, model) VALUES (1, 1, 'pi', 'm')",
     )
     sql.run(
         con,

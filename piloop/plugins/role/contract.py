@@ -171,6 +171,10 @@ class RoleConfig(Parameters):
     """The guides that the role's agents use (``Guide``), in order: the head of ``sections`` when it is unset. A role
     that does more extends its base's list. The others are a ``piloop schema <guide>`` away."""
 
+    def own_prompt(self) -> str | None:
+        """The text of the role's own prompt (``PROMPT``), or None for a role without one."""
+        return self.PROMPT.read_text() if self.PROMPT is not None else None
+
     def shown(self) -> list[str]:
         """The names of the sections of this role's briefs: its ``sections``, else its guides and its surface's."""
         if self.sections is not None:
@@ -178,14 +182,25 @@ class RoleConfig(Parameters):
         return list(dict.fromkeys([*self.GUIDES, *defaults(self.SURFACE)]))
 
 
+END = '\n## End\n'
+"""The heading of the built-in implementer prompt's last section, which ``persistent`` replaces."""
+IMPLEMENTER_PROMPT: Final = files(__package__) / 'prompts' / 'implementer.md'
+"""The built-in implementer prompt."""
+PERSISTENT_END: Final = files(__package__) / 'prompts' / 'implementer_persistent.md'
+"""The End section of the built-in prompt with ``persistent``."""
+
+
 class ImplementerRole(RoleConfig):
     """``[plugins.role.implementer]``, and every ``[plugins.role.<name>]`` table with ``runs = true``: a role that does runs.
 
-    The run queue starts its agents. Each agent claims one idea, in a new checkout of the best (or of another
+    The run queue starts its agents. Each agent claims ideas, in a new checkout of the best (or of another
     candidate, ``--base``), and its versions are scored into the pool. A new role of this kind takes the implementer's defaults, its prompt included.
     """
 
-    PROMPT: ClassVar[Traversable | None] = files(__package__) / 'prompts' / 'implementer.md'
+    PROMPT: ClassVar[Traversable | None] = IMPLEMENTER_PROMPT
+    PERSISTENT_PROMPT: ClassVar[Traversable | None] = None
+    """A plugin role's prompt with ``persistent``, in place of its own ``PROMPT``. None: its ``PROMPT`` as written, as
+    a configured ``prompt`` is. The built-in prompt gets its persistent End section (``PERSISTENT_END``)."""
 
     runs: Literal[True] = True
     """The agents of this role do runs. A table of a new name needs ``runs = true``."""
@@ -206,10 +221,26 @@ class ImplementerRole(RoleConfig):
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count. More of them find a better best in the same hours, at more
     cost."""
+    persistent: bool = False
+    """Each implementer works its whole ``timeout``, the period of a flush to the best: it claims, asks for
+    (``piloop escalate``) or proposes ideas as it wants, and the next run of its slot starts from the campaign type's
+    base. It selects the End section of the built-in prompt, or a plugin role's ``PERSISTENT_PROMPT``, and nothing
+    else."""
     IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with its numbers.'
     SURFACE: ClassVar[Surface] = Surface.RUN
     GUIDES: ClassVar[tuple[str, ...]] = ()
     """None: the context says how to run piloop and its SQL, and ``piloop schema database`` prints the rest."""
+
+    def own_prompt(self) -> str | None:
+        """The role's prompt; with ``persistent``, its ``PERSISTENT_PROMPT``, or the built-in one's persistent End."""
+        if self.persistent and self.PERSISTENT_PROMPT is not None:
+            return self.PERSISTENT_PROMPT.read_text()
+        text = super().own_prompt()
+        if not self.persistent or self.PROMPT is not IMPLEMENTER_PROMPT or text is None:
+            return text
+        head, end, _ = text.partition(END)
+        assert end, f'{self.PROMPT} has no {END.strip()!r} section'  # the built-in prompt has one
+        return f'{head}{end}\n{PERSISTENT_END.read_text()}'
 
 
 class Quiet(StrEnum):

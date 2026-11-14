@@ -111,12 +111,11 @@ def baseline(s: Session, campaign: Campaign) -> Candidate | None:
 
 
 def track_of(cfg: CampaignConfig, candidate: Candidate) -> Track:
-    """Return the track of the candidate's run, its idea's: the track it is scored on.
+    """Return the track of the candidate's idea, its run's claim that it was made for: the track it is scored on.
 
     A candidate without one, such as the baseline or a reference, gets the first track (``fallback_track``).
     """
-    run = candidate.run
-    return fallback_track(cfg, run.idea.track if run is not None and run.idea is not None else None)
+    return fallback_track(cfg, candidate.idea.track if candidate.idea is not None else None)
 
 
 def fallback_track(cfg: CampaignConfig, name: TrackName | None) -> Track:

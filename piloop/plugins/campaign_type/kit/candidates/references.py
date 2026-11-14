@@ -10,6 +10,7 @@ from piloop.actor import Actor
 from piloop.db.events import emit
 from piloop.db.models import Campaign, EventModel
 from piloop.ids import CampaignId, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
@@ -44,8 +45,11 @@ def resolve(
     parent: Candidate | None,
     run_id: RunId | None,
     origin: Origin,
+    idea_id: IdeaId | None = None,
 ) -> tuple[Candidate, bool]:
     """Return the candidate for the tree of ``version``: the existing one, or a new row of ``origin`` under ``parent``.
+
+    A new row is made for the run's claim of ``idea_id``.
 
     Returns ``(candidate, created)``. An existing candidate is returned unchanged: a version that reverts to a known
     state is that state, whatever run or version reached it. Two runs that reach one new tree at once share it: the
@@ -58,6 +62,7 @@ def resolve(
     candidate = Candidate(
         campaign_id=campaign_id,
         run_id=run_id,
+        idea_id=idea_id,
         parent_id=parent.id if parent else None,
         tree_sha=version.tree,
         revision=version.revision,

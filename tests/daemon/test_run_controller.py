@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 from pytest_mock import MockerFixture
 from sqlalchemy import func, insert, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from piloop.actor import System
 from piloop.agents.launcher import Launcher
@@ -86,8 +86,8 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
-from piloop.plugins.campaign_type.kit.runs.stop import release
-from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, run_of, working_on
 from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.campaign_type.optimization.tables import SCHEMA
 from piloop.plugins.escalation.contract import ESCALATION
@@ -161,11 +161,10 @@ def make_run(
         s.flush()
         run = Run(
             campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
             base_candidate_id=base,
             harness='script',
             model='test-model',
+            claims=[RunClaim(idea_id=idea.id, attempt=1)],
         )
         s.add(run)
         s.flush()
@@ -367,20 +366,21 @@ def brief_of(db: Database, run_id: RunId) -> str:
 
 
 def run_row(db: Database, run_id: RunId) -> Run:
+    """The run's row with its claims and their ideas, which a test reads after the session."""
     with db.session() as s:
-        return s.get_one(Run, run_id)
+        return s.get_one(Run, run_id, options=[selectinload(Run.claims).selectinload(RunClaim.idea)])
 
 
 def idea_of(run: Run) -> Idea:
     """The idea that ``run`` claimed: each run of these tests claims one (``make_run``)."""
-    assert run.idea is not None, f'run#{run.id} claimed an idea'
-    return run.idea
+    [claim] = run.claims
+    return claim.idea
 
 
 def claimed_id(run: Run) -> IdeaId:
     """The id of the idea that ``run`` claimed."""
-    assert run.idea_id is not None, f'run#{run.id} claimed an idea'
-    return run.idea_id
+    [claim] = run.claims
+    return claim.idea_id
 
 
 @pytest.mark.usefixtures('submitting')
@@ -446,7 +446,7 @@ def test_successful_run_scores_the_commit(
     assert e.told == snapshot('score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1')
     assert e.parent_id == baseline(db, campaign.id).id
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DONE
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.DONE
         [agent_session] = s.scalars(select(AgentSession)).all()
         assert (agent_session.state, run_of(agent_session)) == (AgentSessionState.EXITED, run_id)
         feed = [(ev.kind, ev.target_kind) for ev in s.scalars(select(Event).order_by(Event.id)).all()]
@@ -680,8 +680,8 @@ def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as
     settle = mocker.spy(Optimization, 'settle')
     with scoring(ex, db):
         execute(ex, db, run_id)
-    [(_, _, settled, end, last)] = [c.args for c in settle.call_args_list]
-    assert (settled.id, end, last is not None) == (run_id, RunEnd.FINISHED, True), "the campaign's type settles it"
+    [(_, _, settled, end, mine)] = [c.args for c in settle.call_args_list]
+    assert (settled.run_id, end, len(mine)) == (run_id, RunEnd.FINISHED, 1), "the campaign's type settles its claim"
     assert [(c[0], c[1], c[3]) for c in scored(db, run_id)] == [
         ('the idea', 'best', 1),
         (UNCOMMITTED, Origin.SKIPPED, 0),
@@ -728,7 +728,7 @@ def test_a_clean_exit_with_no_changes_gives_the_run_up_and_opens_its_idea_again(
     run = run_row(db, run_id)
     assert (run.end, run.error) == (RunEnd.GAVE_UP, None)
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN, 'the claim ended with the run'
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.OPEN, 'the claim ended with the run'
 
 
 def test_timeout(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
@@ -1281,7 +1281,7 @@ def test_a_run_that_a_stop_closed_after_the_pass_took_its_implementer_never_star
         agent_session_id = implementer.id
     with db.session() as s:  # the next pass drains the run, which is still queued
         run = s.get_one(Run, run_id)
-        release(s, close_run(s, run, RunEnd.CAMPAIGN_STOPPED, None), RunEnd.CAMPAIGN_STOPPED, None)
+        settle_claims(s, close_run(s, run, RunEnd.CAMPAIGN_STOPPED, None), RunEnd.CAMPAIGN_STOPPED)
         s.commit()
     controller(db, runtime, tmp_path).execute(run_id, agent_session_id)
     with db.session() as s:
@@ -1432,7 +1432,7 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
 ) -> None:
     """The daemon ends a cancelled implementer on its next tick; one that ends before that does not requeue its idea.
 
-    What it submitted meanwhile is scored all the same."""
+    What it submitted meanwhile is scored all the same, and its score settles the idea."""
     write_toml(Path(campaign.path), HARNESS_APPEND + SUBMIT)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
@@ -1444,7 +1444,7 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
         execute(ex, db, run_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
-        assert (run.status, run.end, idea_of(run).status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
+        assert (run.status, run.end, idea_of(run).status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.DONE)
         assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
@@ -1792,7 +1792,7 @@ def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_att
     [(summary, status, *_)] = scored(db, run_id)
     assert (summary, status) == (UNCOMMITTED, Origin.SKIPPED), 'what it left is kept, not scored'
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.OPEN
 
     run_id = make_run(db, campaign, title='reported')
     with db.session() as s:
@@ -1877,7 +1877,7 @@ def test_a_stop_between_the_implementers_end_and_the_runs_close_leaves_the_row_t
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.RUNNING, None), 'stop() writes the row, not the dying thread'
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.CLAIMED, 'and returns the idea'
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.CLAIMED, 'and returns the idea'
 
 
 def test_an_evaluator_spawned_after_cancel_is_killed_at_once(

@@ -90,8 +90,8 @@ def test_six_runs_go_two_at_a_time_across_the_campaigns(host: Smoke) -> None:
         return not OPEN.intersection(statuses)
 
     wait_until(settled, timeout=900)
-    claims = host.sql('SELECT idea_id FROM runs')
-    assert None not in [r['idea_id'] for r in claims], 'each worker claimed an idea'
+    claimed = host.sql('SELECT r.id FROM runs r WHERE NOT EXISTS (SELECT 1 FROM run_claims c WHERE c.run_id = r.id)')
+    assert claimed == [], 'each worker claimed an idea'
     host.join_readers()
     agents = [a for _, _, a in host.queue_samples]
     assert agents, f'no sample; reader errors {host.errors[-3:]}'

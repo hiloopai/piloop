@@ -30,7 +30,7 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 |---|---|
 | `open` | On the board. An implementer can claim it, unless an `after` link holds it. |
 | `claimed` | A run claimed it. The run is open, or its commits wait for their scores. |
-| `done` | Its run finished and its last commit has a score. |
+| `done` | A submission for it has a score. |
 | `dropped` | Off the board. `open` puts it back. |
 
 ## Runs
@@ -45,9 +45,11 @@ piloop idea claim 2
 piloop idea propose "Model the text with an order-3 context mixer" --hypothesis "order 2 leaves context unused"
 ```
 
-The run tries that idea only. `--base 14` starts it from another candidate instead
+A run can claim more ideas, one after the other: a claim needs an open idea, and the idea stays claimed until the run
+ends. `--base 14` starts the run from another candidate instead, before its first submission
 ([lines and bases](/concepts/pool#lines-and-bases)). The implementer submits each version that it would ship with
-`piloop submit`, and the daemon scores it into the [pool](/concepts/pool).
+`piloop submit`, and the daemon scores it into the [pool](/concepts/pool). A submission is for one of the run's
+claims: `--idea 2` names it, and by default it is the run's newest claim.
 
 When the implementer exits, its run ends: `submitted` when it submitted a version, `gave_up` otherwise. It can also
 end the run first:
@@ -59,11 +61,15 @@ piloop run end gave_up --reason "the order-3 model does not fit in memory"
 The run also ends at its role's `timeout`, 3600 seconds by default. [`piloop run extend`](/reference/cli#piloop-run-extend)
 gives it more time. What the implementer left uncommitted becomes a `recovered` commit, which is never scored.
 
-| How the run ended | What happens to its idea |
+When the run ended and its submissions have their scores, each of its claims settles on its own submissions:
+
+| Its claim of the idea | What happens to the idea |
 |---|---|
-| `submitted`, or timed out after a submission | `done` once its last commit has a score. |
-| `gave_up`, failed, timed out with nothing submitted, `stalled` or stopped | Back to `open`, for another implementer. |
-| Cancelled | `dropped`. |
+| A submission for it has a score, however the run ended | `done`. |
+| No submission for it has a score, and the run was cancelled | Back to `open`, with a note that says who cancelled it. |
+| No submission for it has a score | Back to `open`, for another implementer, with a note that says why. |
+
+A run that reaches its timeout after it submitted ends `finished`.
 
 An implementer that failed to start claimed nothing: its run starts again with a new one, up to two times.
 
@@ -74,8 +80,8 @@ The daemon ends an agent that is stuck, so that it does not hold its slot until 
 minutes of a worker taking its job (`start_within`), or that writes nothing to its session for 20 minutes
 (`quiet_for`). A long tool call writes nothing until it returns: set `quiet_for` above your longest evaluation.
 
-The run of an agent that the policy ended ends `stalled`. That is not an attempt: `max_runs` does not count it, and its
-idea goes back to `open` with a note that says why. `piloop status` shows `ended stalled: <reason>`. The second stall
+The run of an agent that the policy ended ends `stalled`. That is not an attempt: `max_runs` does not count it, and
+each idea that it claimed without a scored submission goes back to `open` with a note that says why. `piloop status` shows `ended stalled: <reason>`. The second stall
 of an idea also sends you one escalation; the idea stays open. The policies are a plugin capability: see
 [liveness policies](/plugins/rules#liveness-policies).
 

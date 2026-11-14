@@ -47,7 +47,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of
 from piloop.plugins.campaign_type.kit.runs import ops as runs_ops
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.campaign_type.optimization.ops import follow_up
 from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import bare_config, end_of, reconfigured
@@ -92,14 +92,13 @@ def run_idea(db: Database, status: IdeaStatus, run: RunStatus, *, scoring: bool 
         s.add(
             Run(
                 campaign_id=CampaignId(1),
-                idea_id=idea_id,
-                attempt=1,
                 base_candidate_id=1,
                 harness='h',
                 model='m',
                 status=run,
                 end=end_of(run),
                 scoring=scoring,
+                claims=[RunClaim(idea_id=idea_id, attempt=1)],
             )
         )
         s.commit()
@@ -110,7 +109,13 @@ def run_candidate(db: Database, campaign: Campaign, *, origin: Origin = Origin.R
     """A candidate of ``origin`` of a run of a new idea from the baseline, with one measurement (score 0)."""
     idea_id = add_idea(db, campaign.id, f'tried {origin}')
     with db.session() as s:
-        run = Run(campaign_id=campaign.id, idea_id=idea_id, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+            claims=[RunClaim(idea_id=idea_id, attempt=1)],
+        )
         s.add(run)
         s.flush()
         c = Candidate(
@@ -404,7 +409,7 @@ def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, 
         return run.id, Agent(role='implementer', session=session.id)
 
 
-def test_a_worker_claims_one_open_idea_for_its_run_and_every_other_claim_is_refused(
+def test_a_worker_claims_open_ideas_for_its_run_and_every_other_claim_is_refused(
     me: Database, campaign: Campaign
 ) -> None:
     held, free, first, dropped = (add_idea(me, CampaignId(1), t) for t in ('held', 'free', 'first', 'dropped'))
@@ -443,9 +448,13 @@ def test_a_worker_claims_one_open_idea_for_its_run_and_every_other_claim_is_refu
         taken = backlog_ops.claim(s, free, actor=implementer).idea
         s.commit()
         run = s.get_one(Run, run_id)
-        assert (taken.status, run.idea_id, run.attempt) == (IdeaStatus.CLAIMED, free, 1)
-    with me.session() as s, pytest.raises(ops.Refused, match=f'run#{run_id} claimed idea#{free} already'):
+        assert (taken.status, run.claims[0].idea_id, run.claims[0].attempt) == (IdeaStatus.CLAIMED, free, 1)
+    with me.session() as s, pytest.raises(ops.Refused, match=f'idea#{free} is claimed: claim an open idea'):
+        backlog_ops.claim(s, free, actor=implementer)
+    with me.session() as s:
         backlog_ops.claim(s, first, actor=implementer)
+        s.commit()
+        assert [c.idea_id for c in s.get_one(Run, run_id).claims] == [free, first], 'a run claims any number'
 
 
 def test_a_dropped_prerequisite_frees_a_claim_as_the_board_lists_it(me: Database, campaign: Campaign) -> None:
@@ -486,9 +495,11 @@ def test_two_workers_that_claim_one_idea_at_once_get_it_once(me: Database, campa
     racing.join(10)
     assert refused == [f'idea#{idea} is claimed: claim an open idea']
     with me.session() as s:
-        assert [(r.id, r.idea_id) for r in s.scalars(select(Run).where(Run.id.in_((first, second))))] == [
-            (first, idea),
-            (second, None),
+        assert [
+            (r.id, [c.idea_id for c in r.claims]) for r in s.scalars(select(Run).where(Run.id.in_((first, second))))
+        ] == [
+            (first, [idea]),
+            (second, []),
         ]
 
 
@@ -508,7 +519,7 @@ def test_a_worker_proposes_its_own_idea_and_claims_it_but_files_none_for_others(
             implementer.signature,
             'halve the window',
         )
-        assert s.get_one(Run, run_id).idea_id == idea.id
+        assert s.get_one(Run, run_id).claims[0].idea_id == idea.id
 
 
 def test_a_worker_ends_its_own_running_run_once_with_or_without_a_reason_to_give_up(

@@ -265,7 +265,7 @@ class Campaigns:
                 planner.resume_unscored()
 
     def _fail_open(self, end: RunEnd, *, reaped: bool, sparing: Collection[AgentSessionId] = ()) -> None:
-        """End each run in flight as ``end`` and queue its idea again. Close each live agent except ``sparing``.
+        """End each run in flight as ``end``, and its claims once scored. Close each live agent except ``sparing``.
 
         Requested implementers and their queued runs are not changed, because they are requests, not processes. An idea
         that is ``scheduled`` without an open run stays so. Its run finished and only its scoring stopped, which

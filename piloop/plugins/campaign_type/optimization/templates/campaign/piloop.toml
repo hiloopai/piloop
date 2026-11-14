@@ -75,6 +75,7 @@ max_concurrent = 2                        # the most runs at once; more find a b
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
 # end_grace = 60                          # seconds after `piloop run end` before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
+# persistent = false                      # true: each implementer works its whole timeout, and claims ideas as it wants
 
 # [plugins.role.quick]                    # a role of your own that does runs: any new name with runs = true
 # runs = true                             # it takes every key and default of [plugins.role.implementer], its prompt included

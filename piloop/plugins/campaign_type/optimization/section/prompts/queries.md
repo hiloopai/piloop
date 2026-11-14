@@ -1,7 +1,7 @@
 ```sql
--- what is running right now
-SELECT r.id, i.title, r.harness, r.model, r.started_at FROM runs r JOIN ideas i ON i.id = r.idea_id
-WHERE r.status = 'running';
+-- what is running right now, with each idea that a run claimed
+SELECT r.id, i.title, r.harness, r.model, r.started_at FROM runs r
+LEFT JOIN run_claims c ON c.run_id = r.id LEFT JOIN ideas i ON i.id = c.idea_id WHERE r.status = 'running';
 
 -- the queue: open ideas the scheduler may take (filter by campaign, which the index serves; every 'after'
 -- prerequisite must be done or dropped)

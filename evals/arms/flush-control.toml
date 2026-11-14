@@ -1,0 +1,17 @@
+# The control of the flush A/B: pool-2w's team on the piloop of the flush arm, with one-idea implementers
+# (`persistent = false`, the default). The two arms differ only in the keys that flush-2w sets. Pin `piloop` to the
+# commit that the A/B runs at, the same in both arms.
+kind = "piloop"
+name = "flush-control"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@main"
+agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
+split = "sealed"
+
+[overlay.evaluator]
+noise_runs = 3
+
+[overlay.plugins.role.implementer]
+max_concurrent = 2
+timeout = 3600
+effort = "high"
+persistent = false

@@ -68,7 +68,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, working_on
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
@@ -219,10 +219,13 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
         'Plan: memoize decode()',
         'idea#2 claimed: halve the window',
     ], 'a worker that claims an idea gets what the board does not show: its hypothesis and its plan'
-    with pytest.raises(SystemExit, match='run#1 claimed idea#1 already: a run tries one idea'):
+    with pytest.raises(SystemExit, match='idea#2 is claimed: claim an open idea'):
         as_('implementer#1', 'idea', 'claim', '2')
     with db.session() as s:
-        assert [(r.id, r.idea_id, r.attempt) for r in s.scalars(select(Run).order_by(Run.id))] == [(1, 1, 1), (2, 2, 1)]
+        assert [(r.id, r.claims[0].idea_id, r.claims[0].attempt) for r in s.scalars(select(Run).order_by(Run.id))] == [
+            (1, 1, 1),
+            (2, 2, 1),
+        ]
         claims = s.scalars(select(Event).where(Event.kind == 'idea.status').order_by(Event.id)).all()
         assert [(e.target_id, e.actor) for e in claims] == [(1, 'implementer#1'), (2, 'implementer#2')], (
             'each claim is signed by its worker'
@@ -291,8 +294,6 @@ def test_a_claim_or_a_proposal_with_a_base_starts_the_run_from_that_candidate_an
         f'your checkout is at candidate#2 ({elsewhere[:12]})',
     ]
     assert Repo(checkout).head.commit.hexsha == elsewhere, 'the checkout of the caller moved'
-    with pytest.raises(SystemExit, match='run#1 claimed idea#1 already: a run chooses its base with its claim'):
-        as_('implementer#1', 'idea', 'propose', 'another', '--base', '1')
     as_('implementer#2', 'idea', 'propose', 'halve the window', '--base', '1')
     assert out().splitlines() == [
         'idea#2 claimed: halve the window',
@@ -1409,12 +1410,11 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
         s.add(
             Run(
                 campaign_id=idea.campaign_id,
-                idea_id=idea.id,
-                attempt=1,
                 base_candidate_id=1,
                 harness='script',
                 model='m',
                 status=RunStatus.RUNNING,
+                claims=[RunClaim(idea_id=idea.id, attempt=1)],
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
@@ -1484,12 +1484,11 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
         s.add(
             Run(
                 campaign_id=idea.campaign_id,
-                idea_id=idea.id,
-                attempt=1,
                 base_candidate_id=1,
                 harness='script',
                 model='m',
                 status=RunStatus.RUNNING,
+                claims=[RunClaim(idea_id=idea.id, attempt=1)],
             )
         )
         s.flush()
@@ -1565,12 +1564,11 @@ def test_run_extend_gives_the_running_implementer_more_time_and_says_how_much_in
         s.add(
             Run(
                 campaign_id=idea.campaign_id,
-                idea_id=idea.id,
-                attempt=1,
                 base_candidate_id=1,
                 harness='script',
                 model='m',
                 status=RunStatus.RUNNING,
+                claims=[RunClaim(idea_id=idea.id, attempt=1)],
             )
         )
         s.flush()
@@ -1852,13 +1850,12 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
         s.add(
             Run(
                 campaign_id=idea.campaign_id,
-                idea_id=idea.id,
-                attempt=1,
                 base_candidate_id=1,
                 harness='script',
                 model='m',
                 status=RunStatus.RUNNING,
                 started_at=utcnow() - timedelta(hours=2),  # quiet long enough that status asks for its jobs
+                claims=[RunClaim(idea_id=idea.id, attempt=1)],
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
@@ -2298,7 +2295,7 @@ def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_it
     run_cli(['idea', 'claim', '1'])
     assert out().splitlines() == [
         'idea#1 claimed: shorter lines',
-        'Your run is on track size: its best has the best size (lower is better), and holds score (margin 1)'
+        'idea#1 is on track size: its best has the best size (lower is better), and holds score (margin 1)'
         ' against the baseline.',
         '',
         '# Size track',
@@ -2315,7 +2312,7 @@ def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_it
     run_cli(['idea', 'propose', 'drop a blank line', '--track', 'score'])
     assert out().splitlines()[:2] == [
         'idea#5 claimed: drop a blank line',
-        'Your run is on track score: its best has the best score (higher is better), and holds size (margin 2)'
+        'idea#5 is on track score: its best has the best score (higher is better), and holds size (margin 2)'
         ' against the baseline.',
     ], 'a proposal says it too, and a track without an addendum ends with its rule'
 

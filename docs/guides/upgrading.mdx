@@ -35,7 +35,7 @@ piloop upgrade
 Then install the next release in the same way. `uv tool install piloop` drops the pin. Quote the requirement: `*` is
 a glob in zsh.
 
-This page covers the upgrades to 0.8.0, 0.7.0 and 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
+This page covers the upgrades to the next release, 0.8.0, 0.7.0 and 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
 [0.5.0](https://github.com/hiloopai/piloop/blob/v0.5.0/docs/guides/upgrading.mdx),
 [0.4.0](https://github.com/hiloopai/piloop/blob/v0.4.0/docs/guides/upgrading.mdx),
 [0.3.1](https://github.com/hiloopai/piloop/blob/v0.3.1/docs/guides/upgrading.mdx) or
@@ -122,6 +122,34 @@ Before 1.0, a minor release may break these, and the changelog says so:
 - The [database schema](/reference/schema), as `piloop sql` shows it.
 
 `piloop.capabilities` is the stable plugin API. Other `piloop.*` imports can change in any release.
+
+## Upgrading to the next release
+
+### A run claims any number of ideas
+
+A run may claim ideas, and propose its own, as many times as its implementer wants. The table `run_claims` (`run_id`,
+`idea_id`, `attempt`, `claimed_at`) holds the claims, and replaces `runs.idea_id` and `runs.attempt`. The migration
+moves each run's claim there, and a downgrade refuses a database where a run claimed more than one idea.
+
+- A query that joined a run to its idea joins its claims:
+
+  ```sql
+  SELECT r.id, i.title FROM runs r JOIN run_claims c ON c.run_id = r.id JOIN ideas i ON i.id = c.idea_id;
+  ```
+
+- The table `submissions` (`run_id`, `candidate_id`, `idea_id`, `event_id`, `submitted_at`) holds each submission,
+  for the claim that it was for, with its `run.submitted` event. Join an idea to what was submitted for it through it:
+  one candidate may be submitted for several ideas, by several runs. What settles a claim, what waits for a score and
+  what a worker hears all read it. `candidates.idea_id` names the claim that a candidate was made for, or last
+  submitted for.
+- `piloop submit --idea <id>` names the claim that a version is for. By default it is the run's newest claim.
+- `--base` of `piloop idea claim` and `piloop idea propose` works only before the run's first submission.
+- When the run ends and its submissions have their scores, each claim settles on its own: its idea is `done` once a
+  submission for it has a score, whatever the run's end, and `open` again otherwise.
+- A plugin's campaign type: `CampaignType.settle(s, claim, end, submissions)` settles one claim, with the run's
+  submissions for its idea, in place of `settle(s, run, end, last)`.
+- `persistent = true` on a role that does runs keeps each implementer working until its `timeout`: it claims, asks
+  for or proposes ideas as it wants, and the next run of its slot starts from the best. It is off by default.
 
 ## Upgrading to 0.8.0
 

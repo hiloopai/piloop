@@ -1,5 +1,6 @@
 """``optimization``: the research model, which improves the metrics of a repo through ideas, runs and candidates."""
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from piloop.plugins.campaign_type.contract import CampaignType, Planner, TypeHost
@@ -10,7 +11,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.db.models import Campaign
     from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
-    from piloop.plugins.campaign_type.kit.runs.tables import Run
+    from piloop.plugins.campaign_type.kit.runs.tables import RunClaim
     from piloop.plugins.contribution import RouteHost, Routes
     from piloop.plugins.vcs.contract import Version
 
@@ -37,11 +38,11 @@ class Optimization(CampaignType):
 
         return Routes(ROUTES)
 
-    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
-        """The idea is done after a finished run with a score, else open again (``release``)."""
+    def settle(self, s: Session, claim: RunClaim, end: RunEnd, submissions: Sequence[Candidate]) -> None:
+        """The idea is done once a submission for it has a score, else open again (``release``)."""
         from piloop.plugins.campaign_type.kit.runs.stop import release
 
-        release(s, run, end, last)
+        release(s, claim, end, submissions)
 
     def answers(self, s: Session, submission: Candidate, version: Version) -> bool:
         """Always: a score is the tree's, whichever version reached it."""

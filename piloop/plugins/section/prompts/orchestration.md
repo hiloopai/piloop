@@ -105,9 +105,9 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
   both.
 
 ```sql
--- tokens per idea: every implementer run of it, summed (NULL usage counts nothing)
+-- tokens per idea: every implementer run that claimed it, summed (a run of several ideas counts for each)
 SELECT i.id, i.title, SUM(json_extract(w.usage, '$.total')) AS tokens, COUNT(w.id) AS agents
-FROM ideas i JOIN runs r ON r.idea_id = i.id JOIN agent_sessions w ON w.subject_kind = 'run' AND w.subject_id = r.id
+FROM ideas i JOIN run_claims c ON c.idea_id = i.id JOIN agent_sessions w ON w.subject_kind = 'run' AND w.subject_id = c.run_id
 WHERE i.campaign_id = <campaign id> AND w.campaign_id = <campaign id> GROUP BY i.id ORDER BY tokens DESC;
 
 -- tokens per role, every agent of the campaign that ended (filter by campaign: that is what the index serves)

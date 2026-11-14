@@ -31,7 +31,6 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, L
 from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.ops import claim
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -44,6 +43,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 )
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import end_requested, end_run
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import AGENT
 from piloop.plugins.liveness.contract import Alive, EscalateStall, Stalled
@@ -137,7 +137,7 @@ class Replay:
                     run = s.get_one(Run, self.runs[a])
                     run.scoring = False
                     assert run.end is not None
-                    CAMPAIGN_TYPES.model_of(run.campaign.type)().settle(s, run, run.end, None)
+                    settle_claims(s, run, run.end)
                     s.commit()
             case other:
                 raise AssertionError(f'not a step of the model: {other}')
@@ -154,7 +154,6 @@ class Replay:
         with self.db.session() as s:
             run = Run(
                 campaign_id=self.campaign.id,
-                attempt=1,
                 base_candidate_id=baseline(self.db, self.campaign.id).id,
                 harness='script',
                 model='m',
@@ -248,7 +247,8 @@ class Replay:
                 w = s.get_one(AgentSession, self.rows[a])
                 assert w.state is ROWS[str(ag)], (a, w.state, ag)
                 run = s.get_one(Run, self.runs[a])
-                assert (run.idea_id == self.idea) is _at(state, 'claims', a), (a, 'claims', run.idea_id)
+                ideas = [c.idea_id for c in run.claims]
+                assert (self.idea in ideas) is _at(state, 'claims', a), (a, 'claims', ideas)
                 match run_state:
                     case 'running':
                         assert run.status is RunStatus.RUNNING, (a, run.status)

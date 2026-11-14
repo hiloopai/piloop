@@ -17,7 +17,6 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import Measured, TrackName
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, Standing, fallback_track
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.lineage.contract import (
     Graph,
     Judged,
@@ -85,13 +84,12 @@ class OptimizationLineage(LineageProvider):
             Candidate.summary,
             Candidate.created_at,
             Candidate.run_id,
-            Run.idea_id,
+            Candidate.idea_id,
             Idea.title,
             Idea.track,
         )
         rows = s.execute(
-            made.outerjoin(Run, Candidate.run_id == Run.id)
-            .outerjoin(Idea, Run.idea_id == Idea.id)
+            made.outerjoin(Idea, Candidate.idea_id == Idea.id)
             .where(Candidate.campaign_id == campaign.id)
             .order_by(Candidate.id)
         )

@@ -1977,3 +1977,140 @@ def test_optimization_0017_takes_a_stalled_end_and_downgrades_it_to_failed(tmp_p
         payloads = con.execute("SELECT payload FROM events WHERE kind = 'run.finished'").fetchall()
         assert [loads(p)['end'] for (p,) in payloads] == ['failed']
     assert _schema_of(path, 'runs')[:3] == before[:3], 'the table, its indexes and its triggers as they were'
+
+
+def test_optimization_0018_moves_each_run_s_claim_into_run_claims_names_each_candidate_s_idea_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    """A run of 0.8 claimed one idea at most: its claim moves to ``run_claims``, and each of its candidates names that
+    idea. The downgrade gives each run its claim back, and refuses a run that claimed more than one idea. An upgrade
+    after the downgrade moves the claims again."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0017')
+    run = 'INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model, started_at) VALUES '
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('one', '/one', '{}')")
+        for title in ('a', 'b'):
+            con.execute(
+                "INSERT INTO ideas (campaign_id, title, hypothesis, track, created_by) VALUES (1, ?, 'h', 's', 'test')",
+                (title,),
+            )
+        con.execute(run + "(1, 1, 1, 1, 'h', 'm', '2026-11-01 10:00:00')")
+        con.execute(run + "(1, 1, 2, 1, 'h', 'm', NULL)")
+        con.execute(run + "(1, NULL, NULL, 1, 'h', 'm', NULL)")
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'base', 'b')")
+        con.execute("INSERT INTO candidates (campaign_id, run_id, tree_sha, revision) VALUES (1, 2, 'made', 'm')")
+    before = {t: _schema_of(path, t)[:3] for t in ('runs', 'candidates')}
+    command.upgrade(chain, '0018')
+    with closing(sqlite3.connect(path)) as con, con:
+        claims = con.execute('SELECT run_id, idea_id, attempt, claimed_at FROM run_claims ORDER BY run_id').fetchall()
+        started = con.execute('SELECT created_at FROM runs WHERE id = 2').fetchone()[0]
+        assert claims == [(1, 1, 1, '2026-11-01 10:00:00'), (2, 1, 2, started)], 'a claim at its run start'
+        assert con.execute('SELECT id, idea_id FROM candidates ORDER BY id').fetchall() == [(1, None), (2, 1)]
+        assert 'idea_id' not in {c[1] for c in con.execute('PRAGMA table_info(runs)')}
+        with pytest.raises(sqlite3.IntegrityError, match='UNIQUE constraint failed: run_claims.idea_id'):
+            con.execute('INSERT INTO run_claims (run_id, idea_id, attempt) VALUES (3, 1, 2)')
+        con.execute('INSERT INTO run_claims (run_id, idea_id, attempt) VALUES (3, 2, 1)')
+        con.execute('INSERT INTO run_claims (run_id, idea_id, attempt) VALUES (2, 2, 2)')
+    with pytest.raises(RuntimeError, match=r'cannot downgrade: run#2 claimed more than one idea'):
+        command.downgrade(chain, '0017')
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute('DELETE FROM run_claims WHERE run_id = 2 AND idea_id = 2')
+    command.downgrade(chain, '0017')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT id, idea_id, attempt FROM runs ORDER BY id').fetchall() == [
+            (1, 1, 1),
+            (2, 1, 2),
+            (3, 2, 1),
+        ]
+        assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'run_claims'").fetchall() == []
+    assert {t: _schema_of(path, t)[1:3] for t in ('runs', 'candidates')} == {t: v[1:3] for t, v in before.items()}, (
+        'the indexes and triggers as they were'
+    )
+    assert 'FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE' in _schema_of(path, 'runs')[0], (
+        'the table-level constraint, as 0018 finds it'
+    )
+    command.upgrade(chain, '0018')
+    with closing(sqlite3.connect(path)) as con:
+        claims = con.execute('SELECT run_id, idea_id, attempt FROM run_claims ORDER BY run_id').fetchall()
+        assert claims == [(1, 1, 1), (2, 1, 2), (3, 2, 1)], 'upgraded again, each claim moves again'
+
+
+def test_optimization_0018_names_each_submission_s_claim_and_a_submitted_candidate_s_idea_by_its_submitter(
+    tmp_path: Path,
+) -> None:
+    """A run may submit a candidate that another run made, such as one that it left ``skipped``: the submission and the
+    candidate name the idea of the run that submitted it. One that no run submitted names its own run's idea."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0017')
+    run = 'INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model) VALUES '
+    candidate = 'INSERT INTO candidates (campaign_id, run_id, tree_sha, revision, origin) VALUES '
+    submit = (
+        "INSERT INTO events (target_kind, target_id, actor, payload) VALUES ('run', ?, 'implementer#1',"
+        " json_object('kind', 'run.submitted', 'candidate', ?, 'revision', 'r'))"
+    )
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('one', '/one', '{}')")
+        for title in ('a', 'b'):
+            con.execute(
+                "INSERT INTO ideas (campaign_id, title, hypothesis, track, created_by) VALUES (1, ?, 'h', 's', 'test')",
+                (title,),
+            )
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'base', 'b')")
+        con.execute(run + "(1, 1, 1, 1, 'h', 'm')")
+        con.execute(run + "(1, 2, 1, 1, 'h', 'm')")
+        con.execute(candidate + "(1, 1, 'left', 'l', 'skipped')")  # run 1 left it, and run 2 submitted it
+        con.execute(candidate + "(1, 1, 'kept', 'k', 'skipped')")
+        con.execute(submit, (2, 2))
+    command.upgrade(chain, '0018')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT id, run_id, idea_id FROM candidates ORDER BY id').fetchall() == [
+            (1, None, None),
+            (2, 1, 2),
+            (3, 1, 1),
+        ], "the submitting run's idea, else its own run's"
+        assert con.execute('SELECT run_id, candidate_id, idea_id FROM submissions').fetchall() == [(2, 2, 2)], (
+            'the submission names the claim that it was for'
+        )
+    command.downgrade(chain, '0017')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'submissions'").fetchall() == []
+        assert con.execute("SELECT count(*) FROM events WHERE kind = 'run.submitted'").fetchone() == (1,)
+
+
+def test_optimization_0018_names_the_ideas_of_thousands_of_submitted_candidates_within_seconds(tmp_path: Path) -> None:
+    """The backfill finds each candidate's last submitter once, not by a scan of the events for each candidate: a
+    quadratic one took 49 s for 8,000 candidates, past the wait of ``piloop upgrade``."""
+    n = 4000
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0017')
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('one', '/one', '{}')")
+        con.execute(
+            "INSERT INTO ideas (campaign_id, title, hypothesis, track, created_by) VALUES (1, 'a', 'h', 's', 'test')"
+        )
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'base', 'b')")
+        con.execute(
+            "INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 1, 'h', 'm')"
+        )
+        con.executemany(
+            "INSERT INTO candidates (campaign_id, run_id, tree_sha, revision) VALUES (1, 1, ?, 'r')",
+            [(f't{i}',) for i in range(n)],
+        )
+        con.executemany(
+            "INSERT INTO events (target_kind, target_id, actor, payload) VALUES ('run', 1, 'implementer#1',"
+            " json_object('kind', 'run.submitted', 'candidate', ?, 'revision', 'r'))",
+            [(i + 2,) for i in range(n)],
+        )
+    started = time.monotonic()
+    command.upgrade(chain, '0018')
+    took = time.monotonic() - started
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT count(*) FROM candidates WHERE idea_id = 1').fetchone()[0] == n
+    assert took < 5, f'{took:.1f} s for {n} candidates'

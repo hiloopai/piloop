@@ -39,7 +39,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of, branching,
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, working_on
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import Git
 from tests.conftest import EVALUATE, ScriptRuntime, bare_config, baseline, factory, reports, serving
@@ -87,12 +87,11 @@ def running(db: Database, campaign: Campaign, *, claimed: bool = True) -> RunId:
         s.flush()
         run = Run(
             campaign_id=campaign.id,
-            idea_id=idea.id if claimed else None,
-            attempt=1,
             base_candidate_id=base,
             harness='script',
             model='test-model',
             status=RunStatus.RUNNING,
+            claims=[RunClaim(idea_id=idea.id, attempt=1)] if claimed else [],
         )
         s.add(run)
         s.flush()
@@ -353,10 +352,14 @@ def test_a_claim_with_a_base_starts_the_run_there_and_its_submission_stands_agai
         backlog_ops.claim(s, idea.id, actor=agent, base=crash)
         s.commit()
         assert s.get_one(Run, run_id).base_candidate_id == crash
-        with pytest.raises(Refused, match='a run chooses its base with its claim'):
-            backlog_ops.claim(s, idea.id, actor=agent, base=better)
     path = checkout(campaign, tmp_path, 'branch', at=crash_revision(db, crash))
     child = submitted(db, campaign, run_id, commit(path, 'base\nx\ny\n'))
+    with db.session() as s:
+        more = Idea(track='score', campaign_id=campaign.id, title='more', hypothesis='h', created_by='test')
+        s.add(more)
+        s.flush()
+        with pytest.raises(Refused, match='a run chooses its base before its first submission'):
+            backlog_ops.claim(s, more.id, actor=agent, base=better)
     ex.score_submission(child)
     with db.session() as s:
         assert s.get_one(Candidate, child).parent_id == crash

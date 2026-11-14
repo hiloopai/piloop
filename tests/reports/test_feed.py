@@ -25,7 +25,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.reports import feed
 from tests.conftest import AUDITOR, elsewhere
@@ -203,11 +203,10 @@ def test_a_campaign_filter_follows_each_subject_to_its_campaign(
         candidate = s.scalars(select(Candidate).where(Candidate.campaign_id == campaign.id)).one()
         run = Run(
             campaign_id=mine.campaign_id,
-            idea_id=mine.id,
-            attempt=1,
             base_candidate_id=candidate.id,
             harness='script',
             model='m',
+            claims=[RunClaim(idea_id=mine.id, attempt=1)],
         )
         s.add(run)
         s.flush()
@@ -310,11 +309,10 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         candidate = s.scalars(select(Candidate).where(Candidate.campaign_id == campaign.id)).one()
         run = Run(
             campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
             base_candidate_id=candidate.id,
             harness='script',
             model='m',
+            claims=[RunClaim(idea_id=idea.id, attempt=1)],
         )
         s.add(run)
         s.flush()

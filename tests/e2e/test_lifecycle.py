@@ -179,7 +179,9 @@ def test_resume_and_the_two_workers_claim_the_two_ideas(live_campaign: Smoke) ->
     live_campaign.piloop('resume', live_campaign.name)
 
     def claimed() -> list[sqlite3.Row] | None:
-        rows = live_campaign.sql("SELECT id, idea_id FROM runs WHERE status = 'running' AND idea_id IS NOT NULL")
+        rows = live_campaign.sql(
+            "SELECT r.id, c.idea_id FROM runs r JOIN run_claims c ON c.run_id = r.id WHERE r.status = 'running'"
+        )
         return rows if len(rows) >= 2 else None
 
     wait_until(claimed, 'two workers that claimed an idea', timeout=300)
@@ -311,7 +313,7 @@ def test_graceful_stop(live_campaign: Smoke) -> None:
     campaign = live_campaign.campaign_row()
     assert campaign['status'] == 'stopped', dict(campaign)
     scored = live_campaign.sql(
-        'SELECT c.id, c.origin FROM candidates c JOIN runs r ON r.id = c.run_id WHERE r.idea_id = ?',
+        'SELECT c.id, c.origin FROM candidates c WHERE c.idea_id = ?',
         live_campaign.ideas['bz2'],
     )
     run = live_campaign.run_of('bz2')

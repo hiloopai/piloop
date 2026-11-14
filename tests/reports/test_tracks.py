@@ -15,7 +15,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.campaign_type.optimization.pack import pack
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.panels import Api, CandidatesPanel, Frame, campaigns, read_frame
@@ -41,7 +41,13 @@ def two_tracks(db: Database, campaign: Campaign) -> CampaignConfig:
         p = s.get_one(Campaign, campaign.id)
         cfg = reconfigured(p.config, **TRACKS)
         p.config = cfg
-        lighter = Run(campaign_id=campaign.id, idea_id=3, attempt=2, base_candidate_id=2, harness='script', model='m')
+        lighter = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=2,
+            harness='script',
+            model='m',
+            claims=[RunClaim(idea_id=3, attempt=2)],
+        )
         s.add(lighter)
         s.flush()
         s.get_one(Candidate, 1).measurements[0].metrics = {'score': 1.0, 'size': 12.0}

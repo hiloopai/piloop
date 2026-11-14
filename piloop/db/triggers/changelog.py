@@ -317,14 +317,18 @@ def payload(model: type[EventModel], row: Row, kind: str | None = None, **fields
     return f'json_object({", ".join(pairs)})'
 
 
-def event_insert(actor: str, target_kind: str, target_id: str, payload: str, where: str | None = None) -> str:
+def event_insert(
+    actor: str, target_kind: str, target_id: str, payload: str, where: str | None = None, source: str | None = None
+) -> str:
     """The INSERT that every event trigger runs. Each argument is a SQL expression. The kind is in the payload.
 
-    With ``where``, the event is written only when that holds. The time has milliseconds, as an event that the ORM
-    writes has microseconds.
+    With ``where``, the event is written only when that holds. With ``source``, a FROM clause, one event for each of
+    its rows that ``where`` selects. The time has milliseconds, as an event that the ORM writes has microseconds.
     """
     values = f'{NOW}, {actor}, {target_kind}, {target_id}, {payload}'
-    row = f'VALUES ({values})' if where is None else f'SELECT {values}\nWHERE {where}'
+    if source is not None:
+        values += f'\nFROM {source}'
+    row = f'VALUES ({values})' if where is None and source is None else f'SELECT {values}\nWHERE {where or 1}'
     return f'INSERT INTO events (at, actor, target_kind, target_id, payload)\n{row}'
 
 
@@ -481,9 +485,12 @@ DONE = f"'{IdeaStatus.DONE}'"
 
 
 def _no_open_run(idea: str, besides: str | None = None) -> str:
-    """Whether the idea ``idea`` (SQL) has no open run, besides the run ``besides`` (SQL)."""
-    other = '' if besides is None else f' AND id != {besides}'
-    return f'NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = {idea}{other} AND status IN {OPEN})'
+    """Whether the idea ``idea`` (SQL) has no claim of an open run, besides the run ``besides`` (SQL)."""
+    other = '' if besides is None else f' AND r.id != {besides}'
+    return (
+        'NOT EXISTS (SELECT 1 FROM run_claims o JOIN runs r ON r.id = o.run_id'
+        f' WHERE o.idea_id = {idea}{other} AND r.status IN {OPEN})'
+    )
 
 
 IDEA_SETTLED = event_insert(
@@ -499,18 +506,18 @@ RUN_SETTLED = Trigger(
     'runs',
     'AFTER UPDATE',
     of=('status',),
-    when=f'OLD.status IN {OPEN} AND NEW.status NOT IN {OPEN}'
-    f' AND (SELECT status FROM ideas WHERE id = NEW.idea_id) = {DONE}'
-    f' AND {_no_open_run("NEW.idea_id", "NEW.id")}',
+    when=f'OLD.status IN {OPEN} AND NEW.status NOT IN {OPEN}',
     body=event_insert(
         SESSION_ACTOR,
         "'idea'",
-        'NEW.idea_id',
-        payload(SubjectSettled, 'NEW', campaign='(SELECT campaign_id FROM ideas WHERE id = NEW.idea_id)'),
+        'c.idea_id',
+        payload(SubjectSettled, 'NEW', campaign='i.campaign_id'),
+        where=f'c.run_id = NEW.id AND i.status = {DONE} AND {_no_open_run("c.idea_id", "NEW.id")}',
+        source='run_claims c JOIN ideas i ON i.id = c.idea_id',
     ),
     temp=True,
 )
-"""``subject.settled`` on a ``done`` idea whose last open run ends."""
+"""``subject.settled`` on each ``done`` idea of a run's claims whose last open run ends."""
 
 OUTBOX = (
     inserted(AgentSessionRequested, 'agent_sessions', ("'agent_session'", 'NEW.id'), when="NEW.state = 'requested'"),

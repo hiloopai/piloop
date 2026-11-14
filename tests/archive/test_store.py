@@ -44,7 +44,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatu
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.cas.kit.objects import ObjectsCas, key
 from piloop.reports.feed import files_of
@@ -83,11 +83,10 @@ def add_run(
         owner = s.get_one(Idea, idea_id)
         run = Run(
             campaign_id=owner.campaign_id,
-            idea_id=idea_id,
-            attempt=len(owner.runs) + 1,
             base_candidate_id=1,
             harness='script',
             model='m',
+            claims=[RunClaim(idea_id=idea_id, attempt=len(owner.claims) + 1)],
         )
         s.add(run)
         s.flush()
@@ -478,7 +477,7 @@ def test_an_idea_deleted_since_its_archiving_is_still_restored_by_its_id(
     idea, row = archived_idea(db, campaign, home, store, 'short-lived')
     prune(db, store, home, row)
     with db.session() as s:
-        s.execute(delete(Run).where(Run.idea_id == idea))
+        s.execute(delete(Run).where(Run.id.in_(select(RunClaim.run_id).where(RunClaim.idea_id == idea))))
         s.execute(delete(Idea).where(Idea.id == idea))
         s.commit()
         assert restore(s, store, home, s.get_one(Campaign, campaign.id), ref(idea)).done.written == 1

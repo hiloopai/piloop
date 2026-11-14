@@ -4,7 +4,9 @@ Every NOT NULL column with a default also has a server default, so the raw-SQL i
 timestamps or statuses. ``docs/reference/schema.mdx`` (the DDL) is generated from these models.
 """
 
+import json
 import sys
+from collections.abc import Collection
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, get_args, get_origin
@@ -23,6 +25,7 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     Column,
+    ColumnElement,
     Computed,
     DateTime,
     Enum,
@@ -41,6 +44,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column, relationship
 from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy.sql.elements import SQLCoreOperations
 from sqlalchemy.types import TypeDecorator
 
 from piloop.api.contract import Access
@@ -470,6 +474,15 @@ class Campaign(Tracked, Base):
 
 NOT_RETIRED = Campaign.status != CampaignStatus.RETIRED
 """The campaigns that hold their names, that the daemon schedules, and that a listing shows unless asked."""
+
+
+def among[T: int | None](column: SQLCoreOperations[T], ids: Collection[T]) -> ColumnElement[bool]:
+    """Whether ``column`` is one of ``ids``, which go to SQLite as one JSON parameter (``json_each``).
+
+    An ``IN`` with one parameter for each id fails past SQLite's limit on the variables of a statement, 32,766.
+    """
+    values = func.json_each(json.dumps(list(ids))).table_valued('value')
+    return column.in_(select(values.c.value))
 
 
 def count[*Ts](s: Session, query: Select[*Ts]) -> int:

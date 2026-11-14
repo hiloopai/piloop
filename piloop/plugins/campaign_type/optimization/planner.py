@@ -27,7 +27,7 @@ from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
-from piloop.plugins.campaign_type.kit.runs.stop import release
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
@@ -115,11 +115,11 @@ class OptimizationPlanner:
                 remove_checkouts(self._host.home / RUNS / str(run.id), run.campaign, self._tracer)
 
     def steered_by(self, s: Session, agent_session: AgentSession) -> Steering | None:
-        """An implementer's run, and its idea once it claimed one, since the run started: it signs as ``run#<id>`` too."""
+        """An implementer's run, and each idea that it claimed, since the run started: it signs as ``run#<id>`` too."""
         run = s.get(Run, run_of(agent_session)) if run_of(agent_session) is not None else None
         if run is None:
             return None
-        targets = (TargetRef(RUN, run.id), *(() if run.idea_id is None else (TargetRef(IDEA, run.idea_id),)))
+        targets = (TargetRef(RUN, run.id), *(TargetRef(IDEA, c.idea_id) for c in run.claims))
         since = run.started_at or agent_session.started_at
         assert since is not None, 'a running implementer started'
         return Steering(targets, since, (f'run#{run.id}',))
@@ -149,14 +149,19 @@ class OptimizationPlanner:
         return Run.campaign_id.in_(select(Campaign.id).where(Campaign.type == CAMPAIGN_TYPES.name_of(self._kind)))
 
     def _fail_run(self, s: Session, run: Run, end: RunEnd) -> None:
-        """End ``run`` as ``end``, and its claim (``release``).
+        """End ``run`` as ``end``, and its claims (``settle_claims``) once its submissions have their scores.
 
-        A running run whose worker ended it is not failed: it is handed off (``_hand_off``).
+        A run whose submission still waits keeps its claims, so no other run takes their ideas: the next start scores
+        it and settles them (``runs.scoring``, ``resume_unscored``). A running run whose worker ended it is not failed:
+        it is handed off (``_hand_off``).
         """
         if run.status is RunStatus.RUNNING and (ending := end_requested(s, run)) is not None:
             self._hand_off(s, run, ending)
             return
-        release(s, close_run(s, run, end, None), end, None)
+        if submissions.all_scored(s, close_run(s, run, end, None).id):
+            settle_claims(s, run, end)
+        else:
+            run.scoring = True
         self._tracer.event('run.aborted', run=run.id, end=end)
 
     def _hand_off(self, s: Session, run: Run, ending: RunEndRequested) -> None:

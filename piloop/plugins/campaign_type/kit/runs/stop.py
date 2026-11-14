@@ -1,28 +1,30 @@
 """What the runs tell the stop rule and the campaigns' pass: attempts, new bests and runs, and when they settle."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
 from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
 from piloop.campaign.stop import _over_runs, _since_reopen, reopened_at, run_cancel
+from piloop.db.events import latest
 from piloop.db.models import (
     Campaign,
     Comment,
+    Event,
     EventModel,
+    among,
 )
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetRef
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED
-from piloop.plugins.campaign_type.kit.pool.scored import last_best_at, new_bests
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored, last_best_at, new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RunEnd, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 
 
 def attempt() -> ColumnElement[bool]:
@@ -63,55 +65,78 @@ def settled(s: Session, campaign: Campaign) -> bool:
 EventModel.retire('run.head_replaced')  # 0.5 cancelled a run whose head a verdict set by hand replaced
 
 
-def settle_cancelled(s: Session, run: Run, idea: Idea) -> None:
-    """Open a cancelled run's idea again, with a note on the idea that says why.
+def settle_claims(s: Session, run: Run, end: RunEnd) -> None:
+    """Let the run's campaign type settle each claim of ``run``, which ended ``end`` (``settle_claim``). The caller commits."""
+    for claim in run.claims:
+        settle_claim(s, claim, end)
 
-    A cancel stops a run, not its idea: another worker may claim it. To take the idea off the board, drop it.
+
+def settle_claim(s: Session, claim: RunClaim, end: RunEnd) -> None:
+    """Let the campaign type settle ``claim``, of a run that ended ``end``, on the run's submissions for it.
+
+    One whose idea someone set to another status meanwhile, or another run claimed since, has nothing to settle. The
+    caller commits.
     """
-    cancel = run_cancel(s, run.id)
-    by = f' by {cancel[0].actor}' if cancel is not None else ''
-    idea.status = IdeaStatus.OPEN
-    body = f'open: run#{run.id} was cancelled{by}; drop the idea to take it off the board'
-    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+    from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted_for  # it imports this module
 
-
-def release(s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
-    """End the claim of a run that ended ``end``, once its commits are judged, with a note on the idea when it reopens.
-
-    The idea is ``done`` after a finished run with a score: ``last``, the newest of its versions' candidates that has
-    one, a known tree included. A finished run without one, or any other end, opens it again for another worker, and the
-    note says why. A cancel settles as ``settle_cancelled`` says. An idea that someone set to another status meanwhile,
-    or a run that claimed nothing, has no claim to end.
-    """
-    idea = run.idea
-    if idea is None or idea.status is not IdeaStatus.CLAIMED:
+    if claim.idea.status is not IdeaStatus.CLAIMED or claim.idea.claims[-1] is not claim:
         return
-    match end:
-        case RunEnd.CANCELLED:
-            settle_cancelled(s, run, idea)
-            return
-        case RunEnd.FINISHED if last is not None and last.origin not in UNSCORED:
-            idea.status = IdeaStatus.DONE
-            return
-        case RunEnd.FINISHED:
-            why = 'it finished, but nothing that it saved has a score'
-        case _:
-            why = f'it ended {end}' + (f': {run.error}' if run.error else '')
-    reopen(s, run, idea, why)
+    kind = CAMPAIGN_TYPES.model_of(claim.run.campaign.type)()
+    kind.settle(s, claim, end, [s.get_one(Candidate, c) for c in submitted_for(s, claim)])
 
 
-def reopen(s: Session, run: Run, idea: Idea, why: str) -> None:
-    """Open the idea that ``run`` gave back again, for another worker, with a note on the idea that says ``why``."""
-    idea.status = IdeaStatus.OPEN
-    body = f'open: run#{run.id} gave the idea back; {why}'
-    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+def settle_cancelled(s: Session, claim: RunClaim) -> None:
+    """Open the idea of a cancelled run's claim again, with a note on the idea that says why.
+
+    A cancel stops a run, not its ideas: another worker may claim them. To take an idea off the board, drop it.
+    """
+    cancel = run_cancel(s, claim.run_id)
+    by = f' by {cancel[0].actor}' if cancel is not None else ''
+    claim.idea.status = IdeaStatus.OPEN
+    body = f'open: run#{claim.run_id} was cancelled{by}; drop the idea to take it off the board'
+    s.add(Comment(target=TargetRef(IDEA, claim.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+
+
+def release(s: Session, claim: RunClaim, end: RunEnd, submissions: Sequence[Candidate]) -> None:
+    """Settle ``claim`` of a run that ended ``end``, once its run's submissions are scored.
+
+    The idea is ``done`` once one of ``submissions``, the claim's own, has a score, whatever the run's end. Else a
+    cancel settles as ``settle_cancelled`` says, and any other end opens it again for another worker, with a note that
+    says why.
+    """
+    if any(score_of(s, c) is not None for c in submissions):
+        claim.idea.status = IdeaStatus.DONE
+        return
+    if end is RunEnd.CANCELLED:
+        settle_cancelled(s, claim)
+        return
+    why = f'it ended {end}' + (f': {claim.run.error}' if claim.run.error else '')
+    reopen(s, claim, why if not submissions else f'nothing that it submitted for it has a score; {why}')
+
+
+def reopen(s: Session, claim: RunClaim, why: str) -> None:
+    """Open the idea that the run of ``claim`` gave back again, for another worker, with a note on it that says ``why``."""
+    claim.idea.status = IdeaStatus.OPEN
+    body = f'open: run#{claim.run_id} gave the idea back; {why}'
+    s.add(Comment(target=TargetRef(IDEA, claim.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+
+
+def score_of(s: Session, candidate: Candidate) -> CandidateScored | None:
+    """The newest score of ``candidate`` (``candidate.scored``), or None before it has one."""
+    found = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate.id))
+    return found[1] if found is not None else None
 
 
 def stalls(s: Session, runs: Collection[RunId]) -> dict[RunId, int]:
-    """Count, for each of ``runs`` that claimed an idea, the other runs of that idea that ended ``stalled``."""
-    other = aliased(Run)
-    stalled = (other.idea_id == Run.idea_id) & (other.id != Run.id) & (other.end == RunEnd.STALLED)
-    rows = s.execute(select(Run.id, func.count(other.id)).join(other, stalled).where(Run.id.in_(runs)).group_by(Run.id))
+    """Count, for each of ``runs`` that claimed an idea, the other runs of its ideas that ended ``stalled``."""
+    mine, theirs, other = aliased(RunClaim), aliased(RunClaim), aliased(Run)
+    rows = s.execute(
+        select(mine.run_id, func.count(other.id.distinct()))
+        .join(theirs, (theirs.idea_id == mine.idea_id) & (theirs.run_id != mine.run_id))
+        .join(other, (other.id == theirs.run_id) & (other.end == RunEnd.STALLED))
+        .where(among(mine.run_id, runs))
+        .group_by(mine.run_id)
+    )
     return {RunId(run): count for run, count in rows}
 
 

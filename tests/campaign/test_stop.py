@@ -53,7 +53,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.controller import RunFinished
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_best
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.facts import (
@@ -158,8 +158,6 @@ def add_run(
         in_flight = status in (RunStatus.QUEUED, RunStatus.RUNNING)
         run = Run(
             campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
             base_candidate_id=1,
             harness='h',
             model='m',
@@ -168,6 +166,7 @@ def add_run(
             error=error,
             started_at=utcnow() - started_at,
             finished_at=None if in_flight else utcnow() - finished_at,
+            claims=[RunClaim(idea_id=idea.id, attempt=1)],
         )
         s.add(run)
         s.commit()
@@ -297,8 +296,8 @@ def test_max_runs_waits_for_a_finished_run_whose_commits_are_scored(db: Database
     def scoring(on: bool, idea: IdeaStatus) -> tuple[str | None, int]:
         with db.session() as s:
             run = s.get_one(Run, run_id)
-            assert run.idea is not None
-            run.scoring, run.idea.status = on, idea
+            assert run.claims[0].idea is not None
+            run.scoring, run.claims[0].idea.status = on, idea
             s.commit()
             return reason(db, campaign), runs(s, s.get_one(Campaign, campaign.id))
 
@@ -568,7 +567,13 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        run = Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+            claims=[RunClaim(idea_id=idea, attempt=1)],
+        )
         s.add(run)
         s.flush()
         s.add(
@@ -612,7 +617,13 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        run = Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+            claims=[RunClaim(idea_id=idea, attempt=1)],
+        )
         s.add(run)
         s.flush()
         s.add(
@@ -667,7 +678,15 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str) -> int:
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        s.add(Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m'))
+        s.add(
+            Run(
+                campaign_id=campaign.id,
+                base_candidate_id=1,
+                harness='script',
+                model='m',
+                claims=[RunClaim(idea_id=idea, attempt=1)],
+            )
+        )
         if hold == 'pause':
             pause(s, campaign.id, System.HUMAN, evals=False, reason='too expensive')
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='over budget', ending=Ending.WRAP_UP)

@@ -2994,7 +2994,7 @@
     "/v1/ideas/{idea}": {
       "get": {
         "summary": "Idea",
-        "description": "An idea in full: its definition, its links and its runs.",
+        "description": "An idea in full: its definition, its links and the runs that claimed it.",
         "operationId": "idea",
         "parameters": [
           {
@@ -7599,7 +7599,7 @@
               }
             ],
             "title": "Idea",
-            "description": "The idea that its worker claimed. Null until it claims one."
+            "description": "The idea that its worker claimed last. Null until it claims one."
           },
           "title": {
             "anyOf": [
@@ -9063,6 +9063,18 @@
             ],
             "title": "Blob",
             "description": "The address in the CAS of the versions that the repo of record lacks (``Repository.send``), from a checkout on a\nworker elsewhere. None: the repo of record has the version. Text, so a client loads no CAS."
+          },
+          "idea": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idea",
+            "description": "The idea of the caller's run's claim that the version is for. None: the run's newest claim."
           }
         },
         "type": "object",

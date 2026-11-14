@@ -23,7 +23,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 EventModel.retire('scout.requested')  # 0.1.0 requested a scout sweep with it; piloop has no scout now
 
 if TYPE_CHECKING:  # runs need the backlog: only the relationship names them
-    from piloop.plugins.campaign_type.kit.runs.tables import Run
+    from piloop.plugins.campaign_type.kit.runs.tables import RunClaim
 
 
 # the types of its columns, beside core's in Base.type_annotation_map
@@ -79,7 +79,8 @@ class Idea(Tracked, Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
     campaign: Mapped[Campaign] = relationship()
-    runs: Mapped[list[Run]] = relationship(back_populates='idea', order_by='Run.id')
+    claims: Mapped[list[RunClaim]] = relationship(back_populates='idea', order_by='RunClaim.attempt')
+    """The runs' claims of the idea, oldest first."""
     links: Mapped[list[IdeaLink]] = relationship(
         foreign_keys='IdeaLink.idea_id',
         back_populates='idea',

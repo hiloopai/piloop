@@ -43,7 +43,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.executor.contract import (
     AgentFinished,
     AgentJob,
@@ -363,11 +363,10 @@ def implementer_of(
         s.flush()
         run = Run(
             campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
             base_candidate_id=1,
             harness='script',
             model='test-model',
+            claims=[RunClaim(idea_id=idea.id, attempt=1)],
         )
         s.add(run)
         s.commit()

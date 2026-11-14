@@ -26,7 +26,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackNa
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import DECISION, ESCALATION, Choice, EscalationView
 from piloop.settings import DaemonSettings
 from tests.conftest import elsewhere
@@ -45,7 +45,13 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         s.flush()
         mine = idea(s, campaign, 'mine', IdeaStatus.OPEN)
         theirs = idea(s, other, 'theirs', IdeaStatus.OPEN)
-        run = Run(campaign_id=mine.campaign_id, idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
+        run = Run(
+            campaign_id=mine.campaign_id,
+            base_candidate_id=1,
+            harness='h',
+            model='m',
+            claims=[RunClaim(idea=mine, attempt=1)],
+        )
         s.add(run)
         s.add(
             AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow())

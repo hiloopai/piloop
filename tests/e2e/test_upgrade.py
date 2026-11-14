@@ -307,7 +307,7 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     for key in ('better', 'worse'):
         wait_until(lambda key=key: idea_status(smoke, key) == 'done', timeout=900)
     [baseline] = mean_bytes(smoke, "c.origin = 'baseline'")
-    scores = {key: min(mean_bytes(smoke, 'r.idea_id = ?', smoke.ideas[key])) for key in ('better', 'worse')}
+    scores = {key: min(mean_bytes(smoke, 'c.idea_id = ?', smoke.ideas[key])) for key in ('better', 'worse')}
     assert scores['better'] < baseline < scores['worse'], (baseline, scores)
     wait_until(lambda: smoke.run_in('cancelled', OPEN, within=False), timeout=120)
     cancelled = smoke.run_of('cancelled')

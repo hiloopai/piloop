@@ -45,7 +45,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.app import (
@@ -205,8 +205,6 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
         done = idea(s, p, 'more lines', IdeaStatus.DONE, created_at=ago(hours=3))
         run = Run(
             campaign_id=done.campaign_id,
-            idea=done,
-            attempt=1,
             base_candidate_id=1,
             harness='pi',
             model='m',
@@ -214,6 +212,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
             end=RunEnd.FINISHED,
             started_at=ago(hours=2),
             finished_at=ago(hours=1),
+            claims=[RunClaim(idea=done, attempt=1)],
         )
         s.add(run)
         s.flush()
@@ -223,6 +222,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     id=n,
                     campaign_id=p.id,
                     run_id=run.id,
+                    idea_id=done.id,
                     parent_id=n - 1,
                     tree_sha=f't{n}',
                     revision='x',
@@ -237,12 +237,11 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
         live = idea(s, p, 'longer lines', IdeaStatus.CLAIMED, created_at=ago(minutes=20))
         live_run = Run(
             campaign_id=live.campaign_id,
-            idea=live,
-            attempt=1,
             base_candidate_id=4,
             harness='pi',
             model='m',
             status=RunStatus.RUNNING,
+            claims=[RunClaim(idea=live, attempt=1)],
         )
         s.add(live_run)
         s.flush()

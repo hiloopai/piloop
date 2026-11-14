@@ -15,6 +15,7 @@ The tables that a review reads most:
 |---|---|
 | `events` | The feed of what happened: `at`, `target_kind`, `target_id`, and a JSON `payload` whose `$.kind` names the event. Count the kinds first: `SELECT payload->>'$.kind', COUNT(*) FROM events GROUP BY 1`. |
 | `candidates` | A version that a run submitted: `run_id`, `parent_id`, `revision`, `origin`. |
+| `submissions` | One submission of a candidate (`candidate_id`) by a run (`run_id`) for one of its claims (`idea_id`): which ideas a candidate was submitted for. |
 | `measurements` | One evaluation of a candidate: `metrics` (JSON), `error`, `seconds`, `evaluator_id` (one evaluator per split). |
 | `runs`, `ideas`, `comments` | A run of an idea, the idea, and comments: notes, messages, escalations (`kind`). |
 | `agent_sessions` | An agent: its run (`subject_kind`, `subject_id`), `harness`, `model`, `session_id`, `usage`, `state`, `error`. |
@@ -138,7 +139,8 @@ the run read them is in its session file.
 SELECT r.id run, i.title, r.started_at,
        (SELECT COUNT(*) FROM comments n WHERE n.kind = 'note' AND n.created_at < r.started_at) notes_before,
        (SELECT COUNT(*) FROM comments n WHERE n.kind = 'note' AND n.target_kind = 'idea' AND n.target_id = i.id) notes_on_it
-FROM runs r JOIN ideas i ON i.id = r.idea_id WHERE r.campaign_id = <p> ORDER BY r.id;
+FROM runs r JOIN run_claims c ON c.run_id = r.id JOIN ideas i ON i.id = c.idea_id WHERE r.campaign_id = <p>
+ORDER BY r.id;
 ```
 
 **Messages that never reached their agent**, against all the messages, and why. Check this in every review: an agent
@@ -153,7 +155,7 @@ SELECT e.payload->>'$.error' why, COUNT(*) FROM events e WHERE e.payload->>'$.ki
 **From submit to told**: how long a worker waited to hear its score.
 
 ```sql
-WITH s AS (SELECT payload->>'$.candidate' c, MIN(at) at FROM events WHERE payload->>'$.kind' = 'run.submitted' GROUP BY 1),
+WITH s AS (SELECT candidate_id c, MIN(submitted_at) at FROM submissions GROUP BY 1),
      t AS (SELECT payload->>'$.candidate' c, MIN(at) at FROM events WHERE payload->>'$.kind' = 'run.score_told' GROUP BY 1)
 SELECT COUNT(*) told, ROUND(AVG((julianday(t.at) - julianday(s.at)) * 86400)) mean_s,
        ROUND(MAX((julianday(t.at) - julianday(s.at)) * 86400)) max_s,

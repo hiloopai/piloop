@@ -2,16 +2,15 @@ from pydantic import Field
 from sqlalchemy import func, select
 
 from piloop.api.views import Lines, Rendered
-from piloop.db.models import AgentSession, Comment
-from piloop.ids import TargetRef
+from piloop.db.models import AgentSession, Comment, among
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
-from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, run_of
 from piloop.plugins.section.contract import Rendering, Section, Surface
 
 
 class IdeaComments(Section):
-    """``[plugins.section.idea_comments]``: the comments on the reader's idea and on its runs, the latest last.
+    """``[plugins.section.idea_comments]``: the comments on the ideas that the reader claimed and on their runs, the latest last.
 
     A comment on a run is about the idea too, such as a human's decision on an earlier attempt, or a sweep's note
     on why it failed. A run's brief needs them: the next attempt is a new run.
@@ -28,10 +27,11 @@ class IdeaComments(Section):
     def render(self, r: Rendering) -> Rendered | None:
         if r.reader is None or (agent := r.s.get(AgentSession, r.reader)) is None or (run := run_of(agent)) is None:
             return None
-        if (idea_id := r.s.get_one(Run, run).idea_id) is None:
+        if not (ideas := [c.idea_id for c in r.s.get_one(Run, run).claims]):
             return None
-        on_idea = Comment.target == TargetRef(IDEA, idea_id)
-        on_its_runs = (Comment.target_kind == RUN) & Comment.target_id.in_(select(Run.id).where(Run.idea_id == idea_id))
+        on_idea = (Comment.target_kind == IDEA) & among(Comment.target_id, ideas)
+        claims = select(RunClaim.run_id).where(among(RunClaim.idea_id, ideas))
+        on_its_runs = (Comment.target_kind == RUN) & Comment.target_id.in_(claims)
         about = on_idea | on_its_runs
         total = r.s.scalar(select(func.count()).select_from(Comment).where(about)) or 0
         if not total:

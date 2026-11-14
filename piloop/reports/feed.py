@@ -58,7 +58,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import produced
 from piloop.plugins.campaign_type.kit.pool.pool import best_scores
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, newest_claim, run_of
 from piloop.problems import explain
 from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
@@ -180,8 +180,8 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         runs=[
             OpenRun(
                 id=r.id,
-                idea=r.idea_id,
-                title=r.idea.title if r.idea is not None else None,
+                idea=claim.idea_id if (claim := newest_claim(r)) is not None else None,
+                title=claim.idea.title if claim is not None else None,
                 harness=r.harness,
                 model=r.model,
                 status=str(r.status),

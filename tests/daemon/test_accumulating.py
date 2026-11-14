@@ -25,6 +25,7 @@ from piloop.plugins.campaign_type.accumulating import Accumulating
 from piloop.plugins.campaign_type.accumulating.planner import AccumulatingPlanner
 from piloop.plugins.campaign_type.accumulating.trunk import Batch, TrunkAdvanced, decide, head, start
 from piloop.plugins.campaign_type.contract import TypeHost
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
@@ -33,15 +34,16 @@ from piloop.plugins.campaign_type.kit.evaluation import submissions
 from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_scores
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
-from piloop.plugins.campaign_type.kit.runs.controller import Measuring
+from piloop.plugins.campaign_type.kit.runs.controller import Measuring, close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.vcs.git import Git
 from piloop.plugins.vcs.git.commands import commit_env
 from piloop.settings import AgentSettings
 from tests.conftest import ScriptRuntime
 from tests.daemon.test_accumulating_model import WORKER, fresh
-from tests.daemon.test_pool import controller, running, submitted
+from tests.daemon.test_pool import controller, implementer, running, submitted
 from tests.daemon.test_submissions import agent_running
 
 STEER_LINE_CHARS = AgentSettings().steer_line_chars
@@ -207,6 +209,46 @@ def test_a_version_that_merged_the_trunk_and_kept_its_own_files_is_merged_again_
     assert message.startswith(f'[piloop] candidate#{mine} ({merged_in[:12]}): merged into the trunk'), message
 
 
+def test_a_tree_submitted_again_for_another_claim_settles_both_claims_on_its_merge(
+    db: Database, tmp_path: Path
+) -> None:
+    """A run submits a tree for idea A, claims B, merges the trunk into its work and keeps its files: the same tree,
+    submitted again for B. Each submission keeps the claim that it was for, so the merge makes both ideas done."""
+    campaign = fresh(db, tmp_path, 'two-claims')
+    merges(db, campaign, running(db, campaign), work(campaign, tmp_path, 'first', {'fib.py': 'first\n'}))
+    with db.session() as s:
+        trunk = head(s, s.get_one(Campaign, campaign.id))
+        assert trunk is not None
+    run_id = running(db, campaign)
+    agent_running(db, run_id)
+    refused = work(campaign, tmp_path, 'mine', {'fib.py': 'mine\n'})
+    mine = submitted(db, campaign, run_id, refused)
+    assert batch_of(db, campaign) is None, 'it conflicts with the trunk'
+    agent = implementer(db, run_id)
+    with db.session() as s:
+        other = Idea(campaign_id=campaign.id, track='score', title='b', hypothesis='h', created_by='test')
+        s.add(other)
+        s.flush()
+        backlog_ops.claim(s, other.id, actor=agent)
+        s.commit()
+        second = other.id
+    worktree = Repo(tmp_path / 'mine')
+    worktree.git.merge('-q', '-s', 'ours', '--no-edit', trunk.revision, env=commit_env(WORKER, WORKER))
+    assert submitted(db, campaign, run_id, Revision(worktree.head.commit.hexsha)) == mine, 'the same tree, for B'
+    batch = batch_of(db, campaign)
+    assert batch is not None and batch.members == (mine,)
+    scored(db, batch.merge, 1)
+    with db.session() as s:
+        assert decide(s, batch) is True
+        run = s.get_one(Run, run_id)
+        settle_claims(s, close_run(s, run, RunEnd.FINISHED, None), RunEnd.FINISHED)
+        first = run.claims[0].idea_id
+        assert {i: s.get_one(Idea, i).status for i in (first, second)} == {
+            first: IdeaStatus.DONE,
+            second: IdeaStatus.DONE,
+        }, 'each claim settles on its own submissions'
+
+
 def merges(db: Database, campaign: Campaign, run_id: RunId, revision: Revision) -> CandidateId:
     """Submit ``revision`` of ``run_id`` and merge it into the trunk alone: the trunk moves."""
     mine = submitted(db, campaign, run_id, revision)
@@ -251,10 +293,12 @@ def test_the_type_starts_work_from_the_trunk_takes_one_track_and_settles_a_cance
         row = s.get_one(Campaign, campaign.id)
         assert Accumulating().base(s, row) == head(s, row)
         run = s.get_one(Run, run_id)
-        Accumulating().settle(s, run, RunEnd.CANCELLED, None)
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN, 'a cancel opens it again'
-        Accumulating().settle(s, run, RunEnd.FINISHED, None)
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN, 'an idea that is not claimed stays as it is'
+        settle_claims(s, run, RunEnd.CANCELLED)
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.OPEN, 'a cancel opens it again'
+        settle_claims(s, run, RunEnd.FINISHED)
+        assert s.get_one(Idea, run.claims[0].idea_id).status is IdeaStatus.OPEN, (
+            'an idea that is not claimed stays as it is'
+        )
         s.rollback()
     with db.session() as s:
         assert sync(s, s.get_one(Campaign, campaign.id)) is False, 'one track: the config stands'

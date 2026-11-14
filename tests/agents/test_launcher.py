@@ -6,7 +6,9 @@ import time
 import tomllib
 from collections.abc import Callable, Sequence
 from datetime import timedelta
+from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from covalence import Cid
@@ -77,7 +79,7 @@ from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import MCP, PROMPT, SESSION_ID, Usage, UserConfig, each_provider
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
-from piloop.plugins.role.contract import FIRST_MESSAGE
+from piloop.plugins.role.contract import FIRST_MESSAGE, ImplementerRole
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, set_secret
 from piloop.plugins.section.context import Context
@@ -345,6 +347,40 @@ def test_a_roles_addendum_follows_the_campaign_brief_in_that_roles_briefs_only(
         worker = brief_in(s, p, IMPLEMENTER)
     assert audit.index('# Demo') < audit.index('# Decide fast') < audit.index('## Working with the piloop')
     assert '# Decide fast' not in worker
+
+
+def test_persistent_selects_the_end_section_of_the_implementers_prompt_and_nothing_else(
+    campaign: Campaign, db: Database
+) -> None:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        fresh = brief_in(s, p, IMPLEMENTER)
+        p.config = load_campaign_config(Path(campaign.path), plugins={'role': {IMPLEMENTER: {'persistent': True}}})
+        persistent = brief_in(s, p, IMPLEMENTER)
+    head, end = fresh.split('\n## End\n')[0], persistent.split('\n## End\n')[1]
+    assert persistent.startswith(head), 'the same prompt up to its End section'
+    assert end.lstrip().startswith('Work until you are stopped') and '`piloop escalate`' in end
+    assert fresh.split('\n## End\n')[1].lstrip().startswith('When you are done, stop')
+    assert persistent.split('\n# Demo')[1] == fresh.split('\n# Demo')[1], 'the rest of the brief is the same'
+
+
+def test_persistent_leaves_a_plugin_roles_own_prompt_as_written_unless_the_role_gives_its_persistent_one(
+    tmp_path: Path,
+) -> None:
+    """Only the built-in prompt has the End section that ``persistent`` replaces. A plugin role's prompt is its own, as
+    a configured ``prompt`` is: with ``persistent`` its ``PERSISTENT_PROMPT``, else as written."""
+    (tmp_path / 'mine.md').write_text('# Mine\nTry the idea.\n')
+    (tmp_path / 'mine_persistent.md').write_text('# Mine\nTry ideas until you are stopped.\n')
+
+    class Mine(ImplementerRole):
+        PROMPT: ClassVar[Traversable | None] = tmp_path / 'mine.md'
+
+    class MineToo(Mine):
+        PERSISTENT_PROMPT: ClassVar[Traversable | None] = tmp_path / 'mine_persistent.md'
+
+    assert Mine(persistent=True).own_prompt() == '# Mine\nTry the idea.\n'
+    assert MineToo(persistent=True).own_prompt() == '# Mine\nTry ideas until you are stopped.\n'
+    assert MineToo().own_prompt() == '# Mine\nTry the idea.\n'
 
 
 def test_a_roles_first_message_names_its_brief(

@@ -13,8 +13,9 @@ record who changed a row and log each change in `events`.
 - A **campaign** is one repo. An **agent session** is one agent process, in any role.
 - A **comment** or an **event** points at any row through `(target_kind, target_id)`, so it has no foreign key.
 - An **idea** is something to try. `idea_links` holds an `after` link between two ideas of one campaign.
-- A **run** is one implementer session, from its base: the best, or the candidate of `--base`. Its `idea_id` is null
-  until it claims an idea.
+- A **run** is one implementer session, from its base: the best, or the candidate of `--base`. `run_claims` holds the
+  ideas that it claimed, any number. `submissions` holds what it submitted for each claim, and a candidate's `idea_id`
+  the claim that it was made for, or last submitted for.
 - A **candidate** is a distinct state of the code, identified by its git tree. `parent_id` is its line.
 - An **evaluator** is one version of the evaluate command and the metrics. A **measurement** is one run of an
   evaluator on a candidate.

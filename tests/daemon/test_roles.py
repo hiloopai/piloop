@@ -125,7 +125,7 @@ def runs_by_role(db: Database) -> list[tuple[int, str, int | None, str]]:
             (
                 run.id,
                 run.role,
-                run.idea_id,
+                run.claims[0].idea_id if run.claims else None,
                 s.scalars(select(AgentSession.kind).where(working_on(run.id))).one(),
             )
             for run in s.scalars(select(Run).order_by(Run.id))

@@ -202,7 +202,7 @@ def test_a_worker_killed_during_a_run_loses_its_lease_and_the_run_is_no_attempt(
     run = run_row(db, run_id)
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.WORKER_LOST)
     with db.session() as s:
-        idea = s.get_one(Idea, run.idea_id)
+        idea = s.get_one(Idea, run.claims[0].idea_id)
         assert idea.status is IdeaStatus.OPEN, 'its claim ended with the run: another worker may take it'
         w = s.scalars(select(AgentSession)).one()
         assert w.state is AgentSessionState.KILLED and str(w.error).startswith('worker lost: w2 was silent for')

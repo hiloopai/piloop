@@ -1,0 +1,18 @@
+# The flush arm of the A/B: flush-control with persistent implementers. Each one works its whole hour, claims, asks
+# for or proposes ideas as it wants, and its slot's next run starts from the best, in the same harness session
+# (`continuity = "resume"`). Pin `piloop` to the commit that the A/B runs at, the same in both arms.
+kind = "piloop"
+name = "flush-2w"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@main"
+agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
+split = "sealed"
+
+[overlay.evaluator]
+noise_runs = 3
+
+[overlay.plugins.role.implementer]
+max_concurrent = 2
+timeout = 3600
+effort = "high"
+persistent = true
+continuity = "resume"

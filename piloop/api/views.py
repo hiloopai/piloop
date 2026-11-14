@@ -94,7 +94,7 @@ class OpenRun(View):
 
     id: RunId
     idea: IdeaId | None
-    """The idea that its worker claimed. Null until it claims one."""
+    """The idea that its worker claimed last. Null until it claims one."""
     title: str | None
     harness: str
     model: str

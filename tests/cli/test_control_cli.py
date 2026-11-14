@@ -19,7 +19,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.settings import Settings
 from tests.cli.test_cli import run_cli
 from tests.conftest import at_head, bare_config
@@ -82,7 +82,9 @@ def crashed(campaign_path: Path) -> int:
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'tried'])
     with database() as db, db.session() as s:
-        run = Run(campaign_id=1, idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=1, base_candidate_id=1, harness='script', model='m', claims=[RunClaim(idea_id=1, attempt=1)]
+        )
         s.add(run)
         s.flush()
         c = Candidate(campaign_id=1, run_id=run.id, parent_id=1, tree_sha='t', revision='c')

@@ -15,5 +15,6 @@ follow.
 
 ## End
 
-When you are done, stop: your run ends with what you submitted. A note on your idea of what worked, with the numbers,
-helps the next run. `piloop run end gave_up` ends your run now and gives your idea back.
+When you are done, stop: your run ends with what you submitted. An idea that you claimed is done once a submission for
+it has a score; each other one goes back to the board. A note on your idea of what worked, with the numbers, helps the
+next run. `piloop run end gave_up` ends your run now and gives back each idea that has no scored submission.

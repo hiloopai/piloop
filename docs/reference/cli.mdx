@@ -1226,7 +1226,7 @@ Exits non-zero when one is missing or corrupt.
 ### piloop submit
 
 ```text
-piloop submit [ARGS]
+piloop submit [OPTIONS] [ARGS]
 ```
 
 Score a commit of your run. It returns at once: where it stands comes to you as a `[piloop]` message.
@@ -1234,11 +1234,16 @@ Score a commit of your run. It returns at once: where it stands comes to you as 
 piloop runs the campaign's evaluate command on the commit, and scores it into the campaign's pool. Keep working
 meanwhile. The message gives its score and its gain over its parent, your line's best and the campaign's best. A
 commit whose first score beats the best is evaluated again until it is confirmed, then it can be the best. A
-campaign can cap the submissions of a run (`[evaluator] submissions`).
+campaign can cap the submissions of a run (`[evaluator] submissions`). A submission is for one of your claims, by
+default your newest: when the run ends, an idea is done once a submission for it has a score.
 
 **Arguments**:
 
 * `REVISION`: The commit to submit. Default: the one that your checkout is at.
+
+**Parameters**:
+
+* `--idea INT`: The claim that it is for. Default: your run's newest claim.
 
 ### piloop token
 

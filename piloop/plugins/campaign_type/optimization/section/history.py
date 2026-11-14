@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from piloop.api.views import Rendered, Text
 from piloop.db.models import AgentSession, Campaign
 from piloop.ids import AgentSessionId
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.submissions import ideas_of
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.campaign_type.optimization.history import history, latest_notes
@@ -34,9 +36,10 @@ class History(Section):
     """How many of the latest notes on the campaign, its ideas and its runs the section lists at most."""
 
     def render(self, r: Rendering) -> Rendered:
-        mine = _idea_of(r.s, r.reader)
+        mine = _ideas_of(r.s, r.reader)
         ranked = _ranked(r.s, r.campaign, mine)
-        chosen = f'; besides idea#{mine.id}, those that made a new best, then the newest' if mine is not None else ''
+        claimed = ', '.join(f'idea#{i}' for i in sorted(mine))
+        chosen = f'; besides {claimed}, those that made a new best, then the newest' if mine else ''
         notes = latest_notes(r.s, r.campaign, self.findings)
         kept = len(new_bests(r.s, r.campaign))
 
@@ -52,16 +55,15 @@ class History(Section):
         return Rendered(title='History', blocks=(Text(text=text(low).strip()),))
 
 
-def _idea_of(s: Session, reader: AgentSessionId | None) -> Idea | None:
-    """The idea of the reader's run, or None for a reader without one."""
+def _ideas_of(s: Session, reader: AgentSessionId | None) -> set[IdeaId]:
+    """The ideas that the reader's run claimed: none for a reader without a run."""
     if reader is None or (agent := s.get(AgentSession, reader)) is None or run_of(agent) is None:
-        return None
-    return s.get_one(Run, run_of(agent)).idea
+        return set()
+    return {c.idea_id for c in s.get_one(Run, run_of(agent)).claims}
 
 
-def _ranked(s: Session, campaign: Campaign, mine: Idea | None) -> list[Idea]:
+def _ranked(s: Session, campaign: Campaign, mine: set[IdeaId]) -> list[Idea]:
     """The campaign's ideas but ``mine``, most relevant first: those that made a new best, then the rest, newest first."""
     ideas = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.id.desc())).all()
-    bests = [s.get_one(Candidate, e.target_id) for e, _ in new_bests(s, campaign)]
-    kept = {c.run.idea_id for c in bests if c.run is not None}
-    return sorted((i for i in ideas if mine is None or i.id != mine.id), key=lambda idea: idea.id not in kept)
+    kept = set().union(*ideas_of(s, {CandidateId(e.target_id) for e, _ in new_bests(s, campaign)}).values())
+    return sorted((i for i in ideas if i.id not in mine), key=lambda idea: idea.id not in kept)

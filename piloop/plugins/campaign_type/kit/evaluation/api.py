@@ -118,10 +118,10 @@ def submit(s: Writing, me: Acting, api: Api, body: SubmitBody) -> Submission:
             submissions.retried(s, own, me)
             s.commit()
             return _submission(s, own)
-        submissions.refuse(s, run)
+        submissions.refuse(s, run, body.idea)
         if version is None:
             version = _received(s, repo, api.cas, run, body)
-        candidate = submissions.submit(s, run, version, repo, me)
+        candidate = submissions.submit(s, run, version, repo, me, body.idea)
     s.commit()
     return _submission(s, candidate)
 

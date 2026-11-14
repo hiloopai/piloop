@@ -12,6 +12,7 @@ from rich.text import Text
 
 from piloop.cli import common
 from piloop.cli.client import daemon_http
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
@@ -122,13 +123,17 @@ def submit(
     blob: Annotated[
         str | None, cyclopts.Parameter(help='The versions that the repo of record lacks, in the CAS.', show=False)
     ] = None,
+    idea: Annotated[
+        IdeaId | None, cyclopts.Parameter(help="The claim that it is for. Default: your run's newest claim.")
+    ] = None,
 ) -> None:
     """Score a commit of your run. It returns at once: where it stands comes to you as a `[piloop]` message.
 
     piloop runs the campaign's evaluate command on the commit, and scores it into the campaign's pool. Keep working
     meanwhile. The message gives its score and its gain over its parent, your line's best and the campaign's best. A
     commit whose first score beats the best is evaluated again until it is confirmed, then it can be the best. A
-    campaign can cap the submissions of a run (`[evaluator] submissions`).
+    campaign can cap the submissions of a run (`[evaluator] submissions`). A submission is for one of your claims, by
+    default your newest: when the run ends, an idea is done once a submission for it has a score.
     """
     if revision is None:
         from piloop.plugins.vcs.contract import VCS  # here: only this command reads a checkout; the others load no vcs
@@ -136,7 +141,7 @@ def submit(
         with closing(VCS.selected({}).open(Path.cwd())) as checkout:
             revision = checkout.head().revision
     with EvaluationClient.connect(daemon_http()) as client:
-        answer = client.submit(SubmitBody(revision=revision, blob=blob))
+        answer = client.submit(SubmitBody(revision=revision, blob=blob, idea=idea))
     match answer.told:
         case None:
             line = f'candidate#{answer.candidate} is queued: where it stands comes as a [piloop] message'

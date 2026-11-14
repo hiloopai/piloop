@@ -28,7 +28,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.executor.kit.transfers import BUILDS
 from piloop.plugins.leader.local import LocalLeader
 from piloop.proc import Inherited, alive, started
@@ -493,12 +493,11 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
         s.add(
             Run(
                 campaign_id=1,
-                idea_id=1,
-                attempt=1,
                 base_candidate_id=1,
                 harness='h',
                 model='m',
                 status=RunStatus.RUNNING,
+                claims=[RunClaim(idea_id=1, attempt=1)],
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name

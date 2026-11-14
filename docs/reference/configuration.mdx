@@ -500,7 +500,7 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 
 `[plugins.role.implementer]`, and every `[plugins.role.<name>]` table with `runs = true`: a role that does runs.
 
-The run queue starts its agents. Each agent claims one idea, in a new checkout of the best (or of another
+The run queue starts its agents. Each agent claims ideas, in a new checkout of the best (or of another
 candidate, `--base`), and its versions are scored into the pool. A new role of this kind takes the implementer's defaults, its prompt included.
 
 | Key | Type | Default | Description |
@@ -511,6 +511,7 @@ candidate, `--base`), and its versions are scored into the pool. A new role of t
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `end_grace` | duration | `"PT1M"` | How long after an implementer ended its run (`piloop run end`) the daemon ends it, and every process that it left: its last tool call returns first. |
 | `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea. A run that its campaign would not launch now (paused, stopped, within its wrap-up lead, or held by the startup breaker) is not queued again: it fails at once and frees its slot. |
+| `persistent` | boolean | `false` | Each implementer works its whole `timeout`, the period of a flush to the best: it claims, asks for (`piloop escalate`) or proposes ideas as it wants, and the next run of its slot starts from the campaign type's base. It selects the End section of the built-in prompt, or a plugin role's `PERSISTENT_PROMPT`, and nothing else. |
 
 ## Global settings: `config.toml`
 

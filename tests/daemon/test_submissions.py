@@ -2,6 +2,7 @@
 
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from contextlib import closing
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from git import Repo
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pytest_mock import MockerFixture
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
@@ -18,12 +19,16 @@ from piloop.campaign.ops import Refused
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Turn
 from piloop.daemon.main import Daemon
+from piloop.db import sql
 from piloop.db.events import in_order, latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.contract import TypeHost
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import measure
@@ -48,7 +53,9 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import end_run
-from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, working_on
+from piloop.plugins.campaign_type.optimization import Optimization
+from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
@@ -113,12 +120,13 @@ def running(db: Database, campaign: Campaign, title: str = 'more lines') -> RunI
     return run_id
 
 
-def submitted(db: Database, campaign: Campaign, run_id: RunId, revision: Revision) -> CandidateId:
+def submitted(
+    db: Database, campaign: Campaign, run_id: RunId, revision: Revision, idea: IdeaId | None = None
+) -> CandidateId:
     with db.session() as s, closing(Git().open(Path(campaign.path))) as repo:
         agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
-        candidate = submit(
-            s, s.get_one(Run, run_id), repo.version(revision), repo, Agent(role='implementer', session=agent.id)
-        )
+        me = Agent(role='implementer', session=agent.id)
+        candidate = submit(s, s.get_one(Run, run_id), repo.version(revision), repo, me, idea)
         s.commit()
         return candidate.id
 
@@ -203,10 +211,32 @@ def test_a_run_that_claimed_no_idea_submits_nothing(
     """Scored on no idea's track, its version would stand for nothing on the board."""
     run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
     with db.session() as s:
-        s.get_one(Run, run_id).idea_id = None
+        s.execute(delete(RunClaim).where(RunClaim.run_id == run_id))
         s.commit()
     with pytest.raises(SubmitRefused, match=rf'run#{run_id} has claimed no idea: `piloop idea claim`'):
         submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
+
+
+def test_a_submission_is_for_the_claim_that_it_names_by_default_the_newest_and_never_for_another_runs(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    other = running(db, campaign, 'other')
+    with db.session() as s:
+        first, theirs = s.get_one(Run, run_id).claims[0].idea_id, s.get_one(Run, other).claims[0].idea_id
+        agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        idea = Idea(campaign_id=campaign.id, track='score', title='next', hypothesis='h', created_by='test')
+        s.add(idea)
+        s.flush()
+        backlog_ops.claim(s, idea.id, actor=Agent(role='implementer', session=agent.id))
+        s.commit()
+        second = idea.id
+    newest = submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
+    named = submitted(db, campaign, run_id, commit(checkout, 'base\na\nb\n'), first)
+    with db.session() as s:
+        assert [s.get_one(Candidate, c).idea_id for c in (newest, named)] == [second, first]
+    with pytest.raises(SubmitRefused, match=rf'run#{run_id} has no claim of idea#{theirs}: it claimed idea#{first}'):
+        submitted(db, campaign, run_id, commit(checkout, 'base\nc\n'), theirs)
 
 
 def test_a_run_that_is_not_running_takes_no_submission(
@@ -230,18 +260,18 @@ def test_at_the_end_of_a_run_its_versions_that_it_did_not_submit_are_skipped_and
     later = commit(checkout, 'base\na\nb\n')
     with closing(Git().open(Path(campaign.path))) as repo:
         versions = [repo.version(sent), repo.version(later)]
-        last = ex._unsubmitted(run_id, campaign.id, repo, versions)
+        ex._unsubmitted(run_id, campaign.id, repo, versions)
     with db.session() as s:
         [one, two] = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
         assert (one.origin, two.origin, two.measurements) == (Origin.RUN, Origin.SKIPPED, [])
-        assert last == one.id
+        assert one.idea_id == two.idea_id == s.get_one(Run, run_id).claims[0].idea_id, "made for the run's claim"
         close_run(s, s.get_one(Run, run_id), RunEnd.FINISHED, None).scoring = True
         s.commit()
     assert scored(db, one.id) is not None and scored(db, two.id) is None
-    ex._settle(run_id, RunEnd.FINISHED, last)
+    ex._settle(run_id, RunEnd.FINISHED)
     with db.session() as s:
-        idea = s.get_one(Run, run_id).idea
-        assert idea is not None and idea.status is IdeaStatus.DONE
+        [claim] = s.get_one(Run, run_id).claims
+        assert claim.idea.status is IdeaStatus.DONE
 
 
 def queue_of(tmp_path: Path, *scores: int) -> list[str]:
@@ -453,7 +483,7 @@ def test_a_run_that_ends_while_its_submission_is_scored_settles_on_its_score(
     with db.session() as s:
         close_run(s, s.get_one(Run, run_id), RunEnd.WORKER_LOST, 'lost').scoring = True
         s.commit()
-    settling = threading.Thread(target=ex._settle, args=(run_id, RunEnd.WORKER_LOST, None))
+    settling = threading.Thread(target=ex._settle, args=(run_id, RunEnd.WORKER_LOST))
     settling.start()
     settling.join(0.5)
     assert settling.is_alive() and scoring(db, run_id), 'it waits for the score'
@@ -463,9 +493,64 @@ def test_a_run_that_ends_while_its_submission_is_scored_settles_on_its_score(
     other = running(db, campaign, 'other')
     submitted(db, campaign, other, commit(worktree_of(campaign, tmp_path, 'second'), 'base\nb\n'))
     ex.launcher.cancel()
-    ex._settle(other, RunEnd.FINISHED, None)
+    ex._settle(other, RunEnd.FINISHED)
     with db.session() as s:
         assert s.get_one(Run, other).status is RunStatus.RUNNING, 'a stop settles nothing: the next daemon does'
+
+
+def test_a_daemon_stop_before_a_submission_is_scored_keeps_its_claim_until_the_next_start_settles_it_on_the_score(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    """A stop, or the start after a crash, fails the run (``fail_open``). Its claim holds while its submission waits: no
+    other run claims the idea, and the next start scores the submission and settles the claim (``resume_unscored``)."""
+    run_id = running(db, campaign)
+    candidate = submitted(db, campaign, run_id, commit(worktree(campaign, tmp_path), 'base\na\n'))
+    planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, at_once), Optimization())
+    with db.session() as s:
+        planner.fail_open(s, RunEnd.DAEMON_STOPPED, reaped=False, sparing=())
+        s.commit()
+        run = s.get_one(Run, run_id)
+        [claim] = run.claims
+        assert (run.end, run.scoring, claim.idea.status) == (RunEnd.DAEMON_STOPPED, True, IdeaStatus.CLAIMED)
+        idea = claim.idea_id
+    other = running(db, campaign, 'other')
+    with db.session() as s, pytest.raises(Refused, match=f'idea#{idea} is claimed: claim an open idea'):
+        agent = s.scalars(select(AgentSession).where(working_on(other))).one()
+        backlog_ops.claim(s, idea, actor=Agent(role='implementer', session=agent.id))
+    ex.score_submission(candidate)
+    planner.resume_unscored()
+    with db.session() as s:
+        assert (s.get_one(Idea, idea).status, s.get_one(Run, run_id).scoring) == (IdeaStatus.DONE, False)
+
+
+def test_a_submission_that_sql_deletes_is_gone_for_every_reader_and_its_claim_settles_on_none(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    """``piloop sql`` may write ``submissions``. What waits for a score and what settles a claim both read it, so an
+    edit by SQL changes both alike: a run whose submission is deleted waits for no score, and its idea opens again."""
+    run_id = running(db, campaign)
+    candidate = submitted(db, campaign, run_id, commit(worktree(campaign, tmp_path), 'base\na\n'))
+    assert [c.id for c in waiting_of(db, campaign)] == [candidate]
+    with db.session() as s:
+        agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        me = Agent(role='implementer', session=agent.id)
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=me)) as con:
+        assert sql.run(con, f'DELETE FROM submissions WHERE run_id = {run_id}').changes == 1
+    planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, at_once), Optimization())
+    with db.session() as s:
+        assert (waiting(s, s.get_one(Campaign, campaign.id)), submissions_of(s, run_id)) == ([], [])
+        planner.fail_open(s, RunEnd.DAEMON_STOPPED, reaped=False, sparing=())
+        s.commit()
+        run = s.get_one(Run, run_id)
+        assert (run.scoring, run.claims[0].idea.status) == (False, IdeaStatus.OPEN), 'it waits for nothing'
+
+
+def at_once(body: Callable[[], None]) -> Future[None]:
+    """Run ``body`` now, as a daemon's thread would: a ``TypeHost.submit``."""
+    body()
+    done: Future[None] = Future()
+    done.set_result(None)
+    return done
 
 
 def test_the_gain_over_the_parent_and_over_the_best_are_recorded_apart(

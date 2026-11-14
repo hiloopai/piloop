@@ -27,7 +27,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatu
 from piloop.plugins.campaign_type.kit.backlog.wire import IdeasQuery, PriorityBody
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.settings import Settings
 from tests.conftest import AUDITOR, EveryClient, serving_api
 from tests.reports.test_history import idea
@@ -45,12 +45,11 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         old = idea(s, p, 'more lines', IdeaStatus.DONE)
         run = Run(
             campaign_id=old.campaign_id,
-            idea=old,
-            attempt=1,
             base_candidate_id=1,
             harness='pi',
             model='m',
             error='no commit',
+            claims=[RunClaim(idea=old, attempt=1)],
         )
         s.add(run)
         s.flush()

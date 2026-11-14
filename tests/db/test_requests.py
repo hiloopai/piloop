@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from tests.conftest import AUDITOR
 
 
@@ -61,7 +61,11 @@ def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tu
         s.add(idea)
         s.flush()
         run = Run(
-            campaign_id=idea.campaign_id, idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m'
+            campaign_id=idea.campaign_id,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+            claims=[RunClaim(idea_id=idea.id, attempt=1)],
         )
         s.add(run)
         s.flush()

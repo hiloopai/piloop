@@ -79,7 +79,6 @@ from piloop.ids import (
 )
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
-from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -122,7 +121,8 @@ from piloop.plugins.campaign_type.kit.pool.pool import (
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored, record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
-from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
+from piloop.plugins.campaign_type.kit.runs.tables import Run, newest_claim, working_on
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -411,7 +411,7 @@ class RunController:
                     self.executor.cancel(AgentKey(agent_session_id))
                 end = RunEnd.NOT_STARTED if closed else RunEnd.FAILED
                 self._close(span, run_id, end, error)
-                self._settle(run_id, end, None)
+                self._settle(run_id, end)
 
     def _execute(self, run_id: RunId, agent_session_id: AgentSessionId, span: Span) -> None:
         with self.launcher.lock:
@@ -528,13 +528,13 @@ class RunController:
                     )
                 case Lost(reason=reason):
                     self._close(span, run_id, RunEnd.WORKER_LOST, reason)
-                    self._settle(run_id, RunEnd.WORKER_LOST, None)
+                    self._settle(run_id, RunEnd.WORKER_LOST)
                 case NotStarted():
                     if not self._relaunch(span, run_id, agent_session_id, log_dir):
                         with self._db.session() as s:
                             end, error = unstarted_end(s, run_id, agent_session_id)
                         self._close(span, run_id, end, error)
-                        self._settle(run_id, end, None)
+                        self._settle(run_id, end)
                 case Ran():
                     self._ran(
                         span,
@@ -596,8 +596,9 @@ class RunController:
         self._keep_cut_work(run_id, name, repo, versions, cut=ending is None)
         end, error = handed_off(ending) if ending is not None else (RunEnd.DAEMON_STOPPED, None)
         self._close(span, run_id, end, error)
-        last = self._unsubmitted(run_id, campaign_id, repo, versions) if ending is not None and versions else None
-        self._settle(run_id, end, last)
+        if ending is not None and versions:
+            self._unsubmitted(run_id, campaign_id, repo, versions)
+        self._settle(run_id, end)
 
     def _stopped(self, span: Span, run_id: RunId) -> None:
         """Trace the end that a daemon stop writes on the run (``Scheduler._fail_run``), which owns the row."""
@@ -643,8 +644,9 @@ class RunController:
         )
         end, error = run_outcome(facts)
         self._close(span, run_id, end, error)
-        last = self._unsubmitted(run_id, campaign_id, repo, versions) if versions else None
-        self._settle(run_id, end, last)
+        if versions:
+            self._unsubmitted(run_id, campaign_id, repo, versions)
+        self._settle(run_id, end)
 
     def _relaunch(self, span: Span, run_id: RunId, agent_session_id: AgentSessionId, log_dir: Path) -> bool:
         """Queue the run again with a new implementer, up to its role's ``startup_relaunches``, after it failed to start.
@@ -710,10 +712,16 @@ class RunController:
             return
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            candidate = run.base
+            candidate, claim = run.base, newest_claim(run)
             for version in versions:
                 candidate, _ = resolve(
-                    s, run.campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RECOVERED
+                    s,
+                    run.campaign_id,
+                    version,
+                    parent=candidate,
+                    run_id=run_id,
+                    origin=Origin.RECOVERED,
+                    idea_id=claim.idea_id if claim is not None else None,
                 )
             s.commit()
 
@@ -762,18 +770,17 @@ class RunController:
                 end, campaign_id = run.end, campaign.id
                 vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
                 received = latest(s, RunReceived, Event.target == TargetRef(RUN, run_id))
-            last = None
             try:
                 with closing(vcs.open(campaign_path)) as repo:
                     revisions = received[1].revisions if received is not None else []
                     versions = [repo.version(revision) for revision in revisions]
                     span.set(versions=len(versions))
-                    last = self._unsubmitted(run_id, campaign_id, repo, versions)
+                    self._unsubmitted(run_id, campaign_id, repo, versions)
             except Exception as e:
                 span.error(e)
                 end = RunEnd.FAILED
             assert end is not None  # a run whose commits are scored is closed
-            self._settle(run_id, end, last)
+            self._settle(run_id, end)
 
     def remeasure(self, candidate_id: CandidateId) -> None:
         """Evaluate a candidate with the campaign's current evaluator, as ``pool.due`` asks, then confirm it if due.
@@ -859,25 +866,24 @@ class RunController:
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
         return self._measure(None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir)
 
-    def _unsubmitted(
-        self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version]
-    ) -> CandidateId | None:
-        """Keep each new version of the run as ``skipped``, and return its newest submission, or None.
+    def _unsubmitted(self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version]) -> None:
+        """Keep each new version of the run as ``skipped``, made for the run's newest claim.
 
         A version that it submitted is its submission's candidate. A tree that is a candidate already stays as it is.
-        The submissions settle the run's idea, not a skipped version, which never enters the pool. ``_settle`` waits
+        The submissions settle the run's claims, not a skipped version, which never enters the pool. ``_settle`` waits
         for their scores.
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            name, candidate = run.campaign.name, run.base
+            name, candidate, claim = run.campaign.name, run.base, newest_claim(run)
+            idea = claim.idea_id if claim is not None else None
             for version in versions:
-                candidate, _ = resolve(s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.SKIPPED)
+                candidate, _ = resolve(
+                    s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.SKIPPED, idea_id=idea
+                )
             s.commit()
-            mine = submitted(s, run_id)
         for i, version in enumerate(versions):
             repo.keep(version.revision, run_pin(name, run_id, i))
-        return mine[-1] if mine else None
 
     def score_submission(self, candidate_id: CandidateId) -> None:
         """Score a submitted candidate into the pool (``_score_one``), and tell where it stands. Never raises.
@@ -1210,18 +1216,14 @@ class RunController:
                 s.commit()
         span.set(status=end.status, end=end, error=error)
 
-    def _settle(self, run_id: RunId, end: RunEnd, last: CandidateId | None) -> None:
-        """After the run's commits are scored, end its ``scoring``, and let its campaign's type settle its idea.
+    def _settle(self, run_id: RunId, end: RunEnd) -> None:
+        """After the run's commits are scored, end its ``scoring``, and let its campaign's type settle each claim.
 
-        ``last`` is the newest candidate of the run's versions that has a score: it decides whether the idea is done.
-        It first waits until each submission of the run is scored (``score_submission``), however the run ended: its
-        idea is settled on them. A daemon that stops meanwhile leaves the run ``scoring``, for the next one.
+        It first waits until each submission of the run is scored (``score_submission``), however the run ended: each
+        claim is settled on its own submissions (``settle_claims``). A daemon that stops meanwhile leaves the run
+        ``scoring``, for the next one.
         """
-
-        def scored(s: Session) -> bool:
-            waiting = {c.id for c in submissions.waiting(s, s.get_one(Run, run_id).campaign)}
-            return waiting.isdisjoint(submitted(s, run_id))
-
+        scored = partial(submissions.all_scored, run_id=run_id)
         if not self._db.wait_until(scored, on=SETTLES, give_up=self.launcher.cancelled.is_set):
             return
         with self.launcher.lock:
@@ -1230,8 +1232,7 @@ class RunController:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
                 run.scoring = False
-                kind = CAMPAIGN_TYPES.model_of(run.campaign.type)()
-                kind.settle(s, run, end, s.get(Candidate, last) if last is not None else None)
+                settle_claims(s, run, end)
                 s.commit()
 
     def _context(
@@ -1276,8 +1277,8 @@ def track_brief(idea: Idea) -> str | None:
         for m in track.guardrails
     )
     rule = (
-        f'Your run is on track {track.name}: its best has the best {track.primary.name} ({track.primary.direction} is'
-        f' better), and holds {guards} against the baseline.'
+        f'idea#{idea.id} is on track {track.name}: its best has the best {track.primary.name}'
+        f' ({track.primary.direction} is better), and holds {guards} against the baseline.'
     )
     addendum = (Path(idea.campaign.path) / track.addendum).read_text().rstrip() if track.addendum else ''
     return '\n\n'.join(p for p in (rule, addendum) if p)

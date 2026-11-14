@@ -8,6 +8,7 @@ from pydantic import ConfigDict, Field
 from piloop.api.client import Client
 from piloop.api.contract import Params
 from piloop.api.views import View
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer, CandidateView
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
@@ -125,6 +126,8 @@ class SubmitBody(Params):
     blob: str | None = None
     """The address in the CAS of the versions that the repo of record lacks (``Repository.send``), from a checkout on a
     worker elsewhere. None: the repo of record has the version. Text, so a client loads no CAS."""
+    idea: IdeaId | None = None
+    """The idea of the caller's run's claim that the version is for. None: the run's newest claim."""
 
 
 class Submission(View):

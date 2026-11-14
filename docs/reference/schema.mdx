@@ -367,6 +367,33 @@ CREATE TABLE ideas (
 	CONSTRAINT ideastatus CHECK (status IN ('open', 'claimed', 'done', 'dropped'))
 );
 CREATE INDEX ix_ideas_campaign_status_priority ON ideas (campaign_id, status, priority);
+CREATE TABLE runs (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	campaign_id INTEGER NOT NULL,
+	role VARCHAR DEFAULT 'implementer' NOT NULL,
+	base_candidate_id INTEGER NOT NULL,
+	harness VARCHAR NOT NULL,
+	model VARCHAR NOT NULL,
+	status VARCHAR(16) DEFAULT 'queued' NOT NULL,
+	scoring BOOLEAN DEFAULT 0 NOT NULL,
+	brief_cid VARCHAR,
+	started_at DATETIME,
+	finished_at DATETIME,
+	"end" VARCHAR(16),
+	error VARCHAR,
+	log_dir VARCHAR,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	updated_by VARCHAR,
+	CONSTRAINT "runs.scoring needs a finished status" CHECK (scoring = 0 OR status IN ('succeeded', 'failed', 'timed_out')),
+	CONSTRAINT "runs.end is set once a run is finished" CHECK (("end" IS NULL) = (status IN ('queued', 'running'))),
+	CONSTRAINT "runs.status follows from runs.end" CHECK ("end" IS NULL OR status = CASE "end" WHEN 'finished' THEN 'succeeded' WHEN 'timed_out' THEN 'timed_out' ELSE 'failed' END),
+	CONSTRAINT fk_runs_campaign_id_campaigns FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
+	CONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')),
+	CONSTRAINT runend CHECK ("end" IN ('finished', 'gave_up', 'failed', 'timed_out', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost', 'stalled'))
+);
+CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
+CREATE INDEX ix_runs_status ON runs (status);
 CREATE TABLE techniques (
 	id INTEGER NOT NULL,
 	campaign_id INTEGER NOT NULL,
@@ -383,52 +410,11 @@ CREATE TABLE techniques (
 	CONSTRAINT "techniques.created_by must be a text value" CHECK (typeof(created_by) IN ('text')),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
 );
-CREATE TABLE idea_links (
-	idea_id INTEGER NOT NULL,
-	target_id INTEGER NOT NULL,
-	kind VARCHAR(16) NOT NULL,
-	PRIMARY KEY (idea_id, target_id, kind),
-	CONSTRAINT idea_links_not_self CHECK (idea_id != target_id),
-	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
-	FOREIGN KEY(target_id) REFERENCES ideas (id) ON DELETE CASCADE,
-	CONSTRAINT linkkind CHECK (kind IN ('after'))
-);
-CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind);
-CREATE TABLE runs (
-	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-	campaign_id INTEGER NOT NULL,
-	idea_id INTEGER,
-	role VARCHAR DEFAULT 'implementer' NOT NULL,
-	attempt INTEGER,
-	base_candidate_id INTEGER NOT NULL,
-	harness VARCHAR NOT NULL,
-	model VARCHAR NOT NULL,
-	status VARCHAR(16) DEFAULT 'queued' NOT NULL,
-	scoring BOOLEAN DEFAULT 0 NOT NULL,
-	brief_cid VARCHAR,
-	started_at DATETIME,
-	finished_at DATETIME,
-	"end" VARCHAR(16),
-	error VARCHAR,
-	log_dir VARCHAR,
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	updated_by VARCHAR,
-	UNIQUE (idea_id, attempt),
-	CONSTRAINT "runs.scoring needs a finished status" CHECK (scoring = 0 OR status IN ('succeeded', 'failed', 'timed_out')),
-	CONSTRAINT "runs.end is set once a run is finished" CHECK (("end" IS NULL) = (status IN ('queued', 'running'))),
-	CONSTRAINT "runs.status follows from runs.end" CHECK ("end" IS NULL OR status = CASE "end" WHEN 'finished' THEN 'succeeded' WHEN 'timed_out' THEN 'timed_out' ELSE 'failed' END),
-	CONSTRAINT fk_runs_campaign_id_campaigns FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
-	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
-	CONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')),
-	CONSTRAINT runend CHECK ("end" IN ('finished', 'gave_up', 'failed', 'timed_out', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost', 'stalled'))
-);
-CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
-CREATE INDEX ix_runs_status ON runs (status);
 CREATE TABLE candidates (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	campaign_id INTEGER NOT NULL,
 	run_id INTEGER,
+	idea_id INTEGER,
 	parent_id INTEGER,
 	tree_sha VARCHAR NOT NULL,
 	revision VARCHAR NOT NULL,
@@ -447,11 +433,33 @@ CREATE TABLE candidates (
 	CONSTRAINT "candidates.an exclusion has its author" CHECK ((excluded_reason IS NULL) = (excluded_by IS NULL)),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	FOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE SET NULL,
+	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE SET NULL,
 	FOREIGN KEY(parent_id) REFERENCES candidates (id),
 	CONSTRAINT origin CHECK (origin IN ('baseline', 'run', 'reference', 'recovered', 'skipped', 'merge'))
 );
 CREATE INDEX ix_candidates_parent ON candidates (parent_id);
 CREATE INDEX ix_candidates_run ON candidates (run_id);
+CREATE TABLE idea_links (
+	idea_id INTEGER NOT NULL,
+	target_id INTEGER NOT NULL,
+	kind VARCHAR(16) NOT NULL,
+	PRIMARY KEY (idea_id, target_id, kind),
+	CONSTRAINT idea_links_not_self CHECK (idea_id != target_id),
+	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
+	FOREIGN KEY(target_id) REFERENCES ideas (id) ON DELETE CASCADE,
+	CONSTRAINT linkkind CHECK (kind IN ('after'))
+);
+CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind);
+CREATE TABLE run_claims (
+	run_id INTEGER NOT NULL,
+	idea_id INTEGER NOT NULL,
+	attempt INTEGER NOT NULL,
+	claimed_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	PRIMARY KEY (run_id, idea_id),
+	UNIQUE (idea_id, attempt),
+	FOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE CASCADE,
+	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE
+);
 CREATE TABLE cancels (
 	candidate_id INTEGER NOT NULL,
 	evaluator_id INTEGER NOT NULL,
@@ -494,6 +502,20 @@ CREATE TABLE measurements (
 	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id)
 );
 CREATE INDEX ix_measurements_candidate_evaluator ON measurements (candidate_id, evaluator_id);
+CREATE TABLE submissions (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL,
+	candidate_id INTEGER NOT NULL,
+	idea_id INTEGER,
+	event_id INTEGER NOT NULL,
+	submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	FOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE CASCADE,
+	FOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE,
+	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_submissions_candidate ON submissions (candidate_id);
+CREATE INDEX ix_submissions_idea ON submissions (idea_id, run_id);
+CREATE INDEX ix_submissions_run ON submissions (run_id);
 CREATE VIRTUAL TABLE ideas_fts USING fts5(title, hypothesis, plan, content='ideas', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2');
 ```
 

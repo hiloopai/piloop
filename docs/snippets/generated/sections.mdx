@@ -4,7 +4,7 @@
 |---|---|---|---|---|
 | `context` | `[plugins.section.context]`: who the agent is, where its campaign is, why it started, and how it runs piloop. | orchestrator, run | 1 | `lines` |
 | `measure` | How an implementer measures its change: the dev command (`[evaluator] dev`), and which commits are scored. | run | 3 | none |
-| `idea_comments` | `[plugins.section.idea_comments]`: the comments on the reader's idea and on its runs, the latest last. | run | 5 | `latest`, `chars` |
+| `idea_comments` | `[plugins.section.idea_comments]`: the comments on the ideas that the reader claimed and on their runs, the latest last. | run | 5 | `latest`, `chars` |
 | `database` | How to run `piloop sql`, and how to quote an agent's own text. A role that does no runs shows it by default. | none | 10 | none |
 | `concepts` | Campaigns, ideas, runs, candidates, measurements, the pool, its best and the tracks. | none | 20 | none |
 | `scoring` | How the daemon scores a candidate into the pool, what makes one the best, and the query of the pool. | none | 30 | none |

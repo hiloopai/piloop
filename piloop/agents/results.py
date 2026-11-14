@@ -821,7 +821,7 @@ def learn(s: Session, w: AgentSession, session_id: str | None) -> None:
     w.session_id = session_id
     assert w.harness is not None  # the launcher picks the harness before it launches the agent
     run = None if (run_id := run_of(w)) is None else s.get(Run, run_id)
-    idea = None if run is None else run.idea
+    ideas = [] if run is None else [c.idea for c in run.claims]
     definition = harness_of(s, w)
     identified = Identified(
         session_id=session_id,
@@ -831,8 +831,8 @@ def learn(s: Session, w: AgentSession, session_id: str | None) -> None:
         model=w.model,
         campaign=None if w.campaign_id is None else s.get_one(Campaign, w.campaign_id).name,
         subject=w.subject,
-        groups=() if idea is None else (TargetRef(IDEA, idea.id),),
-        parent=None if idea is None else _proposer(s, idea.created_by),
+        groups=tuple(TargetRef(IDEA, idea.id) for idea in ideas),
+        parent=_proposer(s, ideas[0].created_by) if ideas else None,
     )
     emit(s, identified, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
 

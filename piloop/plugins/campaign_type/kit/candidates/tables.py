@@ -14,10 +14,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from piloop.db.models import NOW, Base, Tracked, by_value, text_checks, utcnow
 from piloop.ids import CampaignId, Revision
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
-if TYPE_CHECKING:  # evaluation and runs need candidates: only the relationships name them
+if TYPE_CHECKING:  # evaluation, runs and the backlog need candidates: only the relationships name them
+    from piloop.plugins.campaign_type.kit.backlog.tables import Idea
     from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Measurement
     from piloop.plugins.campaign_type.kit.runs.tables import Run
 from sqlalchemy import Select, select
@@ -28,6 +30,7 @@ from piloop.db.models import Campaign
 Base.registry.update_type_annotation_map(
     {
         CandidateId: Integer,
+        IdeaId: Integer,
         Origin: by_value(Origin),
     }
 )
@@ -60,6 +63,10 @@ class Candidate(Tracked, Base):
     id: Mapped[CandidateId] = mapped_column(primary_key=True)
     campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
     run_id: Mapped[RunId | None] = mapped_column(ForeignKey('runs.id', ondelete='SET NULL'))
+    idea_id: Mapped[IdeaId | None] = mapped_column(ForeignKey('ideas.id', ondelete='SET NULL'))
+    """The idea of its run's claim that it was made for: the one that its submission names (``piloop submit --idea``),
+    and for a version that the run never submitted, the run's newest claim then. NULL for the baseline, a reference, a
+    merge, and a version of a run that claimed nothing."""
     parent_id: Mapped[CandidateId | None] = mapped_column(ForeignKey('candidates.id'))
     """The candidate that this one comes from."""
     tree_sha: Mapped[str]
@@ -79,6 +86,7 @@ class Candidate(Tracked, Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
     run: Mapped[Run | None] = relationship(back_populates='candidates', foreign_keys=[run_id])
+    idea: Mapped[Idea | None] = relationship()
     parent: Mapped[Candidate | None] = relationship(remote_side=[id], foreign_keys=[parent_id])
     measurements: Mapped[list[Measurement]] = relationship(back_populates='candidate', order_by='Measurement.id')
     cancels: Mapped[list[Cancel]] = relationship(back_populates='candidate', cascade='all, delete-orphan')

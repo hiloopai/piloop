@@ -8,12 +8,12 @@ text: which open ideas a worker can claim (``claimable``), and the cell that sho
 pack show it.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import ColumnElement, case, distinct, exists, func, select
+from sqlalchemy import ColumnElement, distinct, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
 from piloop.config import CONFIG_FILE, ConfigError
@@ -22,10 +22,11 @@ from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import SETTLED, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.wire import IdeaRow, IdeaView
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.submissions import ideas_of
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 
 
 def held() -> ColumnElement[bool]:
@@ -120,24 +121,21 @@ def yields(s: Session, campaign_id: CampaignId) -> list[Yield]:
 
     The result is sorted by new bests, then ideas, most first.
     """
-    bests = {e.target_id for e, _ in new_bests(s, s.get_one(Campaign, campaign_id))}
+    bests = {CandidateId(e.target_id) for e, _ in new_bests(s, s.get_one(Campaign, campaign_id))}
+    by_idea = Counter(idea for ideas in ideas_of(s, bests).values() for idea in ideas)
     rows = s.execute(
-        select(
-            Idea.created_by,
-            func.count(distinct(Run.id)),
-            func.count(distinct(case((Candidate.id.in_(bests), Candidate.id)))),
-        )
-        .outerjoin(Run, Run.idea_id == Idea.id)
-        .outerjoin(Candidate, Candidate.run_id == Run.id)
+        select(Idea.id, Idea.created_by, func.count(distinct(Run.id)))
+        .outerjoin(RunClaim, RunClaim.idea_id == Idea.id)
+        .outerjoin(Run, Run.id == RunClaim.run_id)
         .where(Idea.campaign_id == campaign_id)
         .group_by(Idea.id)
     )
     tally: defaultdict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
-    for created_by, runs, best in rows:
+    for idea_id, created_by, runs in rows:
         counts = tally[source(created_by)]
         counts[0] += 1
         counts[1] += runs > 0
-        counts[2] += best
+        counts[2] += by_idea[idea_id]
     found = [Yield(name, *counts) for name, counts in tally.items()]
     return sorted(found, key=lambda y: (-y.bests, -y.ideas, y.source))
 

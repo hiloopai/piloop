@@ -1,7 +1,8 @@
 - A **campaign** is {vcs:repo} with a `piloop.toml`.
-- An `open` **idea** gets a **run**: one attempt, on one harness and model, by an **implementer** in {vcs:checkout} at
-  the run's base **candidate**. `runs.end` says how it ended, `runs.error` the detail. Only `finished`, `gave_up`,
-  `failed` and `timed_out` count as attempts. A worker ends its own run, as submitted or given up.
+- A **run** is one session, on one harness and model, of an **implementer** in {vcs:checkout} at the run's base
+  **candidate**. It claims `open` **ideas** (`run_claims`), and each submission is for one of its claims. `runs.end`
+  says how it ended, `runs.error` the detail. Only `finished`, `gave_up`, `failed` and `timed_out` count as attempts.
+  A worker ends its own run, as submitted or given up. An idea is done once a submission for it has a score.
 - {vcs:versions}
 - The daemon scores each new candidate with the campaign's **evaluator** (the evaluate command, its linked inputs and
   the metrics that decide) into a **measurement**. A changed config makes a new evaluator row.

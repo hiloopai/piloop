@@ -56,10 +56,10 @@ def live_agent_sessions(s: Session, campaign: Campaign) -> Sequence[AgentSession
 
 
 def on(s: Session, w: AgentSession) -> str:
-    """Describe what the agent works on: the idea of its run, or else the reason for its request."""
+    """Describe what the agent works on: the ideas that its run claimed, or else the reason for its request."""
     if run_of(w) is not None:
-        idea = s.get_one(Run, run_of(w)).idea
-        return 'no idea claimed yet' if idea is None else f'idea#{idea.id} {cell(idea.title)}'
+        claims = s.get_one(Run, run_of(w)).claims
+        return ', '.join(f'idea#{c.idea_id} {cell(c.idea.title)}' for c in claims) or 'no idea claimed yet'
     return cell(w.reason or NONE)
 
 

@@ -16,6 +16,7 @@ about 250 characters, a note up to about 250, and each new best adds one line of
 
 import io
 from collections.abc import Sequence
+from datetime import datetime
 
 from rich import box
 from rich.console import Console, Group, RenderableType
@@ -31,14 +32,17 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import links
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
 from piloop.plugins.campaign_type.kit.evaluation.measure import score, status
+from piloop.plugins.campaign_type.kit.evaluation.submissions import ideas_of, submissions_of
 from piloop.plugins.campaign_type.kit.pool.pool import baseline, fallback_track, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.text import NONE, cell, metric
 from piloop.usage import human
 
@@ -197,7 +201,7 @@ def renderables(
             *([track.name] if cfg.multitrack else []),
             *(_value(c, t.primary, evaluator_id) for t in tracks),
             _delta(c, track.primary, evaluator_id),
-            f'idea#{c.run.idea.id} ({c.run.idea.created_by})' if c.run is not None and c.run.idea is not None else NONE,
+            f'idea#{c.idea.id} ({c.idea.created_by})' if c.idea is not None else NONE,
             c.revision[:SHORT_REVISION],
             human(tokens) if tokens is not None else NONE,
             cell(c.summary or NONE),
@@ -272,7 +276,7 @@ def _delta(c: Candidate, primary: Metric, evaluator_id: EvaluatorId | None) -> s
 
 def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId | None) -> str:
     """Format the best candidate of the idea with its origin and its delta against the run base."""
-    produced = [(c, run) for run in idea.runs for c in run.candidates]
+    produced = _produced(s, idea)
     if not produced:
         return NONE
     best: tuple[float, Candidate, int] | None = None
@@ -290,3 +294,26 @@ def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId 
     base = score(s.get_one(Candidate, base_id), evaluator_id, primary)
     delta = f' ({value - base:+g} vs candidate#{base_id})' if base is not None else ''
     return f'{metric(value)}{delta} (candidate#{c.id})'
+
+
+def _produced(s: Session, idea: Idea) -> list[tuple[Candidate, Run]]:
+    """Each candidate for ``idea``, oldest outcome first, with the run against whose base it counts.
+
+    A candidate submitted for the idea counts against the run that submitted it first, whichever run made it, and comes
+    at its latest submission. A version that a run of the idea's claims kept for it, and that no run submitted for a
+    claim, counts against that run, and comes when it was made.
+    """
+    outcomes: dict[CandidateId, tuple[datetime, Candidate, Run]] = {}
+    for sent in submissions_of(s, ideas=[idea.id]):  # oldest first
+        _, made, run = outcomes.get(sent.candidate_id) or (
+            None,
+            s.get_one(Candidate, sent.candidate_id),
+            s.get_one(Run, sent.run_id),
+        )
+        outcomes[sent.candidate_id] = (sent.submitted_at, made, run)
+    kept = [(c, claim.run) for claim in idea.claims for c in claim.run.candidates if c.id not in outcomes]
+    unsent = {c for c, ideas in ideas_of(s, {c.id for c, _ in kept}).items() if idea.id in ideas}
+    for c, run in kept:
+        if c.id in unsent:
+            outcomes.setdefault(c.id, (c.created_at, c, run))
+    return [(c, run) for _, c, run in sorted(outcomes.values(), key=lambda o: (o[0], o[1].id))]

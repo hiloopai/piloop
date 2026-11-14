@@ -8,7 +8,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import num
 from piloop.text import age, metric
@@ -31,7 +31,8 @@ class Tracks(Section):
             return None
         open_runs = (
             select(Idea.track)
-            .join(Run, Run.idea_id == Idea.id)
+            .join(RunClaim, RunClaim.idea_id == Idea.id)
+            .join(Run, Run.id == RunClaim.run_id)
             .where(Run.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS))
         )
         running = Counter(s.scalars(open_runs))

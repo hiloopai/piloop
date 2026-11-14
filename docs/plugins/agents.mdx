@@ -142,7 +142,8 @@ concurrency) and what it may write. A role's entry point names a subclass of one
 | `StartsItsAgents` | Do no runs: nothing that they commit is scored. | When the provider asks, and on `piloop launch`. |
 
 The fields of the subclass are the role's defaults, and its `PROMPT`, a file of its package, starts its brief. `prompt`
-in the table overrides it.
+in the table overrides it. With `persistent = true`, an `ImplementerRole` subclass with a `PROMPT` of its own starts its
+briefs with its `PERSISTENT_PROMPT`, when it sets one, else with its `PROMPT` as written.
 
 A `StartsItsAgents` role decides when its agents start, such as on a timer or on an event. On each pass over a
 campaign, the daemon calls its `request`, which inserts the rows of the agents it wants and says when to ask again.

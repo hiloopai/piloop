@@ -80,11 +80,11 @@ def ideas(s: Reading, campaign: Viewed, query: Annotated[IdeasQuery, Query()]) -
 
 @router.get('/ideas/{idea}', operation_id='idea')
 def idea(s: Reading, idea: IdeaId) -> IdeaDetail:
-    """An idea in full: its definition, its links and its runs."""
+    """An idea in full: its definition, its links and the runs that claimed it."""
     found = _idea(s, idea)
     runs = [
         IdeaRun(id=r.id, status=r.status, end=r.end, harness=r.harness, model=r.model, error=r.error)
-        for r in found.runs
+        for r in (c.run for c in found.claims)
     ]
     with db_feed.snapshot(s) as cursor:
         return IdeaDetail(

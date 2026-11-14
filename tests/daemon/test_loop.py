@@ -353,7 +353,7 @@ def state(db: Database) -> list[object]:
     with db.session() as s:
         return [
             [(a.kind, a.state, a.reason) for a in s.scalars(select(AgentSession).order_by(AgentSession.id))],
-            [(r.idea_id, r.status) for r in s.scalars(select(Run).order_by(Run.id))],
+            [([c.idea_id for c in r.claims], r.status) for r in s.scalars(select(Run).order_by(Run.id))],
             [(i.title, i.status) for i in s.scalars(select(Idea).order_by(Idea.id))],
             [(c.status, c.paused) for c in s.scalars(select(Campaign).order_by(Campaign.id))],
         ]

@@ -26,16 +26,16 @@ from piloop.db.events import latest
 from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import Revision, TargetRef
-from piloop.plugins.campaign_type.accumulating import ACCUMULATING, Accumulating
+from piloop.plugins.campaign_type.accumulating import ACCUMULATING
 from piloop.plugins.campaign_type.accumulating.trunk import Batch, alone, decide, head, merged, start
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import submissions
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.stop import settle_claims
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.vcs.git import Git
 from piloop.plugins.vcs.git.commands import Identity, commit_env
@@ -146,8 +146,7 @@ class Replay:
                 run = s.get_one(Run, run_id)
                 if r in self.settled or run.end is None or not waiting.isdisjoint(submissions.submitted(s, run_id)):
                     continue
-                mine = submissions.submitted(s, run_id)
-                Accumulating().settle(s, run, run.end, None if not mine else s.get_one(Candidate, mine[-1]))
+                settle_claims(s, run, run.end)
                 self.settled.add(r)
             s.commit()
 
@@ -176,7 +175,7 @@ class Replay:
                 if done.intersection(mine):
                     trunk.add(r)
                 run = s.get_one(Run, run_id)
-                idea = s.get_one(Idea, run.idea_id).status
+                idea = s.get_one(Idea, run.claims[0].idea_id).status
                 assert sub == _field(state, 'sub', r), f'run {r}: submission {sub}'
                 assert idea == IdeaStatus(_field(state, 'idea', r)), f'run {r}: idea {idea}'
                 assert (run.end is not None) == _field(state, 'ended', r), f'run {r}: ended {run.end}'

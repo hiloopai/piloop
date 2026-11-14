@@ -15,7 +15,7 @@ from sqlalchemy import delete, select
 from piloop.actor import System
 from piloop.campaign import ops as campaign_ops
 from piloop.config import CampaignConfig
-from piloop.db.events import emit, in_order, latest
+from piloop.db.events import in_order, latest
 from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, Revision, TargetRef
@@ -37,7 +37,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_infra_errors
-from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
+from piloop.plugins.campaign_type.kit.evaluation.submissions import record
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.pool.api import remeasure as ask_remeasure
 from piloop.plugins.campaign_type.kit.pool.due import due
@@ -45,7 +45,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.pool.wire import RemeasureBody
 from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController, left
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
@@ -867,7 +867,7 @@ def test_shared_task_failures_hold_siblings_and_leave_other_tasks_measurable(
         # Pending submissions from an active run must skip A while its sibling task is still schedulable.
         for cid in (sibling, b):
             candidate = s.get_one(Candidate, cid)
-            emit(s, Submitted(candidate=cid, revision=candidate.revision), TargetRef(RUN, run_id), System.HUMAN)
+            record(s, run_id, cid, Revision(candidate.revision), s.get_one(Run, run_id).claims[0].idea_id, System.HUMAN)
         planner = OptimizationPlanner(TypeHost(Tracer(None), tmp_path, ex, lambda _: Future()), Optimization())
         planner.remeasure(s, s.get_one(Campaign, campaign.id))
         assert f'candidate#{sibling}' not in planner.in_flight() and f'candidate#{b}' in planner.in_flight()

@@ -35,9 +35,11 @@ Each agent is an **agent session**, with an id, a log and the tokens that it use
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Claims an idea from the board, or proposes its own, implements it, and submits versions. Its submissions are scored. | On each free slot. |
+| **implementer** | Claims ideas from the board, or proposes its own, implements them, and submits versions. Its submissions are scored. | On each free slot. |
 
-The implementer **does runs**: each run claims one idea. A plugin can add a role that does none, whose commits are
+The implementer **does runs**: each run claims ideas, as many as its implementer wants. With `persistent = true`, an
+implementer works until its `timeout`, the period of the flush: it claims, asks for (`piloop escalate`) or proposes
+ideas as it wants, and the next run starts from the best. A plugin can add a role that does none, whose commits are
 never scored: see [Roles](/plugins/agents#roles). The coding agent that you talk to answers escalations and messages:
 see [the orchestrator](/concepts/orchestrator).
 

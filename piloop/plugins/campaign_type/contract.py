@@ -6,7 +6,7 @@ the hooks of its ``Planner``, which the campaigns' pass calls in one transaction
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,7 +25,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
-    from piloop.plugins.campaign_type.kit.runs.tables import Run
+    from piloop.plugins.campaign_type.kit.runs.tables import RunClaim
     from piloop.plugins.fact_source.facts import Facts
     from piloop.plugins.vcs.contract import Version
 
@@ -133,16 +133,17 @@ class CampaignType(Parameters, ABC):
     def base(self, s: Session, campaign: Campaign) -> Candidate | None:
         """The candidate that new work of ``campaign`` starts from, or None before it has one.
 
-        A queued run starts there, a claim moves a run that saved nothing yet there, and a fork that names no version
+        A queued run starts there, a claim moves a run that submitted nothing yet there, and a fork that names no version
         starts there (``piloop campaign fork``).
         """
 
     @abstractmethod
-    def settle(self, s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
-        """Settle the idea that ``run`` claimed, once the run ended ``end`` and its commits are scored.
+    def settle(self, s: Session, claim: RunClaim, end: RunEnd, submissions: Sequence[Candidate]) -> None:
+        """Settle one claim of a run, once the run ended ``end`` and its submissions are scored.
 
-        ``last`` is the newest of its versions' candidates that has a score. The type decides whether the idea is done,
-        open again or still waits. The caller commits.
+        A run claims any number of ideas, and each claim settles on its own: ``submissions`` are the run's submissions
+        for the claim's idea, oldest first, maybe none. The type decides whether the idea is done, open again or still
+        waits. The kit calls it for each claim whose idea is still ``claimed`` (``settle_claims``). The caller commits.
         """
 
     @abstractmethod

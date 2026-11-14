@@ -28,7 +28,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.contribution import routes_of
 from piloop.plugins.lineage.contract import (
     LINEAGE,
@@ -233,11 +233,10 @@ def grow(
             s.flush()
             run = Run(
                 campaign_id=idea.campaign_id,
-                idea_id=idea.id,
-                attempt=1,
                 base_candidate_id=parent,
                 harness='pi',
                 model='m',
+                claims=[RunClaim(idea_id=idea.id, attempt=1)],
             )
             s.add(run)
             s.flush()
@@ -253,6 +252,7 @@ def grow(
             c = Candidate(
                 campaign_id=row.id,
                 run_id=run.id,
+                idea_id=idea.id,
                 parent_id=parent,
                 tree_sha=f'tree{n}',
                 revision=f'commit{n}',

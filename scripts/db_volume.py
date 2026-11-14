@@ -153,19 +153,21 @@ def _runs(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
         + [('running', None)] * 3
         + [('queued', None)]
     )
-    rows = []
+    rows, claims = [], []
     for r in range(1, v.runs + 1):
         idea = (r - 1) % v.ideas + 1
         attempt = (r - 1) // v.ideas + 1
         st, end = rng.choice(ends)
         finished = None if end is None else f'2026-01-{1 + r % 28:02d} 12:00:00'
         campaign = _campaign_of(idea, v)
-        rows.append((r, campaign, idea, attempt, campaign, 'claude', 'm', st, end, finished))
+        rows.append((r, campaign, campaign, 'claude', 'm', st, end, finished))
+        claims.append((r, idea, attempt))
     con.executemany(
-        'INSERT INTO runs (id, campaign_id, idea_id, attempt, base_candidate_id, harness, model, status, "end",'
-        ' finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO runs (id, campaign_id, base_candidate_id, harness, model, status, "end", finished_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         rows,
     )
+    con.executemany('INSERT INTO run_claims (run_id, idea_id, attempt) VALUES (?, ?, ?)', claims)
 
 
 def _candidates(con: sqlite3.Connection, v: Volume, rng: random.Random) -> dict[int, int]:
@@ -175,17 +177,18 @@ def _candidates(con: sqlite3.Connection, v: Volume, rng: random.Random) -> dict[
     rows = []
     for c in range(1, v.candidates + 1):
         if c <= v.campaigns:  # the baselines: no run, no parent
-            rows.append((c, c, None, None, f'tree{c}', f'commit{c}', 'baseline', 'baseline'))
+            rows.append((c, c, None, None, None, f'tree{c}', f'commit{c}', 'baseline', 'baseline'))
             last[c] = owners[c] = c
             continue
         run = rng.randint(1, v.runs)
-        p = _campaign_of((run - 1) % v.ideas + 1, v)
-        rows.append((c, p, run, last[p], f'tree{c}', f'commit{c}', f'summary {c}', 'run'))
+        idea = (run - 1) % v.ideas + 1
+        p = _campaign_of(idea, v)
+        rows.append((c, p, run, idea, last[p], f'tree{c}', f'commit{c}', f'summary {c}', 'run'))
         last[p] = c
         owners[c] = p
     con.executemany(
-        'INSERT INTO candidates (id, campaign_id, run_id, parent_id, tree_sha, revision, summary, origin)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO candidates (id, campaign_id, run_id, idea_id, parent_id, tree_sha, revision, summary, origin)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         rows,
     )
     return owners

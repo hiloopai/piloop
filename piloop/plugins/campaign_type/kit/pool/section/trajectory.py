@@ -55,7 +55,7 @@ class Trajectory(Section):
                     '' if previous is None or value is None else f' ({metric(m.gain(value, previous), signed=True)})'
                 )
                 c = s.get_one(Candidate, event.target_id)
-                idea = f' idea#{c.run.idea_id}' if c.run is not None else ''
+                idea = f' idea#{c.idea_id}' if c.idea_id is not None else ''
                 lines.append(
                     f'  - {event.at:%m-%d %H:%M} candidate#{c.id} {num(value)}{delta}{idea}: {cell(c.summary or "—", 80)}'
                 )

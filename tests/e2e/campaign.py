@@ -228,7 +228,10 @@ class Smoke:
 
     def run_of(self, key: str) -> sqlite3.Row | None:
         """The latest run of an idea that ``add_idea`` added."""
-        rows = self.sql('SELECT * FROM runs WHERE idea_id = ? ORDER BY id DESC LIMIT 1', self.ideas[key])
+        rows = self.sql(
+            'SELECT r.* FROM runs r JOIN run_claims c ON c.run_id = r.id WHERE c.idea_id = ? ORDER BY r.id DESC LIMIT 1',
+            self.ideas[key],
+        )
         return rows[0] if rows else None
 
     def run_in(self, key: str, statuses: set[str], within: bool = True) -> sqlite3.Row | None:
@@ -329,7 +332,8 @@ class Smoke:
         rows = self.sql(
             f'SELECT w.id, w.kind, {run} AS run_id, w.state, w.log_dir, w.usage, r.status, r.error, i.title,'
             ' (julianday(w.ended_at) - julianday(w.started_at)) * 86400 AS seconds'
-            f' FROM agent_sessions w LEFT JOIN runs r ON r.id = {run} LEFT JOIN ideas i ON i.id = r.idea_id'
+            f' FROM agent_sessions w LEFT JOIN runs r ON r.id = {run}'
+            ' LEFT JOIN ideas i ON i.id = (SELECT max(c.idea_id) FROM run_claims c WHERE c.run_id = r.id)'
             ' ORDER BY w.id'
         )
         lines += [

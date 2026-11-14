@@ -22,7 +22,7 @@ from piloop.db.session import Database, migrate
 from piloop.db.triggers import PERSISTENT, TEMP, Trigger, changelog, provenance
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from tests.conftest import disk, end_of
 
 
@@ -234,7 +234,13 @@ def test_an_idea_settles_when_it_is_newly_done_with_no_run_open_whoever_writes_i
         s.add_all([quiet, rerun, done])
         s.flush()
         runs = [
-            Run(campaign_id=rerun.campaign_id, idea_id=rerun.id, attempt=n, base_candidate_id=1, harness='h', model='m')
+            Run(
+                campaign_id=rerun.campaign_id,
+                base_candidate_id=1,
+                harness='h',
+                model='m',
+                claims=[RunClaim(idea_id=rerun.id, attempt=n)],
+            )
             for n in (1, 2)
         ]
         s.add_all(runs)
@@ -273,15 +279,17 @@ BEGIN
   VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.id, json_object('kind', 'idea.status', 'old', CASE typeof(OLD.status) WHEN 'blob' THEN NULL ELSE OLD.status END, 'new', CASE typeof(NEW.status) WHEN 'blob' THEN NULL ELSE NEW.status END));
   INSERT INTO events (at, actor, target_kind, target_id, payload)
   SELECT strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.id, json_object('kind', 'subject.settled', 'campaign', NEW.campaign_id)
-  WHERE OLD.status IS NOT 'done' AND NEW.status = 'done' AND NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = NEW.id AND status IN ('queued', 'running'));
+  WHERE OLD.status IS NOT 'done' AND NEW.status = 'done' AND NOT EXISTS (SELECT 1 FROM run_claims o JOIN runs r ON r.id = o.run_id WHERE o.idea_id = NEW.id AND r.status IN ('queued', 'running'));
 END;\
 """,
             """\
 CREATE TEMP TRIGGER runs_settled_event AFTER UPDATE OF status ON runs
-WHEN OLD.status IN ('queued', 'running') AND NEW.status NOT IN ('queued', 'running') AND (SELECT status FROM ideas WHERE id = NEW.idea_id) = 'done' AND NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = NEW.idea_id AND id != NEW.id AND status IN ('queued', 'running'))
+WHEN OLD.status IN ('queued', 'running') AND NEW.status NOT IN ('queued', 'running')
 BEGIN
   INSERT INTO events (at, actor, target_kind, target_id, payload)
-  VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.idea_id, json_object('kind', 'subject.settled', 'campaign', (SELECT campaign_id FROM ideas WHERE id = NEW.idea_id)));
+  SELECT strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', c.idea_id, json_object('kind', 'subject.settled', 'campaign', i.campaign_id)
+  FROM run_claims c JOIN ideas i ON i.id = c.idea_id
+  WHERE c.run_id = NEW.id AND i.status = 'done' AND NOT EXISTS (SELECT 1 FROM run_claims o JOIN runs r ON r.id = o.run_id WHERE o.idea_id = c.idea_id AND r.id != NEW.id AND r.status IN ('queued', 'running'));
 END;\
 """,
         ]

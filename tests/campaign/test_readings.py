@@ -260,7 +260,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     hold.unlink()
     settle(scheduler, db)
     with db.session() as s:
-        assert [(r.idea_id, r.status) for r in s.scalars(select(Run))] == [(first, RunStatus.SUCCEEDED)], (
+        assert [(r.claims[0].idea_id, r.status) for r in s.scalars(select(Run))] == [(first, RunStatus.SUCCEEDED)], (
             'what ran finished and was scored; nothing else was queued'
         )
         assert s.get_one(Idea, second).status is IdeaStatus.OPEN

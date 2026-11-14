@@ -196,6 +196,25 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
+    runs {
+        integer id PK
+        integer campaign_id FK
+        varchar role
+        integer base_candidate_id
+        varchar harness
+        varchar model
+        RunStatus status
+        boolean scoring
+        varchar brief_cid
+        datetime started_at
+        datetime finished_at
+        RunEnd end
+        varchar error
+        varchar log_dir
+        datetime created_at
+        datetime updated_at
+        varchar updated_by
+    }
     secrets {
         integer id PK
         integer campaign_id FK
@@ -216,6 +235,23 @@ erDiagram
         varchar party PK
         varchar acked_by
         datetime acked_at
+    }
+    candidates {
+        integer id PK
+        integer campaign_id FK
+        integer run_id FK
+        integer idea_id FK
+        integer parent_id FK
+        varchar tree_sha
+        varchar revision
+        varchar task_id
+        varchar summary
+        Origin origin
+        varchar excluded_reason
+        varchar excluded_by
+        datetime created_at
+        datetime updated_at
+        varchar updated_by
     }
     idea_links {
         integer idea_id PK,FK
@@ -243,42 +279,11 @@ erDiagram
         varchar report_request
         json receipt
     }
-    runs {
-        integer id PK
-        integer campaign_id FK
-        integer idea_id FK
-        varchar role
+    run_claims {
+        integer run_id PK,FK
+        integer idea_id PK,FK
         integer attempt
-        integer base_candidate_id
-        varchar harness
-        varchar model
-        RunStatus status
-        boolean scoring
-        varchar brief_cid
-        datetime started_at
-        datetime finished_at
-        RunEnd end
-        varchar error
-        varchar log_dir
-        datetime created_at
-        datetime updated_at
-        varchar updated_by
-    }
-    candidates {
-        integer id PK
-        integer campaign_id FK
-        integer run_id FK
-        integer parent_id FK
-        varchar tree_sha
-        varchar revision
-        varchar task_id
-        varchar summary
-        Origin origin
-        varchar excluded_reason
-        varchar excluded_by
-        datetime created_at
-        datetime updated_at
-        varchar updated_by
+        datetime claimed_at
     }
     cancels {
         integer candidate_id PK,FK
@@ -307,6 +312,14 @@ erDiagram
         datetime created_at
         varchar units
     }
+    submissions {
+        integer id PK
+        integer run_id FK
+        integer candidate_id FK
+        integer idea_id FK
+        integer event_id
+        datetime submitted_at
+    }
     campaigns |o--o{ campaigns : "parent_id"
     campaigns |o--o{ agent_sessions : "campaign_id"
     target_kinds |o--o{ agent_sessions : "subject_kind"
@@ -320,23 +333,28 @@ erDiagram
     target_kinds ||--o{ events : "target_kind"
     campaigns ||--o{ first_transfers : "campaign_id"
     campaigns ||--o{ ideas : "campaign_id"
+    campaigns ||--o{ runs : "campaign_id"
     campaigns |o--o{ secrets : "campaign_id"
     campaigns ||--o{ techniques : "campaign_id"
     comments ||--o{ acks : "comment_id"
+    campaigns ||--o{ candidates : "campaign_id"
+    runs |o--o{ candidates : "run_id"
+    ideas |o--o{ candidates : "idea_id"
+    candidates |o--o{ candidates : "parent_id"
     ideas ||--o{ idea_links : "idea_id"
     ideas ||--o{ idea_links : "target_id"
     agent_sessions |o--o{ leases : "agent_session_id"
-    campaigns ||--o{ runs : "campaign_id"
-    ideas |o--o{ runs : "idea_id"
-    campaigns ||--o{ candidates : "campaign_id"
-    runs |o--o{ candidates : "run_id"
-    candidates |o--o{ candidates : "parent_id"
+    runs ||--o{ run_claims : "run_id"
+    ideas ||--o{ run_claims : "idea_id"
     candidates ||--o{ cancels : "candidate_id"
     evaluators ||--o{ cancels : "evaluator_id"
     candidates ||--o{ evaluations : "candidate_id"
     evaluators ||--o{ evaluations : "evaluator_id"
     candidates ||--o{ measurements : "candidate_id"
     evaluators ||--o{ measurements : "evaluator_id"
+    runs ||--o{ submissions : "run_id"
+    candidates ||--o{ submissions : "candidate_id"
+    ideas |o--o{ submissions : "idea_id"
 ```
 
 The full-text indexes are not in the diagram: `ideas_fts` (`title`, `hypothesis`, `plan`), `comments_fts` (`body`).

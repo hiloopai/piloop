@@ -6,7 +6,6 @@ Every role shares one lifecycle (``piloop.agents.launcher``). A role differs in 
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -37,8 +36,8 @@ class Role:
     kind: RoleName
     """The role's name in ``piloop.toml``, and so ``agent_sessions.kind``, the signature of its agents
     (``<kind>#<agent session id>``) and the source of the ideas they file."""
-    prompt: Traversable
-    """The file that starts the brief: in the repo, or a resource of the role's package."""
+    prompt: str
+    """The text that starts the brief: a file in the repo, or the role's own (``RoleConfig.own_prompt``)."""
     ideas: str
     """How this role gives work to the implementers, as the context block of the brief says it.
 
@@ -53,14 +52,9 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
         KeyError: ``piloop.toml`` has no such role.
     """
     table = cfg.role(kind)
-    prompt = _prompt(repo, table.prompt, table.PROMPT)
+    prompt = (repo / table.prompt).read_text() if table.prompt is not None else table.own_prompt()
     assert prompt is not None  # RoleConfig refuses a role with neither
     return Role(kind, prompt, table.IDEAS)
-
-
-def _prompt(repo: Path, configured: str | None, own: Traversable | None) -> Traversable | None:
-    """Return the file of a prompt key: the configured file in the repo, else the role's own, else None."""
-    return repo / configured if configured is not None else own
 
 
 def role_of(s: Session, agent_session: AgentSession) -> Role:
@@ -144,7 +138,7 @@ def compose_brief(role: Role, campaign: Campaign, sections: str) -> str:
     addendum = cfg.role(role.kind).addendum
     vcs = VCS.selected(cfg.plugins)
     parts = [
-        prompted(role.prompt.read_text().rstrip(), vcs),
+        prompted(role.prompt.rstrip(), vcs),
         (repo / BRIEF_FILE).read_text().rstrip(),
         (repo / addendum).read_text().rstrip() if addendum else '',
         sections,

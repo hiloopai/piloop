@@ -76,8 +76,8 @@ headless = ["{{prompt}}"]
 """
 
 HARNESS = """#!/bin/sh
-title=$({piloop} sql "SELECT 'idea: ' || i.title FROM ideas i JOIN runs r ON r.idea_id = i.id \\
-  JOIN agent_sessions a ON a.subject_kind = 'run' AND a.subject_id = r.id WHERE a.id = ${{PILOOP_ACTOR#*#}}")
+title=$({piloop} sql "SELECT 'idea: ' || i.title FROM ideas i JOIN run_claims c ON c.idea_id = i.id \\
+  JOIN agent_sessions a ON a.subject_kind = 'run' AND a.subject_id = c.run_id WHERE a.id = ${{PILOOP_ACTOR#*#}}")
 case "$title" in
   *"idea: trim cost"*) tail -n +2 cost.txt > cost.tmp && mv cost.tmp cost.txt; git commit -qam "trim cost" ;;
   *"idea: slow accuracy"*)

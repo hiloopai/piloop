@@ -22,7 +22,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
 from piloop.reports import overview as overview_module
@@ -60,8 +60,6 @@ def idea(
 def run(s: Session, i: Idea, status: RunStatus, base: int, start: float, end: float | None, **kw: object) -> Run:
     row = Run(
         campaign_id=i.campaign_id,
-        idea_id=i.id,
-        attempt=1,
         base_candidate_id=base,
         harness='script',
         model='m',
@@ -71,6 +69,7 @@ def run(s: Session, i: Idea, status: RunStatus, base: int, start: float, end: fl
         started_at=at(start),
         finished_at=at(end) if end is not None else None,
         **kw,
+        claims=[RunClaim(idea_id=i.id, attempt=1)],
     )
     s.add(row)
     s.flush()
@@ -103,6 +102,9 @@ def agent(
 
 
 def candidate(s: Session, campaign: Campaign, parent: int, value: float, when: float, **kw: object) -> Candidate:
+    """A scored candidate. One of a run is made for the run's first claim."""
+    if isinstance(run_id := kw.get('run_id'), int) and 'idea_id' not in kw:
+        kw['idea_id'] = s.get_one(Run, run_id).claims[0].idea_id
     row = Candidate(
         campaign_id=campaign.id,
         parent_id=parent,
