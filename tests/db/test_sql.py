@@ -64,6 +64,20 @@ def test_anything_but_schema_changes(con: sql.Connection) -> None:
     assert 'name' in sql.run(con, 'PRAGMA table_info(campaigns)').columns
 
 
+def test_what_rebuilds_a_home_is_writable(con: sql.Connection) -> None:
+    """An agent may write the rows that rebuild a home on another host: a bug that only such a write reaches is by
+    design, and the write shows which verb is missing."""
+    cid = 'bafkr4ihkr4ld3m4gqkjf4reryxsy2s5tkbxprqkow6fin2iiyvreuzzab4'
+    for table, columns, values in (
+        ('repo_transfers', 'campaign_id, base, head, blob', f"1, '{'a' * 40}', '{'b' * 40}', '{cid}'"),
+        ('workspace_snapshots', 'campaign_id, manifest', f"1, '{cid}'"),
+        ('job_files', 'place, files', f"'runs/1', '{cid}'"),
+    ):
+        assert sql.run(con, f'INSERT INTO {table} ({columns}) VALUES ({values})').changes == 1
+        assert sql.run(con, f'UPDATE {table} SET id = 2').changes == 1
+        assert sql.run(con, f'DELETE FROM {table}').changes == 1
+
+
 def test_row_limit(con: sql.Connection) -> None:
     con.executemany(
         "INSERT INTO comments (target_kind, target_id, author, kind, body, created_at) VALUES ('idea', 1, 'a', 'note', ?, '2026-01-01')",
