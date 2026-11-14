@@ -141,11 +141,16 @@ def global_section() -> str:
 
 
 def deprecated_section() -> str:
-    """Return the keys that ``piloop.deprecated`` still accepts, one bullet per bridge; nothing when there are none."""
+    """Return the keys that ``piloop.deprecated`` still accepts, one bullet per bridge, or that there are none.
+
+    The section is there without a bridge too: the upgrading guide links to it.
+    """
     bullets = '\n'.join(
         f'- {mdx(" ".join(str(inspect.getdoc(b.rewrite)).split()))}'
         for b in (*bridges(Scope.CAMPAIGN), *bridges(Scope.HOME))
     )
+    if not bullets:
+        return '\n## Deprecated keys\n\nNo key is deprecated: every key that this release accepts is current.\n'
     return (
         '\n## Deprecated keys\n\nThese keys still work. Each one shows a `PiloopDeprecationWarning` that names the file,'
         ' the key, its replacement and the release that removes it. The changelog lists them too.\n\n'

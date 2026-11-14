@@ -136,8 +136,10 @@ class Workers(ExecutorConfig):
         send = FirstTransfers(host.db, host.cas, host.records, self.first_transfer_seconds)
         if host.processes > self.relayed_calls:
             raise PluginError(
-                f'[daemon] api_processes = {host.processes} is more than [plugins.executor] relayed_calls ='
-                f' {self.relayed_calls}: each API process runs at least one relayed call, and all of them no more'
+                f'{host.processes} API processes serve ([daemon] api_processes), more than [plugins.executor]'
+                f' relayed_calls = {self.relayed_calls}: each runs at least one relayed call, and all of them no more.'
+                f' Set [daemon] api_processes to {self.relayed_calls} or less, or relayed_calls to {host.processes}'
+                ' or more'
             )
         share, more = divmod(self.relayed_calls, host.processes)
         forks = Forks(host.home, share + (host.process < more)) if FORKED else None

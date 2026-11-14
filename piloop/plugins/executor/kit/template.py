@@ -97,14 +97,17 @@ def _main(argv: list[str]) -> int:
     """
     from piloop.cli import common  # preloaded
     from piloop.cli.main import main
-    from piloop.settings import settings
+    from piloop.problems import HomeConfigError
+    from piloop.settings import reload, settings
 
     sys.argv = argv
-    settings.__init__()  # the same object, which every module holds: read from this call's environment
-    common.console = common.output_console()
     code: object = None  # the CLI ends with SystemExit, but a return is a 0 too
     try:
+        reload(settings)  # from this call's environment, as ``piloop.cli.run`` reads them
+        common.console = common.output_console()
         main()
+    except HomeConfigError as e:
+        code = f'piloop: {e}'
     except SystemExit as e:
         code = e.code
     if code is None or isinstance(code, int):

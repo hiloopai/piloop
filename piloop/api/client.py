@@ -7,7 +7,7 @@ path and models against the server's routes.
 
 import errno
 import socket as sockets
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from contextlib import AbstractContextManager, contextmanager
 from datetime import timedelta
 from http import HTTPStatus
@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Final, Self
 from urllib.parse import quote
 
+import httpcore2 as httpcore
 import httpx2 as httpx
+from httpcore2._backends.sync import SyncStream
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from piloop.actor import Actor, System
@@ -281,6 +283,28 @@ def _timeout(params: Params | None) -> float:
             return TIMEOUT_SECONDS
 
 
+class _Unix(httpcore.SyncBackend):
+    """httpcore's network backend, whose Unix connect closes the socket that it could not connect.
+
+    httpcore's closes none (``connect_unix_socket`` of
+    https://github.com/encode/httpcore/blob/master/httpcore/_backends/sync.py): a daemon that went away since it
+    answered ``answers`` would leave the client's socket open.
+    """
+
+    def connect_unix_socket(
+        self, path: str, timeout: float | None = None, socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None
+    ) -> httpcore.NetworkStream:
+        del socket_options  # the home's socket takes none
+        sock = sockets.socket(sockets.AF_UNIX, sockets.SOCK_STREAM)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(path)
+        except OSError as e:
+            sock.close()
+            raise (httpcore.ConnectTimeout if isinstance(e, TimeoutError) else httpcore.ConnectError)(e) from e
+        return SyncStream(sock)
+
+
 def socket_http(socket: Path, actor: Actor, token: SecretStr | None = None) -> httpx.Client:
     """An HTTP client of the daemon on the Unix socket ``socket``, which asks to act as ``actor``.
 
@@ -295,7 +319,11 @@ def socket_http(socket: Path, actor: Actor, token: SecretStr | None = None) -> h
             f'no daemon listens on {socket}: start it with `piloop serve --detach`, or set PILOOP_HOME;'
             ' a daemon of an older piloop serves no socket: `piloop restart`'
         )
-    transport = httpx.HTTPTransport(uds=str(socket))
+    transport = httpx.HTTPTransport()
+    # httpx takes no network backend: its pool, with its limits, on this one
+    transport._pool = httpcore.ConnectionPool(
+        max_connections=100, max_keepalive_connections=20, keepalive_expiry=5, uds=str(socket), network_backend=_Unix()
+    )
     headers = {SOCKET_ACTOR_HEADER: actor.signature}
     if token is not None:
         headers['Authorization'] = f'Bearer {token.get_secret_value()}'
@@ -355,12 +383,7 @@ def _refused(response: httpx.Response) -> Refused:
 
 
 def answers(socket: Path) -> bool:
-    """Whether a daemon listens on ``socket``: one that a killed daemon left refuses the connection.
-
-    httpcore leaks the socket of a Unix connect that fails (``connect_unix_socket`` of
-    https://github.com/encode/httpcore/blob/master/httpcore/_backends/sync.py closes none), so the client tries one
-    first.
-    """
+    """Whether a daemon listens on ``socket``: one that a killed daemon left refuses the connection."""
     with sockets.socket(sockets.AF_UNIX, sockets.SOCK_STREAM) as probe:
         try:
             probe.connect(str(socket))

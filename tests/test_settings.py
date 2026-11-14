@@ -9,17 +9,19 @@ from pydantic import ValidationError
 from piloop import settings as settings_module
 from piloop.actor import Agent, System
 from piloop.config import CampaignAgents
-from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
+from piloop.problems import HomeConfigError
 from piloop.settings import (
     UNDER_TEST_ENV,
-    AgentSettings,
+    DaemonSettings,
     Settings,
     StorageSettings,
     TracingSettings,
+    auto_api_processes,
     env_names,
     expand_env,
 )
+from tests.isolation import API_PROCESSES_ENV
 
 
 def test_the_test_session_runs_in_a_temporary_home() -> None:
@@ -143,11 +145,53 @@ def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and
     assert CampaignAgents().over(home.agents) == home.agents, "unset: the home's"
 
 
-def test_wake_budget_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
-    (tmp_path / 'config.toml').write_text('[agents]\nwake_budget = 800\nattach_lines = 10\n')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
-    ]
-    assert home.agents == AgentSettings(attach_lines=10)
+@pytest.mark.parametrize(
+    ('platform', 'cpus', 'processes'),
+    [('linux', 32, 8), ('linux', 16, 8), ('linux', 4, 2), ('linux', 3, 1), ('linux', 1, 0), ('linux', None, 0)]
+    + [('darwin', 32, 0), ('win32', 32, 0)],
+)
+def test_auto_api_processes_are_half_the_cores_up_to_8_on_linux_and_none_elsewhere(
+    platform: str, cpus: int | None, processes: int
+) -> None:
+    assert auto_api_processes(platform, cpus) == processes
+
+
+def test_api_processes_are_auto_by_default_and_a_value_of_config_toml_or_the_environment_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings_module.os, 'process_cpu_count', lambda: 6)
+    monkeypatch.setattr(settings_module.sys, 'platform', 'linux')
+    monkeypatch.delenv(API_PROCESSES_ENV)
+    home = Settings(home=tmp_path).daemon
+    assert (home.api_processes, home.api_process_count) == ('auto', 3)
+    (tmp_path / 'config.toml').write_text('[daemon]\napi_processes = 0\n')
+    assert Settings(home=tmp_path).daemon.api_process_count == 0, 'the daemon serves alone'
+    monkeypatch.setenv(API_PROCESSES_ENV, '5')
+    assert Settings(home=tmp_path).daemon.api_process_count == 5
+    monkeypatch.setenv(API_PROCESSES_ENV, 'auto')
+    assert Settings(home=tmp_path).daemon.api_process_count == 3
+    with pytest.raises(ValidationError, match='greater than or equal to 0'):
+        DaemonSettings.model_validate({'api_processes': -1})
+
+
+def test_a_key_of_config_toml_that_0_8_removed_fails_with_one_line_that_names_it_and_its_line(tmp_path: Path) -> None:
+    (tmp_path / 'config.toml').write_text('[agents]\nattach_lines = 10\nwake_budget = 800\n')
+    with pytest.raises(HomeConfigError) as refused:
+        Settings(home=tmp_path)
+    assert str(refused.value) == (
+        f'{tmp_path / "config.toml"}:3: delete [agents] wake_budget: piloop 0.8.0 removed it (`piloop wake` is'
+        ' removed). See https://piloop.autoresearch.inc/guides/upgrading'
+    )
+
+
+def test_a_config_toml_that_does_not_load_is_one_message_for_the_command_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('PILOOP_HOME', str(tmp_path))
+    (tmp_path / 'config.toml').write_text('[agents\n')
+    with pytest.raises(HomeConfigError, match=r'config\.toml is not valid TOML: '):
+        settings_module.load()
+    (tmp_path / 'config.toml').write_text('[agents]\nattach_line = 10\n')
+    with pytest.raises(HomeConfigError) as refused:
+        settings_module.load()
+    assert str(refused.value).splitlines()[1].startswith('  agents.attach_line = 10: Extra inputs are not permitted.')

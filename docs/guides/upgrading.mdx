@@ -23,19 +23,19 @@ installed with `uv sync` is not a uv tool: upgrade it with `git pull`.
 
 ## Upgrade one release at a time
 
-Upgrade through every minor release in order: 0.4 to 0.5, then 0.5 to 0.6, then 0.6 to 0.7. Each release migrates a database only from
+Upgrade through every minor release in order: 0.4 to 0.5, then 0.5 to 0.6, then 0.6 to 0.7, then 0.7 to 0.8. Each release migrates a database only from
 the newest schema of the minor release before it, or from a newer one. On an older database, every command names the
 release that it is from, and the release to install first. It changes nothing:
 
 ```bash
-uv tool install 'piloop==0.6.*'
+uv tool install 'piloop==0.7.*'
 piloop upgrade
 ```
 
 Then install the next release in the same way. `uv tool install piloop` drops the pin. Quote the requirement: `*` is
 a glob in zsh.
 
-This page covers the upgrades to 0.7.0 and 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
+This page covers the upgrades to 0.8.0, 0.7.0 and 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
 [0.5.0](https://github.com/hiloopai/piloop/blob/v0.5.0/docs/guides/upgrading.mdx),
 [0.4.0](https://github.com/hiloopai/piloop/blob/v0.4.0/docs/guides/upgrading.mdx),
 [0.3.1](https://github.com/hiloopai/piloop/blob/v0.3.1/docs/guides/upgrading.mdx) or
@@ -123,6 +123,60 @@ Before 1.0, a minor release may break these, and the changelog says so:
 
 `piloop.capabilities` is the stable plugin API. Other `piloop.*` imports can change in any release.
 
+## Upgrading to 0.8.0
+
+### Upgrade from 0.7
+
+0.8.0 migrates a database from 0.7's heads or newer: a 0.6 home upgrades through 0.7 first, as
+[Upgrade one release at a time](#upgrade-one-release-at-a-time) says.
+
+- The upgrade rebuilds the tables whose ids leave the database (events, comments, runs, candidates, ideas and
+  measurements) so that an id is never used again. Its time grows with those tables: on a small home it takes under a
+  second.
+- It copies each measurement's per-unit results from `<home>/units` into the CAS, and the server's owner id from
+  `<home>/owner` into the database. It leaves both, which nothing reads any more: delete them once you will not go
+  back to 0.7.
+- On Linux, the upgraded daemon serves its API from processes beside it: `[daemon] api_processes = "auto"`, half the
+  cores up to 8, about 130 MB each. The count follows the daemon's CPU affinity, not a container's CPU limit: in a
+  container, set `api_processes` to what its limit allows. Set `api_processes = 0` in `config.toml` to serve from the
+  daemon alone, as 0.7 did. With `[plugins.executor] relayed_calls` below that count, the daemon does not start, and
+  says which key to set.
+
+### Infrastructure failures count per task
+
+A submission may carry a one-line `TASK` file at its root. `[evaluation] stop_after_tries` failures in a row for one
+task hold only that task's evaluations, and `piloop candidate remeasure` on one of its candidates releases them.
+Submissions without a `TASK` file share one count, and at the limit the whole campaign pauses, where 0.7 paused only its
+measurements: `piloop resume` starts it again.
+
+### `piloop sql` has limits
+
+A statement that runs longer than `[sql] statement_seconds` (5 s by default, in `config.toml`) is interrupted and
+changes nothing. A wait for the write lock does not count. Raise the limit for a long report.
+
+### A plugin
+
+- A provider's routes come from `Serves.routes(host) -> Routes`, which each process that serves the API calls.
+  `Contribution.router` is gone, `LineageProvider.contribution` is `LineageProvider.routes`, and
+  `Executor.configure` is gone: the leases read the live limits of the pools themselves.
+- A network binds in `Network.bind()` and serves on the bound socket in `Network.listener(sock)`.
+- A VCS provider implements `Repository.merge(ours, theirs, summary)`, which the `accumulating` type calls.
+- A CAS provider may answer `shared()`: whether every host that serves the home reaches its blobs.
+
+### The keys that 0.7 deprecated are removed
+
+The keys that 0.7 deprecated now fail. One line names each key, the line of the file that sets it and what to do, such
+as `config.toml:3: delete [agents] wake_budget: piloop 0.8.0 removed it`. Delete them from each `piloop.toml` and from
+`config.toml`; `piloop doctor` names each one. Delete `[agents] wake_budget` from `config.toml` before you upgrade: no
+command but `piloop --version` runs with it, so `piloop upgrade` stops and the old daemon keeps running. The database's copies need nothing: 0.7's revisions already took these keys out of them.
+
+| Removed | Write |
+|---|---|
+| `scoring` of `[evaluator]` | nothing: piloop scores what an implementer submits |
+| `[plugins.memory]` | nothing: research memory is removed |
+| `"lessons"` in `[plugins.section] use` or in a role's `sections`, a `[plugins.section.<name>]` of `provider = "lessons"` | nothing |
+| `[agents] wake_budget` of `config.toml` | nothing: `piloop wake` is removed |
+
 ## Upgrading to 0.7.0
 
 ### Upgrade from 0.6
@@ -147,7 +201,8 @@ them from each `piloop.toml` and from `config.toml`, or write them as this table
 | `grace` of `[plugins.escalation]` | nothing: every escalation reaches a human at once |
 | `[agents] relay_wait` and `relay_deadline`, `[evaluation] wake_after_tries` of `config.toml` | nothing |
 
-`[evaluator] scoring` still loads, with a warning, until 0.8.0, and does nothing (see below).
+`[evaluator] scoring` loaded with a warning in 0.7 and did nothing: 0.8.0 removes it
+([Upgrading to 0.8.0](#upgrading-to-0-8-0)).
 
 ### Run-end scoring is removed
 
@@ -210,13 +265,8 @@ stream instead: a `note` comment on the campaign, which the `piloop-operate` ski
 - The `lessons` section, the SQL function `blake3()` and the memory capability (`MEMORY`, `MemoryProvider`,
   `LocalMemory` and `Synced` in `piloop.capabilities`) are removed.
 
-These keys still load, with a warning, until 0.8.0, and do nothing:
-
-| Removed | Its keys |
-|---|---|
-| The memory provider and its documents. | `[plugins.memory]` |
-| The lessons in the briefs. | `"lessons"` in a list of sections, a `[plugins.section.<name>]` of `provider = "lessons"` |
-| The budget of `piloop wake`. | `[agents] wake_budget` of `config.toml` |
+Its keys, `[plugins.memory]`, the `lessons` section and `[agents] wake_budget` of `config.toml`, loaded with a warning
+in 0.7 and did nothing: 0.8.0 removes them ([Upgrading to 0.8.0](#upgrading-to-0-8-0)).
 
 ### A cancel stands, and keeps the origin
 

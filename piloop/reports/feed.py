@@ -45,7 +45,7 @@ from piloop.api.views import (
 from piloop.campaign import inbox
 from piloop.campaign.campaigns import checkout_missing
 from piloop.campaign.inbox import campaign_of
-from piloop.config import CampaignConfig, explain
+from piloop.config import CampaignConfig
 from piloop.db import feed as db_feed
 from piloop.db.events import latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, count
@@ -59,6 +59,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import best_scores
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
+from piloop.problems import explain
 from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
 

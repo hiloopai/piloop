@@ -20,7 +20,7 @@ from piloop.net.forward import Forwarding, _stale
 from piloop.net.server import advertised, local_listener
 from piloop.plugins.leader.contract import Term, Unreachable
 from piloop.plugins.network.contract import Listener
-from piloop.settings import DaemonSettings
+from piloop.settings import DaemonSettings, socket_at
 from tests.conftest import wait_until
 
 FAST = DaemonSettings(forward_refresh=timedelta(seconds=0.01), forward_connect=timedelta(seconds=2))
@@ -114,12 +114,13 @@ def record() -> Record:
 @pytest.fixture
 def standby(record: Record, tmp_path: Path) -> Generator[tuple[Forwarding, str, Path]]:
     """A standby that forwards on a port of the loopback and on a Unix socket: its forwarding, URL and socket."""
-    local = local_listener(tmp_path / 'piloop.sock')
+    path = socket_at(tmp_path / 'piloop.sock')  # macOS's temporary directory is too deep for a socket's path
+    local = local_listener(path)
     remote = Listener(socket.create_server(('127.0.0.1', 0)), None)
     forwarding = Forwarding(record.current, [local, remote], FAST)
     forwarding.start()
     try:
-        yield forwarding, f'http://127.0.0.1:{remote.socket.getsockname()[1]}', tmp_path / 'piloop.sock'
+        yield forwarding, f'http://127.0.0.1:{remote.socket.getsockname()[1]}', path
     finally:
         forwarding.close()
         forwarding.close()  # a second close does nothing
@@ -191,6 +192,21 @@ def test_a_standby_forwards_nothing_twice_and_a_holder_serves_whatever_term_a_re
     assert stale.headers['retry-after'] == '1' and f'{url} is a standby now: term 8 is over' in stale.json()['detail']
 
 
+@contextmanager
+def refusing() -> Generator[int]:
+    """A port of 127.0.0.1 that refuses each connect, and that no other socket takes until the block ends.
+
+    A socket that is bound and does not listen will not do: macOS drops what connects to it, and the connect times out.
+    A connection that the port's listener accepted holds the port once the listener is closed.
+    """
+    with socket.create_server(('127.0.0.1', 0)) as listener:
+        port = listener.getsockname()[1]
+        client = socket.create_connection(('127.0.0.1', port))
+        accepted, _ = listener.accept()
+    with client, accepted:
+        yield port
+
+
 def test_without_a_holder_that_answers_or_while_it_starts_a_standby_answers_503(
     standby: tuple[Forwarding, str, Path], record: Record, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -203,9 +219,8 @@ def test_without_a_holder_that_answers_or_while_it_starts_a_standby_answers_503(
     forwards_to(url, 1)
     assert ready(url).status_code == 503, 'a holder that serves no other machine'
     assert 'serves no other machine' in httpx.get(f'{url}/v1/status').json()['detail']
-    with socket.socket() as closed:
-        closed.bind(('127.0.0.1', 0))
-        record.holds(2, f'http://127.0.0.1:{closed.getsockname()[1]}')
+    with refusing() as port:
+        record.holds(2, f'http://127.0.0.1:{port}')
         forwards_to(url, 2)
         dead = httpx.get(f'{url}/v1/status')
     assert dead.status_code == 503 and 'did not answer (ConnectError)' in dead.json()['detail']

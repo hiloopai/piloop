@@ -12,6 +12,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Annotated, TypeAliasType, get_args, get_origin, get_type_hints
 
+import httpcore2 as httpcore
 import httpx2 as httpx
 import pytest
 from fastapi import APIRouter
@@ -88,7 +89,7 @@ from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.settings import DaemonSettings, Settings
+from piloop.settings import DaemonSettings, Settings, socket_at
 from tests.conftest import EveryClient, answering, disk, route_host, serving_api, wait_until
 
 
@@ -238,7 +239,7 @@ def test_a_file_that_is_no_socket_is_no_daemon_as_macos_says_it(
 
 
 def test_a_daemon_that_closes_before_it_answers_its_readiness_is_not_ready(tmp_path: Path) -> None:
-    path = tmp_path / 'piloop.sock'
+    path = socket_at(tmp_path / 'piloop.sock')  # macOS's temporary directory is too deep for a socket's path
     assert not client_module.ready(path), 'none listens'
     listener = local_listener(path)
 
@@ -254,6 +255,16 @@ def test_a_daemon_that_closes_before_it_answers_its_readiness_is_not_ready(tmp_p
     finally:
         closing_server.join()
         listener.socket.close()
+
+
+def test_a_daemon_that_goes_between_the_probe_and_the_request_leaves_the_client_no_socket(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """Its socket's file stays, and refuses the request's connect: the client closes the socket that tried it."""
+    path = socket_at(tmp_path / 'piloop.sock')
+    local_listener(path).socket.close()
+    mocker.patch.object(client_module, 'answers', return_value=True)  # the daemon answered the probe, then went
+    assert not client_module.ready(path), 'refused'  # a socket left open fails the test as it is collected
 
 
 def test_without_a_daemon_the_client_says_how_to_start_one(cfg: Settings) -> None:
@@ -559,3 +570,19 @@ def test_with_a_server_set_the_commands_call_it_through_the_network_with_its_cre
         monkeypatch.setattr(common, 'console', Console(width=200, force_terminal=False))
         cli.app(['status', 'demo', '--json'], result_action='return_value', exit_on_error=False)
     assert '"name": "demo"' in capsys.readouterr().out, 'a name resolves on the server; no socket of this home'
+
+
+def test_the_socket_client_s_pool_is_the_one_that_httpx_s_transport_sends_through(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """``socket_http`` puts a pool with ``_Unix`` in the transport's private ``_pool``: httpx takes no network backend.
+    An httpx that keeps its pool elsewhere would leave the fix unused, silently: this fails first."""
+    assert isinstance(vars(httpx.HTTPTransport()).get('_pool'), httpcore.ConnectionPool), 'httpx moved its pool'
+    mocker.patch.object(client_module, 'answers', return_value=True)
+    sent = mocker.spy(client_module._Unix, 'connect_unix_socket')
+    with (
+        client_module.socket_http(socket_at(tmp_path / 'piloop.sock'), System.HUMAN) as http,
+        pytest.raises(httpx.ConnectError),
+    ):
+        http.get('http://piloop/v1/status')
+    assert sent.call_count == 1, "the request went through the client's own backend"

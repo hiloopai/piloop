@@ -5,8 +5,8 @@ import os
 import signal
 import socket
 import threading
-from collections.abc import Iterator
-from contextlib import ExitStack
+from collections.abc import Generator, Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -369,14 +369,23 @@ def test_a_standby_forwards_a_worker_and_an_agent_to_the_holder_then_serves_once
                 each.shutdown(timeout=5)
 
 
-def cas_server_of(cfg: Settings, host: str, port: int, stop: threading.Event) -> tuple[threading.Thread, str]:
-    """``piloop cas serve --listen HOST:PORT`` of the home of ``cfg``, in a thread until ``stop``, and its URL."""
+@contextmanager
+def cas_server_of(
+    cfg: Settings, host: str, port: int, stop: threading.Event
+) -> Generator[tuple[threading.Thread, str]]:
+    """``piloop cas serve --listen HOST:PORT`` of the home of ``cfg``, in a thread until ``stop``, and its URL.
+
+    The block closes the listener, as ``piloop cas serve`` does once ``serve`` returns.
+    """
     network = NETWORKS.selected(cfg.providers).listening(Address(host=host, port=port))
     listener = cas_server.bind(cfg, network)
     leader = LEADERS.selected(cfg.providers).open(LeaderHost(cfg.home, cfg.database))
     serving = threading.Thread(target=cas_server.serve, args=(cfg, network, listener, leader, stop), daemon=True)
     serving.start()
-    return serving, url(listener)
+    try:
+        yield serving, url(listener)
+    finally:
+        listener.socket.close()
 
 
 def test_a_standbys_cas_server_forwards_to_the_holders_and_serves_itself_once_its_daemon_holds_the_term(
@@ -392,43 +401,47 @@ def test_a_standbys_cas_server_forwards_to_the_holders_and_serves_itself_once_it
         tmp_path, 'b', FORWARDING + f'[daemon]\nforward_refresh = 0.05\nadvertise_url = "http://[::1]:{b_port}"\n'
     )
     stop = threading.Event()
-    a_cas, a_url = cas_server_of(cfg_a, '127.0.0.1', 0, stop)
-    b_cas, b_url = cas_server_of(cfg_b, '::1', int(a_url.rsplit(':', 1)[1]), stop)
-    daemons: list[Daemon] = []
-    try:
-        nobody = httpx.get(f'{b_url}/v1/cas/x')
-        assert (nobody.status_code, nobody.headers['retry-after']) == (503, '1'), 'no daemon holds the term yet'
-        assert not (tmp_path / 'b' / 'piloop.db').exists(), 'and it opened no database'
+    with (
+        cas_server_of(cfg_a, '127.0.0.1', 0, stop) as (a_cas, a_url),
+        cas_server_of(cfg_b, '::1', int(a_url.rsplit(':', 1)[1]), stop) as (b_cas, b_url),
+    ):
+        daemons: list[Daemon] = []
+        try:
+            nobody = httpx.get(f'{b_url}/v1/cas/x')
+            assert (nobody.status_code, nobody.headers['retry-after']) == (503, '1'), 'no daemon holds the term yet'
+            assert not (tmp_path / 'b' / 'piloop.db').exists(), 'and it opened no database'
 
-        a = Daemon(cfg_a, listen=Address(host='127.0.0.1', port=a_port))
-        daemons.append(a)
-        with a.tracer.span('test') as span:
-            a._listen(span)
-        blob = b'a blob that a worker reads through any host\n'
-        cid = a._cas.put(blob)
-        token = {'authorization': f'Bearer {secret(a.db, "w1")}'}
+            a = Daemon(cfg_a, listen=Address(host='127.0.0.1', port=a_port))
+            daemons.append(a)
+            with a.tracer.span('test') as span:
+                a._listen(span)
+            blob = b'a blob that a worker reads through any host\n'
+            cid = a._cas.put(blob)
+            token = {'authorization': f'Bearer {secret(a.db, "w1")}'}
 
-        def read(at: str) -> httpx.Response:
-            return httpx.get(f'{at}/v1/cas/{cid}', headers=token, timeout=WAIT)
+            def read(at: str) -> httpx.Response:
+                return httpx.get(f'{at}/v1/cas/{cid}', headers=token, timeout=WAIT)
 
-        wait_until(lambda: read(b_url).status_code == 200, "B's CAS server forwards to A's")
-        assert read(b_url).content == blob and read(a_url).content == blob
-        assert httpx.get(f'{b_url}/v1/ready').json() == {'serves': True, 'role': 'standby', 'epoch': 1}
-        assert httpx.get(f'{b_url}/v1/cas/{cid}').status_code == 401, "A's server checks the token"
+            wait_until(lambda: read(b_url).status_code == 200, "B's CAS server forwards to A's")
+            assert read(b_url).content == blob and read(a_url).content == blob
+            assert httpx.get(f'{b_url}/v1/ready').json() == {'serves': True, 'role': 'standby', 'epoch': 1}
+            assert httpx.get(f'{b_url}/v1/cas/{cid}').status_code == 401, "A's server checks the token"
 
-        a.shutdown(timeout=5)  # its replica ships the token, then it releases the term
-        daemons.remove(a)
-        b = Daemon(cfg_b, listen=Address(host='::1', port=b_port))
-        daemons.append(b)
-        with b.tracer.span('test') as span:
-            b._listen(span)
-        wait_until(lambda: httpx.get(f'{a_url}/v1/ready').json().get('epoch') == 2, "A's CAS server follows term 2")
-        assert read(a_url).content == blob, "A's forwards to B's, which checks the token in the restored home"
-        assert read(b_url).content == blob
-        assert a_cas.is_alive() and b_cas.is_alive(), 'neither CAS server exits'
-    finally:
-        stop.set()
-        a_cas.join(WAIT)
-        b_cas.join(WAIT)
-        for each in daemons:
-            each.shutdown(timeout=5)
+            a.shutdown(timeout=5)  # its replica ships the token, then it releases the term
+            daemons.remove(a)
+            b = Daemon(cfg_b, listen=Address(host='::1', port=b_port))
+            daemons.append(b)
+            with b.tracer.span('test') as span:
+                b._listen(span)
+            wait_until(lambda: httpx.get(f'{a_url}/v1/ready').json().get('epoch') == 2, "A's CAS server follows term 2")
+            # B's own CAS server may read term 2 later than A's: until then it answers 503, which a client retries
+            wait_until(lambda: read(a_url).status_code == 200, "A's forwards to B's once B's serves term 2")
+            assert read(a_url).content == blob, "A's forwards to B's, which checks the token in the restored home"
+            assert read(b_url).content == blob
+            assert a_cas.is_alive() and b_cas.is_alive(), 'neither CAS server exits'
+        finally:
+            stop.set()
+            a_cas.join(WAIT)
+            b_cas.join(WAIT)
+            for each in daemons:
+                each.shutdown(timeout=5)

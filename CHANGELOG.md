@@ -5,6 +5,83 @@ All notable changes to piloop are in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may contain breaking changes.
 A deprecated configuration key shows a warning for at least one minor release before it is removed.
 
+## [0.8.0](https://github.com/hiloopai/piloop/compare/v0.7.0...v0.8.0) - 2026-11-13
+
+This release has breaking changes, marked **Breaking** below. Read
+[Upgrading](https://piloop.autoresearch.inc/guides/upgrading) before you upgrade.
+
+The upgrade migrates the database from 0.7.0 or newer only. A 0.6 database upgrades through 0.7 first.
+
+### Added
+
+- The daemon scales to hundreds of agents on one home. `[daemon] api_processes` serves the API from processes beside
+  the daemon, on its sockets. Its default, `auto`, starts half the cores, up to 8, on Linux, and none elsewhere.
+  `api_start`, `api_respawn` and `api_respawns` bound their start and their restarts.
+- The `accumulating` campaign type, for work that adds up, such as proofs of separate lemmas: set
+  `type = "accumulating"` in `piloop.toml`. Each accepted submission merges into a trunk that every new run starts
+  from. Only the merge is measured, and a conflict is refused with the trunk's revision to merge. `type` defaults to
+  `optimization`, which keeps the best version as before.
+- Team tables. `piloop sql` attaches a schema `team` for each campaign, where agents create, alter and drop tables,
+  indexes and views of their own. `[sql] statement_seconds` (5) and `team_mb` (256) bound each statement and the file.
+- Several orchestrators on one campaign: `piloop orchestrate <seat> -- <command>` runs each with its own inbox and
+  wait cursor, and `piloop message --seat <n>` reaches one. The first answer to an escalation settles it for all.
+- A `leader` capability: one daemon writes a home at a time across hosts. `local`, the default, is the one-host lock of
+  before. `bucket` keeps the home's term in an S3 object, replicates the database with Litestream (0.5) and restores
+  it on the next host. A standby forwards each request to the holder (`[daemon] advertise_url`, `forward_refresh`,
+  `forward_connect`), `piloop cas serve` on a standby forwards to the holder's CAS server, and `GET /v1/ready` says
+  whether a daemon is the holder or a standby. Under `bucket`, a campaign with a checkout of its own and a CAS that
+  only one host reaches are refused.
+- A failure of the evaluation's infrastructure counts per task: commit a one-line `TASK` file with each submission, and
+  `stop_after_tries` failures in a row hold only that task's evaluations; `piloop candidate remeasure` releases them.
+  `TASKS.txt` lists a campaign's tasks, and a fact source may report `available_eval_images`: the campaign pauses when
+  no task or no image is left.
+- `[daemon] token_trust` (10 s): how long a server trusts a token that it verified. A revoke through the server's own
+  API stops a token at once.
+- `[plugins.executor] relayed_calls` (8): how many calls of agents on other machines the server runs at once.
+  `slack_seconds` (60): how long a heartbeat that changes nothing leaves the worker's row unwritten.
+- `[daemon] agent_reread` (60 s): how often the daemon reads an agent's row again while it waits for its end.
+- Each write span (`piloop.db.write`) names its writer: the request's route, the loop's consumer or the thread.
+
+### Changed
+
+- **Breaking:** Submissions without a `TASK` file share one count of infrastructure failures, and at
+  `stop_after_tries` the campaign pauses, not only its measurements. `piloop resume` starts it again.
+- **Breaking:** `piloop sql` interrupts a statement that runs longer than `[sql] statement_seconds`, 5 s by default.
+- **Breaking:** Plugin API. A provider's routes come from `Serves.routes(host) -> Routes`, built in each process that
+  serves the API: `Contribution.router` and `Executor.configure` are gone, and `LineageProvider.routes` replaces its
+  `contribution`. A network binds with `Network.bind()` and serves with `Network.listener(sock)`. A VCS provider
+  implements `Repository.merge`, and a CAS provider may say `shared()`.
+- A measurement's per-unit results live in the CAS, not in `<home>/units`, and the server's owner id lives in the
+  database, not in `<home>/owner`. The upgrade copies both, and leaves the old files, which nothing reads.
+- An id that leaves the database is never used again (`AUTOINCREMENT` on events, comments, runs, candidates, ideas and
+  measurements). The upgrade rebuilds those tables.
+- Faster under load. A long-poll wakes only for the events of its topics, and the inbox long-polls that one change
+  wakes share one read of it. A worker's idle poll, a heartbeat or an acquire that changes nothing takes no write lock,
+  and a queued lease wakes one worker that can run it. On Linux, each relayed call is a process forked from one warm
+  template, and loads no web server. In load tests at 100 agents, each step measured against the one before, an
+  agent's call p95 went from 9.0 s to 0.6 s, and `GET /v1/status` p95 from 20 s to 0.3 s.
+- `piloop stop` revokes the leases of live agents on other machines, and the shutdown's waits share one 20 s deadline.
+- After a restore, `GET /v1/inbox/news` answers 409 `cursor_ahead` to a cursor past the feed, as `/v1/events` does.
+- The daemon raises its soft open-file limit to the hard limit at start, and logs both.
+- The WAL file is truncated to 64 MiB each time a checkpoint resets it.
+
+### Removed
+
+- **Breaking:** The keys that 0.7 bridged with a warning until 0.8.0 now fail: `[evaluator] scoring`,
+  `[plugins.memory]`, the `lessons` section and `[agents] wake_budget` of `config.toml`. One line names each key, its
+  line and what to do. The database's copies need nothing.
+
+### Fixed
+
+- A `config.toml` that does not load, or a `PILOOP_*` variable, ends a command with one message that names each bad
+  key, not a traceback, and `piloop --version` still answers.
+- A resent acquire renews a due lease, and a restarted worker's register renews each live lease that it returns, so a
+  lease no longer expires under the job that the worker then starts.
+- The server's keep-alive outlasts the client's, so a connection is never closed under a request that reuses it. A
+  client that disconnects logs one line, not a traceback.
+- The database setup creates SQLite's statistics table, so a concurrent insert no longer fails with
+  `no such table: comments`.
+
 ## [0.7.0](https://github.com/hiloopai/piloop/compare/v0.6.0...v0.7.0) - 2026-11-09
 
 This release has breaking changes, marked **Breaking** below. Read

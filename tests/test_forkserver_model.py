@@ -90,9 +90,14 @@ def test_a_child_that_started_and_ends_with_no_code_is_answered_1_and_never_runs
 ) -> None:
     """Path ``start_send, fork, child_start, started, child_exit, finish``, with no code: what the model's
     ``forkserver_no_started_check.cfg`` turns into a second run."""
-    env = child_env() | {'PILOOP_HOME': str(home), 'PILOOP_DEBUG': 'maybe'}  # its settings fail after its pid went
+    other = home / 'other'  # the call's home, not the template's: its settings fail after its pid went, on an error
+    other.mkdir()
+    (other / 'config.toml').write_text('')
+    (other / 'config.toml').chmod(0)
+    env = child_env() | {'PILOOP_HOME': str(other)}
     done = forks(RUN, cwd=home, env=env, timeout=60, input=None)
-    assert done.returncode == 1 and 'ValidationError' in done.stderr
+    assert done.returncode == 1 and 'PermissionError' in done.stderr
+    assert forks._template is not None, 'the template served it: the child ended with no code'
     assert ran(home) == 0, 'no fallback ran it'
 
 

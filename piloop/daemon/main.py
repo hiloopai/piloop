@@ -352,7 +352,7 @@ class Daemon:
         assert self._forwarding is not None
         self._forwarding.close()  # its servers end; the sockets stay bound, and the next connections wait for these
         listeners, self._listeners = self._listeners, []  # the servers own them from here: they close them
-        if self._cfg.daemon.api_processes > 0:
+        if self._cfg.daemon.api_process_count > 0:
             local, *remote = (each.socket for each in listeners)
             processes = ApiProcesses(self._cfg, [local, remote[0] if remote else None], self.tracer, self._api_failed)
             try:

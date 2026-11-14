@@ -20,6 +20,9 @@ DROPPED = re.compile(r'^(PILOOP_|XDG_(CONFIG|DATA|STATE)_HOME$|UV_TOOL_DIR$)')
 """The caller's settings of a real install: piloop's, and the directories under the home that piloop and uv would
 otherwise read."""
 ROOT = Path(tempfile.mkdtemp(prefix='piloop-tests-'))
+API_PROCESSES_ENV = 'PILOOP_DAEMON__API_PROCESSES'
+"""0 for the session: each daemon that a test starts serves its API itself, not from API processes for each core of
+the machine that runs the tests. A test of the API processes takes it out, and sets ``[daemon] api_processes``."""
 
 
 def isolate() -> None:
@@ -33,6 +36,7 @@ def isolate() -> None:
             'PILOOP_HOME': str(ROOT / 'piloop'),
             'PILOOP_AGENT_SKILLS_DIR': str(ROOT / 'skills' / 'agents'),
             'PILOOP_UNDER_TEST': '1',
+            API_PROCESSES_ENV: '0',
         }
     )
     # only now: importing piloop builds its settings from the environment

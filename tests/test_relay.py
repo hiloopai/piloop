@@ -273,10 +273,10 @@ def test_a_forked_call_prints_and_exits_as_a_process_of_its_own(tmp_path: Path, 
 
 
 @forked_only
-def test_a_forked_call_that_fails_to_read_its_settings_ends_with_a_traceback_and_1(
+def test_a_forked_call_that_fails_to_read_its_settings_ends_with_their_one_message_and_1(
     tmp_path: Path, db: Database
 ) -> None:
-    """As a ``piloop`` process does, whose import fails: the child sends no code."""
+    """As a ``piloop`` process does (``piloop.cli.run``): the message names the bad key, and no traceback."""
     env = child_env() | {'PILOOP_HOME': str(tmp_path), 'PILOOP_DEBUG': 'maybe'}
     forks = Forks(tmp_path, 1)
     try:
@@ -285,7 +285,8 @@ def test_a_forked_call_that_fails_to_read_its_settings_ends_with_a_traceback_and
         forks.close()
     alone = processes(['sql', 'SELECT 1'], cwd=tmp_path, env=env, timeout=60, input=None)
     assert forked.returncode == alone.returncode == 1
-    assert 'ValidationError' in forked.stderr and 'ValidationError' in alone.stderr
+    assert forked.stderr == alone.stderr and "debug = 'maybe': Input should be a valid boolean" in alone.stderr
+    assert 'Traceback' not in alone.stderr
 
 
 @forked_only

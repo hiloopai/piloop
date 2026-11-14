@@ -70,7 +70,7 @@ class Served:
             partial(checkout_of, db),
             partial(record_of, db),
             secrets,
-            max(1, cfg.daemon.api_processes),
+            max(1, cfg.daemon.api_process_count),
             process,
         )
         self._routes = routes_of(host, cfg.providers)

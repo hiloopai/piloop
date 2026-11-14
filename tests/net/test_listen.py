@@ -21,6 +21,7 @@ from piloop.net.server import Server, local_listener
 from piloop.plugins.network.contract import Address
 from piloop.settings import Settings
 from tests.cli.test_cli import run_cli
+from tests.isolation import API_PROCESSES_ENV
 
 UNROUTED = '/v1/executor/none'
 """A path with no route: the server answers it with 404, a closed port not at all."""
@@ -149,8 +150,9 @@ def test_a_short_socket_directory_that_others_reach_is_refused(tmp_path: Path, s
 
 
 def test_an_api_process_ends_the_network_s_tls_on_the_socket_that_the_daemon_bound(
-    tmp_path: Path, certificate: dict[str, str]
+    tmp_path: Path, certificate: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv(API_PROCESSES_ENV)
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
     (home / 'config.toml').write_text(

@@ -26,15 +26,12 @@ import warnings
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from pydantic import InstanceOf, TypeAdapter
 
 from piloop.plugins.host import PluginError, Scope, Slot
 from piloop.version import Version
-
-if TYPE_CHECKING:  # the sections import this module
-    pass
 
 
 class Marked(Protocol):
@@ -285,23 +282,16 @@ def show_in_cli() -> None:
     warnings.simplefilter('default', PiloopDeprecationWarning)
 
 
-def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 0) -> None:
-    """Warn at the line of ``toml`` that sets ``key`` for the ``nth`` time, or at line 0 if no line sets it.
+def warn(toml: Path, key: str, message: str, *, removed_in: Version) -> None:
+    """Warn at the first line of ``toml`` that sets ``key``, or at line 0 if no line sets it.
 
     A dotted ``key`` (``plugins.role.orchestrator``) is set by its table header, or by a line that sets its last part. The
     output looks like a compiler error: ``piloop.toml:12: PiloopDeprecationWarning: …``, then the line.
     """
     lines = _lines(toml, key)
-    lineno = lines[nth] if nth < len(lines) else 0
+    lineno = lines[0] if lines else 0
     text = f'{message}; removed in piloop {removed_in}'
     warnings.warn_explicit(text, PiloopDeprecationWarning, str(toml), lineno, registry=_shown)
-
-
-def nth(toml: Path, table: str, key: str) -> int:
-    """How many lines of ``toml`` set ``key`` before the header of ``table``: ``warn``'s ``nth`` for ``table.key``."""
-    lines = toml.read_text().splitlines()
-    header = next((n for n, line in enumerate(lines) if line.strip() == f'[{table}]'), len(lines))
-    return sum(line.partition('=')[0].strip() == key for line in lines[:header])
 
 
 def _lines(toml: Path, key: str) -> list[int]:
@@ -326,65 +316,70 @@ def apply(toml: Path, raw: dict[str, object], found: Sequence[Bridge]) -> None:
         b(toml, raw)
 
 
-MEMORY_SECTION = 'lessons'
-"""The section of research memory: the lessons of past campaigns on the repo."""
+UPGRADING = 'https://piloop.autoresearch.inc/guides/upgrading'
+"""The upgrading guide, which lists each removed key and what replaces it."""
+LESSONS = 'lessons'
+"""The section of research memory, which 0.7 removed."""
 
 
-@bridge('0.8.0', 'research memory is removed in 0.7: delete research_memory and MEMORY_SECTION')
-def research_memory(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[plugins.memory]`` and the ``lessons`` section are removed with research memory. piloop drops them.
+@until('0.9.0', 'a 0.7 file may still set the keys that 0.8.0 removed: delete removed_keys, LESSONS and its callers')
+def removed_keys(toml: Path, raw: dict[str, object], scope: Scope) -> list[str]:
+    """Each key of the parsed file of ``scope`` that 0.8.0 removed, as a line: where it is and what to do. None: none.
 
-    The lessons, documents and journal are gone: an orchestrator keeps its notes as ``note`` comments on the campaign.
-    A section table of ``provider = "lessons"`` goes too, and so does its name in ``[plugins.section] use`` and in a
-    role's ``sections``.
+    0.7 loaded these keys with a warning; an unknown-key error would not say that they went in a release. A line names
+    the key and the line that sets it, as a warning did.
     """
-
-    def dropped(key: str, what: str, at: int = 0) -> None:
-        warn(toml, key, f'research memory is removed, so {what} is removed; delete it', removed_in=removed_in, nth=at)
-
-    plugins = table_at(raw, 'plugins') or {}
-    if 'memory' in plugins:
-        del plugins['memory']
-        dropped('plugins.memory', '[plugins.memory]')
+    found: list[tuple[str, str, str]] = []  # the key as the file sets it, its dotted path, why it went
+    if scope is Scope.HOME:
+        if 'wake_budget' in (table_at(raw, 'agents') or {}):
+            found.append(('[agents] wake_budget', 'agents.wake_budget', '`piloop wake` is removed'))
+        return _lines_of(toml, found)
+    if 'scoring' in (table_at(raw, 'evaluator') or {}):
+        found.append(('[evaluator] scoring', 'evaluator.scoring', 'piloop scores what an implementer submits'))
+    memory = 'research memory is removed'
+    if 'memory' in (table_at(raw, 'plugins') or {}):
+        found.append(('[plugins.memory]', 'plugins.memory', memory))
     sections = table_at(raw, 'plugins', 'section') or {}
-    gone = {MEMORY_SECTION} | {
-        name for name, table in sections.items() if isinstance(table, dict) and table.get('provider') == MEMORY_SECTION
+    gone = {LESSONS} | {n for n, t in sections.items() if isinstance(t, dict) and t.get('provider') == LESSONS}
+    found += [(f'[plugins.section.{n}]', f'plugins.section.{n}', memory) for n in sorted(gone & set(sections))]
+    named = {'plugins.section.use': sections.get('use')} | {
+        f'plugins.role.{role}.sections': (table_at(raw, 'plugins', 'role', role) or {}).get('sections')
+        for role in table_at(raw, 'plugins', 'role') or {}
     }
-    for name in sorted(gone & set(sections)):
-        del sections[name]
-        dropped(f'plugins.section.{name}', f'[plugins.section.{name}]')
-    if isinstance(use := sections.get('use'), list) and (named := [n for n in use if isinstance(n, str) and n in gone]):
-        sections['use'] = [n for n in use if n not in named]
-        at = nth(toml, 'plugins.section', 'use')
-        dropped('plugins.section.use', f'{", ".join(named)} in [plugins.section] use', at)
-    for role in table_at(raw, 'plugins', 'role') or {}:
-        table = table_at(raw, 'plugins', 'role', role) or {}
-        if isinstance(listed := table.get('sections'), list) and (
-            named := [n for n in listed if isinstance(n, str) and n in gone]
-        ):
-            table['sections'] = [n for n in listed if n not in named]
-            at = nth(toml, f'plugins.role.{role}', 'sections')
-            dropped(f'plugins.role.{role}.sections', f'{", ".join(named)} in [plugins.role.{role}] sections', at)
+    for key, names in named.items():
+        if isinstance(names, list) and (listed := [n for n in names if isinstance(n, str) and n in gone]):
+            table, _, last = key.rpartition('.')
+            found.append((f'{", ".join(map(repr, listed))} in [{table}] {last}', key, memory))
+    return _lines_of(toml, found)
 
 
-@bridge('0.8.0', '[agents] wake_budget is removed with piloop wake: delete wake_budget', Scope.HOME)
-def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``wake_budget`` of ``[agents]`` is removed with ``piloop wake``. piloop drops it."""
-    agents = table_at(raw, 'agents') or {}
-    if 'wake_budget' in agents:
-        del agents['wake_budget']
-        message = '`piloop wake` is removed with research memory, so [agents] wake_budget is removed; delete it'
-        warn(toml, 'agents.wake_budget', message, removed_in=removed_in)
+def _lines_of(toml: Path, found: list[tuple[str, str, str]]) -> list[str]:
+    """``found`` as ``removed_keys`` gives it: one line for each, at the first line of ``toml`` that sets it."""
+    return [
+        f'{toml}:{_line(toml, key)}: delete {what}: piloop 0.8.0 removed it ({why}). See {UPGRADING}'
+        for what, key, why in found
+    ]
 
 
-@bridge('0.8.0', '[evaluator] scoring is removed: delete evaluator_scoring')
-def evaluator_scoring(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``scoring`` of ``[evaluator]`` is removed: piloop scores what an implementer submits. piloop drops the key.
+def _line(toml: Path, key: str) -> int:
+    """The number of the line of ``toml`` that sets the dotted ``key``, or 0 when none does (an inline table's key).
 
-    0.5's ``run_end`` scoring is gone: every version of a run that its implementer does not submit is ``skipped``.
+    That is its table's header, or its last part under the header of the table above it.
     """
-    evaluator = table_at(raw, 'evaluator') or {}
-    if 'scoring' in evaluator:
-        was = evaluator.pop('scoring')
-        why = 'piloop scores what an implementer submits' + (', and run_end is gone' if was == 'run_end' else '')
-        warn(toml, 'evaluator.scoring', f'{why}, so [evaluator] scoring is removed; delete it', removed_in=removed_in)
+    # a header may end with a comment; a key's line is read by its name alone
+    lines = [
+        line.partition('#')[0].strip() if line.lstrip().startswith('[') else line.strip()
+        for line in toml.read_text().splitlines()
+    ]
+    if f'[{key}]' in lines:
+        return lines.index(f'[{key}]') + 1
+    table, _, last = key.rpartition('.')
+    if f'[{table}]' not in lines:
+        return 0
+    start = lines.index(f'[{table}]') + 1
+    for n, line in enumerate(lines[start:], start + 1):
+        if line.startswith('['):
+            return 0
+        if line.partition('=')[0].strip() == last:
+            return n
+    return 0

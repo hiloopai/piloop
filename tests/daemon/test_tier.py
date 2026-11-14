@@ -43,13 +43,15 @@ from piloop.plugins.executor.kit.tables import FirstTransfer
 from piloop.plugins.network.contract import Address
 from piloop.settings import DaemonSettings, Settings, socket_at
 from tests.conftest import Dial, baseline, disk, register, wait_until
+from tests.isolation import API_PROCESSES_ENV
 from tests.test_lease import HOST, MEASURED, PROBE, evaluation_job, queue
 from tests.test_lease_client import secret
 
 
 @pytest.fixture
-def cfg(tmp_path: Path) -> Settings:
+def cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     """A home whose daemon serves its API from two API processes, which read the same ``config.toml``."""
+    monkeypatch.delenv(API_PROCESSES_ENV)
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
     (home / 'config.toml').write_text('[daemon]\napi_processes = 2\n')
@@ -242,7 +244,7 @@ def test_a_report_that_an_api_process_applies_while_the_term_stops_records_nothi
 def test_more_api_processes_than_relayed_calls_do_not_start(cfg: Settings) -> None:
     """Each API process runs its share of ``relayed_calls``, at least one: the processes refuse more of them."""
     (cfg.home / 'config.toml').write_text('[daemon]\napi_processes = 3\n[plugins.executor]\nrelayed_calls = 2\n')
-    refused = r'does not serve: PluginError: \[daemon\] api_processes = 3 is more than'
+    refused = r'PluginError: 3 API processes serve .* Set \[daemon\] api_processes to 2 or less, or relayed_calls to 3'
     with pytest.raises(SystemExit, match=refused), listening(Settings(home=cfg.home)):
         pass
 

@@ -10,7 +10,6 @@ from inline_snapshot import snapshot
 
 from piloop import config as config_module
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
-from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
@@ -24,7 +23,6 @@ from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import Harness, each_provider
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Continuity, ImplementerRole
-from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.section.goal import Goal
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
@@ -665,33 +663,6 @@ def reviewer(keys: str) -> str:
     return f'\n[plugins.role.reviewer]\n{keys}\n'
 
 
-def test_the_keys_of_research_memory_load_without_it_and_warn_at_their_lines(campaign_path: Path) -> None:
-    toml = campaign_path / 'piloop.toml'
-    implementer = '[plugins.role.implementer]\nsections = ["context", "lessons", "history"]\n'
-    memory = (
-        '\n[plugins.memory]\ndocuments = ["docs/*.md"]\n\n[plugins.section]\nuse = ["headline", "lessons", "short", "runs"]\n'
-        '\n[plugins.section.short]\nprovider = "lessons"\nbudget = 900\n'
-    )
-    toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', implementer) + memory)
-    with pytest.warns(PiloopDeprecationWarning, match='research memory is removed') as warned:
-        cfg = load_campaign_config(campaign_path)
-    lines = toml.read_text().splitlines()
-    assert [(lines[w.lineno - 1], str(w.message).split('; removed')[0]) for w in warned] == [
-        ('[plugins.memory]', 'research memory is removed, so [plugins.memory] is removed; delete it'),
-        ('[plugins.section.short]', 'research memory is removed, so [plugins.section.short] is removed; delete it'),
-        (
-            'use = ["headline", "lessons", "short", "runs"]',
-            'research memory is removed, so lessons, short in [plugins.section] use is removed; delete it',
-        ),
-        (
-            'sections = ["context", "lessons", "history"]',
-            'research memory is removed, so lessons in [plugins.role.implementer] sections is removed; delete it',
-        ),
-    ]
-    assert SECTIONS.used(cfg.plugins) == ('headline', 'runs')
-    assert cfg.roles.doing_runs()[IMPLEMENTER].sections == ['context', 'history']
-
-
 @pytest.mark.parametrize('name', ['orchestrator', 'Night Shift'])
 def test_a_role_of_your_own_needs_a_role_name_that_signs_no_writes_already(campaign_path: Path, name: str) -> None:
     with pytest.raises(ConfigError, match=re.escape(f'{name!r} is not a role name')):
@@ -705,16 +676,53 @@ def test_a_role_of_your_own_that_does_no_runs_is_refused(campaign_path: Path) ->
         load_campaign_config(campaign_path, plugins={'role': {'nightly': {'timeout': 60}}})
 
 
-@pytest.mark.parametrize(('was', 'why'), [('submit', ''), ('run_end', ', and run_end is gone')])
-def test_the_scoring_of_0_6_loads_without_it_and_warns_at_its_line(campaign_path: Path, was: str, why: str) -> None:
+REMOVED_IN_0_8 = [
+    ('\n[evaluator]\nscoring = "submit"\n', 'scoring = "submit"', '[evaluator] scoring', 'piloop scores what an'),
+    ('\n[plugins.memory]\ndocuments = ["docs/*.md"]\n', '[plugins.memory]', '[plugins.memory]', 'research memory'),
+    (
+        '\n[plugins.section.lessons]\nbudget = 900\n',
+        '[plugins.section.lessons]',
+        '[plugins.section.lessons]',
+        'research',
+    ),
+    (
+        '\n[plugins.section.short]\nprovider = "lessons"\n',
+        '[plugins.section.short]',
+        '[plugins.section.short]',
+        'research memory',
+    ),
+    (
+        '\n[plugins.section]\nuse = ["headline", "lessons", "runs"]\n',
+        'use = ["headline", "lessons", "runs"]',
+        "'lessons' in [plugins.section] use",
+        'research memory',
+    ),
+]
+
+
+@pytest.mark.parametrize(('appended', 'line', 'what', 'why'), REMOVED_IN_0_8)
+def test_a_key_that_0_8_removed_fails_with_one_line_that_names_it_and_its_line(
+    campaign_path: Path, appended: str, line: str, what: str, why: str
+) -> None:
     toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text().replace('noise_runs = 1', f'noise_runs = 1\nscoring = "{was}"', 1))
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    [warning] = warned
-    assert toml.read_text().splitlines()[warning.lineno - 1] == f'scoring = "{was}"'
-    assert str(warning.message) == (
-        f'piloop scores what an implementer submits{why}, so [evaluator] scoring is removed; delete it;'
-        ' removed in piloop 0.8.0'
+    text = toml.read_text()
+    toml.write_text(
+        text.replace('noise_runs = 1', 'noise_runs = 1\nscoring = "submit"', 1)
+        if 'scoring' in line
+        else text + appended
     )
-    assert cfg.evaluator.noise_runs == 1
+    with pytest.raises(ConfigError) as refused:
+        load_campaign_config(campaign_path)
+    [message] = str(refused.value).splitlines()
+    lineno = toml.read_text().splitlines().index(line) + 1
+    assert message.startswith(f'{toml}:{lineno}: delete {what}: piloop 0.8.0 removed it ({why}')
+    assert message.endswith('). See https://piloop.autoresearch.inc/guides/upgrading')
+
+
+def test_lessons_in_a_role_s_sections_is_named_at_that_role_s_line(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(
+        toml.read_text().replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nsections = ["lessons"]\n')
+    )
+    with pytest.raises(ConfigError, match=r":\d+: delete 'lessons' in \[plugins.role.implementer\] sections: "):
+        load_campaign_config(campaign_path)

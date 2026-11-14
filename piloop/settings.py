@@ -16,9 +16,18 @@ import tomllib
 from datetime import timedelta
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -30,6 +39,7 @@ from pydantic_settings import (
 from piloop import deprecated
 from piloop.actor import Actor, System
 from piloop.plugins.host import Plugins, PluginTables, Scope, campaign_defaults, refs, unknown, unreached
+from piloop.problems import HomeConfigError, explain
 
 DEFAULT_HOME = Path.home() / '.piloop'
 REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -147,10 +157,12 @@ class DaemonSettings(BaseModel):
     """How long a server (``piloop serve``, ``piloop cas serve``) trusts a token that it verified before it reads the
     token again. A token revoked through the server's own API stops at once; one revoked in another process, or an
     agent's whose session ended, within this time. 0 reads the token on every call."""
-    api_processes: int = Field(default=0, ge=0)
+    api_processes: Annotated[int, Field(ge=0)] | Literal['auto'] = 'auto'
     """How many processes serve the daemon's API beside it, on the sockets that it binds. 0: the daemon serves it in
-    its own process. Each one holds its own connections and its relay template, and the relayed calls
-    (``[plugins.executor] relayed_calls``) are shared out among them, so there are no more of them than relayed calls."""
+    its own process. ``auto``: half the cores that the daemon may run on (its CPU affinity), up to 8, on Linux, and 0
+    on other systems, where the relayed calls do not fork from a template. Each one holds its own connections and its relay template, and the
+    relayed calls (``[plugins.executor] relayed_calls``) are shared out among them, so there are no more of them than
+    relayed calls."""
     api_start: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How long an API process may take to serve once it started. The daemon does not start when one of the first ones
     does not serve in time, or says why it cannot."""
@@ -172,6 +184,28 @@ class DaemonSettings(BaseModel):
     agent_reread: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
     """How often the daemon reads an agent's row again while it waits for its end, without an event that wakes it: a
     close that adds no event, by ``piloop sql`` say, is seen this late."""
+
+    @property
+    def api_process_count(self) -> int:
+        """``api_processes``, with ``auto`` resolved on this host (``auto_api_processes``)."""
+        if self.api_processes == 'auto':
+            return auto_api_processes(sys.platform, os.process_cpu_count())
+        return self.api_processes
+
+
+AUTO_API_PROCESSES_MAX = 8
+"""The most API processes that ``[daemon] api_processes = "auto"`` starts: as many as the default
+``[plugins.executor] relayed_calls``, each of which needs one of them."""
+
+
+def auto_api_processes(platform: str, cpus: int | None) -> int:
+    """How many API processes ``auto`` starts on a host of ``platform`` (``sys.platform``) with ``cpus`` usable cores.
+
+    Half the cores, up to ``AUTO_API_PROCESSES_MAX``, on Linux. None elsewhere: there each relayed call is a process
+    of its own, not forked from a template (``piloop.plugins.executor.workers.FORKED``), and the daemon serves a
+    laptop's agents alone.
+    """
+    return min(AUTO_API_PROCESSES_MAX, (cpus or 0) // 2) if platform == 'linux' else 0
 
 
 class AgentSettings(BaseModel):
@@ -450,11 +484,20 @@ def home_of_env() -> Path:
 
 
 def config_file(home: Path) -> dict[str, object]:
-    """Return the parsed ``config.toml`` under ``home``, its deprecated keys bridged, or nothing without the file."""
+    """Return the parsed ``config.toml`` under ``home``, its deprecated keys bridged, or nothing without the file.
+
+    Raises:
+        HomeConfigError: The file is not valid TOML, or sets a key that a release removed.
+    """
     path = home / CONFIG_FILE
     if not path.is_file():
         return {}
-    raw = tomllib.loads(path.read_text())
+    try:
+        raw = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise HomeConfigError(f'{path} is not valid TOML: {e}') from e
+    if removed := deprecated.removed_keys(path, raw, Scope.HOME):
+        raise HomeConfigError('\n'.join(removed))
     deprecated.apply(path, raw, deprecated.bridges(Scope.HOME))
     return raw
 
@@ -477,4 +520,32 @@ def env_names(text: str) -> list[str]:
     return list(dict.fromkeys(m['name'] for m in ENV_PLACEHOLDER.finditer(text)))
 
 
-settings = Settings()
+def load() -> Settings:
+    """The settings of the home that the environment names.
+
+    Raises:
+        HomeConfigError: Its ``config.toml`` or a ``PILOOP_*`` variable does not load.
+    """
+    try:
+        return Settings()
+    except ValidationError as e:
+        raise _not_loaded(e) from e
+
+
+def reload(found: Settings) -> None:
+    """Read ``found`` again, in place, from this process's environment: every module holds the same object.
+
+    Raises:
+        HomeConfigError: Its ``config.toml`` or a ``PILOOP_*`` variable does not load.
+    """
+    try:
+        found.__init__()
+    except ValidationError as e:
+        raise _not_loaded(e) from e
+
+
+def _not_loaded(error: ValidationError) -> HomeConfigError:
+    return HomeConfigError(explain(f'{home_of_env() / CONFIG_FILE} (or a PILOOP_* variable)', error))
+
+
+settings = load()

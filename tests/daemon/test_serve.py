@@ -219,11 +219,11 @@ def test_on_macos_the_soft_limit_of_open_files_stops_at_open_max_under_an_unlimi
 def test_a_daemon_backs_up_a_database_behind_it_before_it_migrates_and_logs_where(tmp_path: Path) -> None:
     cfg = Settings(home=tmp_path / 'home')
     cfg.home.mkdir()
-    command.upgrade(alembic(cfg.home / 'piloop.db'), '0080')
+    command.upgrade(alembic(cfg.home / 'piloop.db'), '0088')
     started = subprocess.run([*PILOOP, 'serve', '--detach'], capture_output=True, text=True, env=env_for(cfg.home))
     assert started.returncode == 0, started.stderr
     pid = int(cfg.pid_file.read_text())
-    [backup] = cfg.home.glob('piloop.db.bak-0080-*')
+    [backup] = cfg.home.glob('piloop.db.bak-0088-*')
     assert piloop(cfg.home, 'stop').returncode == 0
     wait_until(lambda: not alive(pid))
     assert re.search(rf'piloop\.start .*backup={re.escape(str(backup))}', cfg.log_file.read_text())

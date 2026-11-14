@@ -91,7 +91,7 @@ from tests.conftest import (
     wait_until,
 )
 from tests.daemon.test_run_controller import set_config
-from tests.daemon.test_serve import alive
+from tests.daemon.test_serve import alive, piloop as serve_piloop
 from tests.daemon.test_submissions import commit, running, worktree
 from tests.db.test_migrations import TOO_OLD, alembic, at_floor
 from tests.test_lease import Recorder
@@ -1984,14 +1984,14 @@ def test_migrate_backs_up_the_database_first_and_says_where(out, monkeypatch: py
     database = common.settings.home / 'piloop.db'
     at_floor(database)
     run_cli(['migrate'])
-    [backup] = database.parent.glob('piloop.db.bak-0080-*')
-    assert out().strip() == f'schema: core 0080 → {HEAD}; backup of core 0080: {backup}'
+    [backup] = database.parent.glob('piloop.db.bak-0088-*')
+    assert out().strip() == f'schema: core 0088 → {HEAD}; backup of core 0088: {backup}'
     run_cli(['migrate'])
     assert out().strip() == f'schema: {HEADS}, current; the newest backup: {backup}'
     at_floor(database)
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'migration_backups': 0}))
     run_cli(['migrate'])
-    assert out().strip() == f'schema: core 0080 → {HEAD}; no backup (migration_backups = 0)'
+    assert out().strip() == f'schema: core 0088 → {HEAD}; no backup (migration_backups = 0)'
 
 
 def test_migrate_prints_a_backup_path_wider_than_the_console_on_one_line(out, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2003,8 +2003,8 @@ def test_migrate_prints_a_backup_path_wider_than_the_console_on_one_line(out, mo
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'home': home}))
     at_floor(home / 'piloop.db')
     run_cli(['migrate'])
-    [backup] = home.glob('piloop.db.bak-0080-*')
-    assert out().strip() == f'schema: core 0080 → {HEAD}; backup of core 0080: {backup}'
+    [backup] = home.glob('piloop.db.bak-0088-*')
+    assert out().strip() == f'schema: core 0088 → {HEAD}; backup of core 0088: {backup}'
     run_cli(['migrate'])
     assert out().strip() == f'schema: {HEADS}, current; the newest backup: {backup}'
 
@@ -2460,7 +2460,7 @@ def refuse_each(argv_list: tuple[list[str], ...], database: Path, match: str) ->
 def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_nothing(out) -> None:
     database = common.settings.home / 'piloop.db'
     at_floor(database)
-    behind = rf'^{re.escape(str(database))} is at schema core 0080, and this piloop .* knows {HEADS}'
+    behind = rf'^{re.escape(str(database))} is at schema core 0088, and this piloop .* knows {HEADS}'
     refuse_each(READERS, database, rf'{behind}: run `piloop migrate`, which backs it up first$')
     for daemon in hold_lock(common.settings.pid_file):  # a daemon of the older piloop, however it was started
         refuse_each(
@@ -2469,7 +2469,7 @@ def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_
             rf'{behind}: the daemon \(pid {daemon.pid}\) runs an older piloop. `piloop restart` restarts it on this'
             ' piloop, which migrates it$',
         )
-    assert revision_of(database) == '0080' and not list(database.parent.glob('piloop.db.bak-*'))
+    assert revision_of(database) == '0088' and not list(database.parent.glob('piloop.db.bak-*'))
 
 
 def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_or_upgrades(
@@ -2480,7 +2480,7 @@ def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_
     at_floor(database)
     home, tools = common.settings.home, common.settings.uv_tool_dir
     monkeypatch.setattr(common, 'settings', Settings(home=home, uv_tool_dir=tools, actor='implementer#3'))
-    behind = rf'^{re.escape(str(database))} is at schema core 0080, and this piloop .* knows {HEADS}'
+    behind = rf'^{re.escape(str(database))} is at schema core 0088, and this piloop .* knows {HEADS}'
     retry = rf'{behind}: the daemon is being upgraded; retry in a minute$'
     refuse_each((['sql', 'SELECT 1'], ['history']), database, retry)
     for _ in hold_lock(common.settings.pid_file):
@@ -2488,7 +2488,7 @@ def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_
     calls = fake_bins('uv')
     for verb in ('migrate', 'upgrade'):
         refuse_each(([verb],), database, rf'^`piloop {verb}` is not for agents \(PILOOP_ACTOR=implementer#3\)$')
-    assert calls() == [] and revision_of(database) == '0080'
+    assert calls() == [] and revision_of(database) == '0088'
     monkeypatch.setattr(common, 'settings', Settings(home=home, uv_tool_dir=tools, actor='orchestrator'))
     with pytest.raises(SystemExit, match='^piloop is not installed as a uv tool'):
         run_cli(['upgrade'])  # past the refusal of an agent
@@ -2614,15 +2614,15 @@ def test_serve_and_migrate_refuse_under_a_daemon_that_a_service_manager_started(
         refuse_each(
             (['migrate'],),
             database,
-            rf'^the daemon \(pid {daemon.pid}\) runs an older piloop: the database is at schema core 0080, and'
+            rf'^the daemon \(pid {daemon.pid}\) runs an older piloop: the database is at schema core 0088, and'
             rf' this piloop .* would migrate it to {HEADS} under the daemon\. Run `piloop upgrade`',
         )
         # `serve` meets the lock before it would migrate
         refuse_each((['serve'], ['serve', '--detach']), database, rf'a daemon is already running \(pid {daemon.pid}')
-    assert revision_of(database) == '0080' and not list(database.parent.glob('piloop.db.bak-*'))
+    assert revision_of(database) == '0088' and not list(database.parent.glob('piloop.db.bak-*'))
     run_cli(['migrate'])
-    [backup] = database.parent.glob('piloop.db.bak-0080-*')
-    assert out().strip() == f'schema: core 0080 → {HEAD}; backup of core 0080: {backup}', (
+    [backup] = database.parent.glob('piloop.db.bak-0088-*')
+    assert out().strip() == f'schema: core 0088 → {HEAD}; backup of core 0088: {backup}', (
         'without the daemon, it migrates'
     )
     for _ in hold_lock(common.settings.pid_file):
@@ -2820,3 +2820,19 @@ def test_numbered_orchestrator_executes_the_supplied_agent(monkeypatch: pytest.M
     assert (cmd, argv) == ('agent', ['agent', '--model', 'test'])
     assert env['PILOOP_SEAT_NUM'] == '2'
     assert env['PILOOP_ACTOR'] == env['PILOOP_INBOX_ID'] == 'orchestrator via service:seat-2'
+
+
+def test_a_config_toml_that_does_not_load_ends_each_command_with_one_message_and_version_still_answers(
+    tmp_path: Path,
+) -> None:
+    """The command modules load the settings as they import: ``piloop.cli.run`` catches what they raise."""
+    (tmp_path / 'config.toml').write_text('[agents]\nwake_budget = 800\n')
+    version = serve_piloop(tmp_path, '--version')
+    assert (version.returncode, version.stdout.strip(), version.stderr) == (0, installed(), '')
+    for verb in (['status'], ['doctor'], ['serve', '--check']):
+        done = serve_piloop(tmp_path, *verb)
+        assert done.returncode == 1 and done.stdout == '', verb
+        assert done.stderr == (
+            f'piloop: {tmp_path / "config.toml"}:2: delete [agents] wake_budget: piloop 0.8.0 removed it (`piloop wake`'
+            ' is removed). See https://piloop.autoresearch.inc/guides/upgrading\n'
+        ), verb

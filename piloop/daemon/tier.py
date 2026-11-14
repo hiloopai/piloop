@@ -118,7 +118,7 @@ class ApiProcesses:
         """
         try:
             with self._lock:
-                for index in range(self._settings.api_processes):
+                for index in range(self._settings.api_process_count):
                     self._slots[index] = self._spawn(index)
             for index, slot in self._slots.items():
                 self._await_ready(index, slot)

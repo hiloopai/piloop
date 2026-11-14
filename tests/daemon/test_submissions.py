@@ -68,6 +68,7 @@ from tests.conftest import (
 )
 from tests.daemon.test_evaluation_queue import (
     INFRA,
+    RETRY,
     SCORE,
     SHORT_RETRY,
     in_thread,
@@ -487,13 +488,18 @@ BAD_SEALED = [
 """A sealed command whose result piloop refuses: the campaign's primary, score, is higher-is-better."""
 
 
+PAST_THE_CHANGE = {'stop_after_tries': 10}
+"""Does not hold the task at the try that ran while a test changed its command: on a slow host the third infra error
+can land before the change, and ``stop_after_tries`` (3) would hold the scoring that the change should release."""
+
+
 def test_a_sealed_result_that_piloop_refuses_is_no_score_and_escalates_once_until_the_command_is_fixed(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A candidate cannot change the sealed command: its bad result is the setup's fault, never the candidate's. The
     submission waits while its sealed evaluation runs again, one escalation says why, and a fixed command scores it."""
     set_config(db, campaign, evaluator={**CONFIRM, 'sealed': BAD_SEALED})
-    ex = queued_executor(db, runtime, tmp_path, 1)
+    ex = queued_executor(db, runtime, tmp_path, 1, RETRY.model_copy(update=PAST_THE_CHANGE))
     candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
     scoring_it = threading.Thread(target=ex.score_submission, args=(candidate,))
     scoring_it.start()
@@ -550,7 +556,7 @@ def test_a_submission_whose_evaluator_is_replaced_while_an_infra_error_waits_is_
 ) -> None:
     """Its scoring asks the current evaluator (``Measuring.REPLACED``): the old one never runs again."""
     new_evaluator(db, campaign, evaluator=SUBMIT, evaluate=logged(tmp_path, 'old', INFRA))
-    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY)
+    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY.model_copy(update=PAST_THE_CHANGE))
     candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
     scoring_it = in_thread(lambda: ex.score_submission(candidate))
     wait_until(lambda: logged_tries(tmp_path, 'old') >= 2, 'two infra errors')
@@ -578,7 +584,7 @@ def test_a_confirmation_whose_evaluator_is_replaced_while_an_infra_error_waits_s
             )
         )
         s.commit()
-    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY)
+    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY.model_copy(update=PAST_THE_CHANGE))
     candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
     scoring_it = in_thread(lambda: ex.score_submission(candidate))
     wait_until(lambda: logged_tries(tmp_path, 'old') >= 2, 'a confirmation that failed for the machine')

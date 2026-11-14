@@ -544,7 +544,7 @@ candidate, `--base`), and its versions are scored into the pool. A new role of t
 | `home_check` | duration | `"PT10S"` | How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find it there to stop it. |
 | `inbox_page` | integer | `500` | How many events one read of the inbox's news examines at most (`piloop inbox wait`). A read with more reads again at once. |
 | `token_trust` | duration | `"PT10S"` | How long a server (`piloop serve`, `piloop cas serve`) trusts a token that it verified before it reads the token again. A token revoked through the server's own API stops at once; one revoked in another process, or an agent's whose session ended, within this time. 0 reads the token on every call. |
-| `api_processes` | integer | `0` | How many processes serve the daemon's API beside it, on the sockets that it binds. 0: the daemon serves it in its own process. Each one holds its own connections and its relay template, and the relayed calls (`[plugins.executor] relayed_calls`) are shared out among them, so there are no more of them than relayed calls. |
+| `api_processes` | integer \| string | `"auto"` | How many processes serve the daemon's API beside it, on the sockets that it binds. 0: the daemon serves it in its own process. `auto`: half the cores that the daemon may run on (its CPU affinity), up to 8, on Linux, and 0 on other systems, where the relayed calls do not fork from a template. Each one holds its own connections and its relay template, and the relayed calls (`[plugins.executor] relayed_calls`) are shared out among them, so there are no more of them than relayed calls. |
 | `api_start` | duration | `"PT1M"` | How long an API process may take to serve once it started. The daemon does not start when one of the first ones does not serve in time, or says why it cannot. |
 | `api_respawn` | duration | `"PT1S"` | How long the daemon waits before it starts an API process in place of one that exited: one that crashes at once does not spin. |
 | `api_respawns` | integer | `3` | How many API processes started again in a row may fail to serve before the daemon stops. |
@@ -796,8 +796,4 @@ With `provider = "local"`, the table has no other key.
 
 ## Deprecated keys
 
-These keys still work. Each one shows a `PiloopDeprecationWarning` that names the file, the key, its replacement and the release that removes it. The changelog lists them too.
-
-- `scoring` of `[evaluator]` is removed: piloop scores what an implementer submits. piloop drops the key. 0.5's `run_end` scoring is gone: every version of a run that its implementer does not submit is `skipped`.
-- `[plugins.memory]` and the `lessons` section are removed with research memory. piloop drops them. The lessons, documents and journal are gone: an orchestrator keeps its notes as `note` comments on the campaign. A section table of `provider = "lessons"` goes too, and so does its name in `[plugins.section] use` and in a role's `sections`.
-- `wake_budget` of `[agents]` is removed with `piloop wake`. piloop drops it.
+No key is deprecated: every key that this release accepts is current.

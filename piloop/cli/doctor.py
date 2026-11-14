@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.campaign.campaigns import REWRITE_BRIEF, long_brief
 from piloop.cli import skills, upgrade
-from piloop.config import CampaignConfig, ConfigError, ConfigMissing, explain, load_campaign_config
+from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.daemon.main import preflight, unbound_failures
 from piloop.daemon.serve import running_pid
 from piloop.db.models import utcnow
@@ -33,7 +33,7 @@ from piloop.ids import CampaignId, CampaignStatus
 from piloop.plugins.host import Check, PluginError, Scope, Severity, declared, in_use, refs
 from piloop.plugins.leader.contract import LEADERS
 from piloop.plugins.secrets.contract import SECRETS, SecretKey
-from piloop.settings import Settings
+from piloop.settings import Settings, explain
 from piloop.text import age
 from piloop.version import code_digest, direct_url, installed
 

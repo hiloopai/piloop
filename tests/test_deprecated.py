@@ -375,7 +375,12 @@ def test_until_leaves_what_it_marks_as_it_is() -> None:
     assert deprecated.until('0.3.0', 'r')(f) is f
 
 
-@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('research_memory',))
+@deprecated.bridge('9.0.0', 'tone is hue: delete tone')
+def tone(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """A package's bridge that ``shade`` runs after."""
+
+
+@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('tone',))
 def shade(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A package's bridge of ``piloop.toml``: ``[plugins.role.<name>] shade`` is ``tint``."""
     for role in (deprecated.table_at(raw, 'plugins', 'role') or {}).values():
@@ -401,10 +406,12 @@ def second(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
 def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """It runs after the bridge that it names (``research_memory``); a cycle or a missing name is refused."""
-    install_plugins(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
+    """It runs after the bridge that it names (``tone``); a cycle or a missing name is refused."""
+    install_plugins(
+        monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'tone')]
+    )
     order = deprecated.bridges(Scope.CAMPAIGN)
-    assert order.index(shade) > order.index(deprecated.research_memory)
+    assert order.index(shade) > order.index(tone)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
     raw: dict[str, object] = {'plugins': {'role': {'quick': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'
@@ -412,7 +419,7 @@ def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
     assert deprecated.table_at(raw, 'plugins', 'role', 'quick') == {'tint': 2}
     install_plugins(
-        monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'early')]
+        monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'tone', 'early')]
     )
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(early) < order.index(shade), 'a bridge can name one that runs after it'
@@ -440,3 +447,20 @@ def test_the_bridges_load_without_any_provider() -> None:
 
 def _package(module: str) -> bool:
     return (ROOT / module.replace('.', '/') / '__init__.py').is_file()
+
+
+@pytest.mark.parametrize(
+    ('text', 'line'),
+    [
+        ("[agents]  # the home's\nattach_lines = 1\nwake_budget = 2\n", 3),
+        ('[agents.wake_budget]\n', 1),
+        ('agents = { wake_budget = 2 }\n', 0),
+        ('[agents]\nattach_lines = 1\n\n[agents.more]\nwake_budget = 2\n', 0),
+        ('[agents]\nattach_lines = 1\n', 0),
+    ],
+    ids=['under its table', 'a header', 'an inline table', 'under another table', 'none'],
+)
+def test_a_removed_key_is_named_at_the_line_under_its_own_table_or_at_0(tmp_path: Path, text: str, line: int) -> None:
+    toml = tmp_path / 'config.toml'
+    toml.write_text(text)
+    assert deprecated._line(toml, 'agents.wake_budget') == line

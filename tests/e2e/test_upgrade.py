@@ -4,16 +4,16 @@
 
 piloop ``RELEASE`` from PyPI runs a small enwik8 campaign: a better and a worse submission in the pool, a cancelled
 run, notes, an acknowledged decision, an archive of a done idea's workspace files and a ``research/`` loss table. Its
-``config.toml`` and ``piloop.toml`` have keys that the release bridged with a warning or that this checkout removed:
-``[agents] relay_wait`` and ``[evaluation] wake_after_tries`` of ``config.toml``, and the implementer's
-``finding_grace``. While two agents of the release work, the user upgrades as the upgrading guide says: ``uv tool
-install --reinstall <this checkout>`` and ``piloop upgrade``, which refuses the removed keys of ``config.toml`` and
-changes nothing until the user deletes them. Then every row, ref, commit and file of the release is still there, the
-migrations rewrote only what the guide lists (the acks, research memory, the stored configs' removed keys and their
-scoring), the backup is the database before the migration, the new code cancels one agent and scores the other's run,
-the removed keys of ``piloop.toml`` fail as unknown keys, and the store restores what both piloops archived.
+``config.toml`` and ``piloop.toml`` have keys that the release bridged with a warning and this checkout removed:
+``[agents] wake_budget`` of ``config.toml`` and ``[evaluator] scoring``. While two agents of the release work, the user
+upgrades as the upgrading guide says: ``uv tool install --reinstall <this checkout>`` and ``piloop upgrade``, which
+refuses the removed key of ``config.toml`` and changes nothing until the user deletes it. Then every row, ref, commit
+and file of the release is still there, no migration rewrote a cell, the per-unit results and the owner id that the
+release kept in files are in the database too, the backup is the database before the migration, the new code cancels
+one agent and scores the other's run, the removed key of ``piloop.toml`` fails as an unknown key, and the store
+restores what both piloops archived.
 
-A home of 0.5 is refused, untouched, with the release to install first.
+A home of 0.6 is refused, untouched, with the release to install first.
 
 Claude only: the release does not know the other harnesses' flags of today.
 """
@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -36,6 +37,7 @@ from pathlib import Path
 import psutil
 import pytest
 import tomli_w
+from covalence import Cid
 
 from piloop.api.views import CampaignState
 from piloop.db.models import EVENT, LIVE_LEASES, UnknownEvent
@@ -59,39 +61,25 @@ from tests.e2e.inventory import Changed, Inventory, Renames, differences, take
 
 pytestmark = pytest.mark.e2e
 
-RELEASE = '0.6.0'
-RELEASE_HEAD = '0080'
+RELEASE = '0.7.0'
+RELEASE_HEAD = '0088'
 """The schema revision of core that ``RELEASE`` shipped."""
 RENAMES = Renames()
 """The renames since ``RELEASE`` that the upgrading guide documents: none. A rename of a later release goes here."""
-DROPPED = {'comments.acked_at', 'comments.acked_by'}
-"""The columns that the upgrading guide documents as removed: an item's ack, which moves to ``acks`` (core 0084,
-``test_nothing_of_the_release_is_lost``)."""
-DROPPED_TABLES = {'lessons', 'documents', 'journal'}
-"""The tables of research memory, which core 0085 drops with their rows."""
-CONFIG_REWRITES = (
-    'plugins.memory.*',
-    'plugins.section.*',
-    'plugins.role.*.sections',
-    'plugins.role.orchestrator.*',
-    'plugins.role.research.*',
-    'plugins.role.watchdog.*',
-    'plugins.role.*.interval',
-    'plugins.role.*.incident_prompt',
-    'plugins.role.*.routine_prompt',
-    'plugins.role.*.follow_head',
-    'plugins.trigger.*',
-    'plugins.verdict_rule.*',
-    'plugins.stop_rule.while_held',
-    'plugins.escalation.grace',
-    'metrics',
-    'evaluator.scoring',
-)
-"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0085 drops
-``[plugins.memory]`` and the ``lessons`` section, 0086 the keys of 0.6's removed features (the orchestrator, research
-and watchdog roles, their sections, triggers and role keys, the verdict rule, ``while_held``, an escalation's
-``grace`` and each metric's ``repeats``: ``metrics`` as a whole, a list), and 0087 and 0088 the scoring key. The keys that a later ``piloop init`` stores again, such as each role's
-defaults, are not a migration's."""
+DROPPED = frozenset[str]()
+"""The columns that the upgrading guide documents as removed, as ``<table>.<column>``: none."""
+DROPPED_TABLES = frozenset[str]()
+"""The tables that the upgrading guide documents as dropped with their rows: none."""
+CONFIG_REWRITES = tuple[str, ...]()
+"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: none, as no revision since
+``RELEASE`` rewrites a stored config. The keys that a later ``piloop init`` stores again, such as each role's defaults,
+are not a migration's."""
+UNITS = 'units'
+"""``<home>/units/<measurement id>.json``: the per-unit results of a measurement, which the release kept in a file and
+optimization 0015 stores in the CAS (``measurements.units``), leaving the file."""
+OWNER = 'owner'
+"""``<home>/owner``: the server's owner id, which the release kept in a file and executor/workers 0003 stores in
+``owners``, leaving the file."""
 
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
 """The evaluation queue, rows and worktrees: a daemon's start empties it, and what still needs a measurement asks
@@ -100,31 +88,24 @@ CONFIG = {
     'evaluate_timeout': 300,
     'plugins': {
         'stop_rule': {'max_runs': 10, 'max_hours': 1, 'max_tokens': 20_000_000},
-        'role': {'implementer': {'max_concurrent': 2, 'timeout': 600, 'finding_grace': 30}},
+        'role': {'implementer': {'max_concurrent': 2, 'timeout': 600}},
     },
+    'evaluator': {'scoring': 'submit'},
 }
-"""Over the release's enwik8 template: two implementers, and stop conditions only as a backstop. The implementer's
-``finding_grace`` is a key that the release bridged with a warning and this checkout removed: the upgrade leaves it for
-the user to delete."""
-REMOVED_KEYS = {
-    ('plugins', 'role', 'implementer', 'finding_grace'): (
-        'plugins.role.implementer.finding_grace = 30: Extra inputs are not permitted'
-    )
-}
+"""Over the release's enwik8 template: two implementers, and stop conditions only as a backstop. ``[evaluator]
+scoring`` is a key that the release bridged with a warning and this checkout removed: the upgrade leaves it for the user
+to delete."""
+REMOVED_KEYS = {('evaluator', 'scoring'): 'delete [evaluator] scoring: piloop 0.8.0 removed it'}
 """Each removed key that the campaign's ``piloop.toml`` still has after the upgrade, and how ``piloop doctor`` names
-it: an unknown key."""
+it: with the release that removed it (``deprecated.removed_keys``)."""
 HOME_CONFIG = {
     # a shared disk with less than [storage]'s default 20 GB free would evict and archive by pressure all along
     'storage': {'min_free_gb': 0},
-    'agents': {'relay_wait': 30},
-    'evaluation': {'wake_after_tries': 2},
+    'agents': {'wake_budget': 3},
 }
-"""The home's ``config.toml``. ``[agents] relay_wait``, which the release bridged with a warning, and ``[evaluation]
-wake_after_tries``, which it read, are keys that this checkout removed (``REMOVED_HOME_KEYS``)."""
-REMOVED_HOME_KEYS = {
-    key: f'{".".join(key)}\n  Extra inputs are not permitted'
-    for key in (('agents', 'relay_wait'), ('evaluation', 'wake_after_tries'))
-}
+"""The home's ``config.toml``. ``[agents] wake_budget``, which the release bridged with a warning, is a key that this
+checkout removed (``REMOVED_HOME_KEYS``)."""
+REMOVED_HOME_KEYS = {('agents', 'wake_budget'): 'delete [agents] wake_budget: piloop 0.8.0 removed it'}
 """Each removed key of ``config.toml``, and how this checkout names it: every command refuses the file, ``piloop
 upgrade`` too, before it changes anything."""
 HERE = (
@@ -177,7 +158,7 @@ LIVE = ('NOTES.md', 'research')
 LIVE_STATES = {'requested', 'starting', 'running'}
 """The states of an agent that is not done."""
 OLD_SHAPE = 'old-shape'
-OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0080-30.json'
+OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0088-30.json'
 """A second campaign, paused, with a stored config of a real home as the release left it
 (``tests/db/test_stored_configs.py``), with codex among its harnesses."""
 PLANTED_BACKUPS = [f'piloop.db.bak-{RELEASE_HEAD}-2025010{day}T000000Z' for day in (1, 2, 3)]
@@ -340,9 +321,13 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     )
     smoke.piloop(
         'sql',
-        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority, acked_at, acked_by) VALUES'
-        " ('campaign', 1, 'orchestrator', 'decision', 'decision: lzma before any context model', 3,"
-        " '2026-01-01 00:00:00', 'human')",
+        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority) VALUES'
+        " ('campaign', 1, 'orchestrator', 'decision', 'decision: lzma before any context model', 3)",
+    )
+    smoke.piloop(
+        'sql',
+        "INSERT INTO acks (comment_id, party, acked_by, acked_at) SELECT id, 'human', 'human', '2026-01-01 00:00:00'"
+        " FROM comments WHERE kind = 'decision' AND body = 'decision: lzma before any context model'",
     )
     workspace = upgrade.workspace
     (workspace / 'research').mkdir(parents=True, exist_ok=True)
@@ -388,10 +373,12 @@ def test_upgrade_with_an_agent_in_flight(upgrade: Upgrade) -> None:
     refused = upgrade.run('upgrade')
     assert refused.returncode != 0, refused.stdout
     assert all(named in refused.stderr for named in REMOVED_HOME_KEYS.values()), refused.stderr
+    assert 'Traceback' not in refused.stderr, 'one line names each key'
     assert smoke.sql('SELECT version_num FROM alembic_version')[0]['version_num'] == RELEASE_HEAD
     assert list(smoke.home.glob('piloop.db.bak-*')) == []
     assert int((smoke.home / 'serve.pid').read_text()) == pid
     delete_keys(smoke.home / 'config.toml', REMOVED_HOME_KEYS)
+    plant_files(upgrade)
     upgrade.before = upgrade.take()
     for name in (*PLANTED_BACKUPS, *NOT_BACKUPS):
         (smoke.home / name).write_bytes(b'a copy')
@@ -448,15 +435,23 @@ def test_nothing_of_the_release_is_lost(upgrade: Upgrade) -> None:
     live = live_dirs(before)  # an agent at work changes its own directories, and they go when it ends
     files = [f for f in found.files if not any(f'/{n}/' in f or f'-{n.replace("/", "-")}-' in f for n in live)]
     lost = [d for d in found.lost() if d not in found.files and d not in DROPPED] + files
-    lost = [d for d in lost if not QUEUE.match(d) and not dropped(d, before)]
+    lost = [d for d in lost if not QUEUE.match(d) and not dropped(d)]
     assert lost == [], '\n'.join(lost)
     kinds = [{r['id'] for r in i.tables['comment_kinds']} for i in (before, after)]
     assert kinds[0] <= kinds[1], 'every kind of comment is still there'
     candidates = {r['revision'] for r in before.tables['candidates']}
     assert candidates <= after.commits, 'every candidate commit is still in the repo'
-    acked = {(r['__rowid'], r['acked_by']) for r in before.tables['comments'] if r['acked_at'] is not None}
-    acks = {(r['comment_id'], r['acked_by']) for r in after.tables['acks']}
-    assert acked and acked <= acks, 'each ack of the release stays, in acks'
+    assert before.tables['acks'], 'the release acknowledged a decision'
+    home = upgrade.smoke.home
+    units = {
+        int(Path(p).stem): str(Cid.of(json.dumps(json.loads((home / UNITS / Path(p).name).read_bytes())).encode()))
+        for p in before.files
+        if p.startswith(f'home/{UNITS}/')
+    }
+    stored = {r['id']: r['units'] for r in after.tables['measurements'] if r['id'] in units}
+    assert units and stored == units, 'each per-unit results file of the release is in the CAS, under its measurement'
+    owner = (home / OWNER).read_text().strip()
+    assert [r['id'] for r in after.tables['owners']] == [owner], 'the owner id of the release is in the database'
     worktree = next(w for p, w in before.worktrees.items() if p.endswith(f'runs/{upgrade.in_flight}/worktree'))
     kept = after.worktrees.get(worktree.path)
     assert kept is not None and kept.head is not None and worktree.head is not None, after.worktrees
@@ -606,21 +601,21 @@ def test_no_process_of_the_release_is_left(upgrade: Upgrade) -> None:
         raise AssertionError(f'processes left: {smoke.processes()}') from e
 
 
-def test_a_home_of_0_5_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
+def test_a_home_of_0_6_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
     """This piloop migrates from ``RELEASE``'s schema only: it names the release to install first, and changes
-    nothing, on a database that piloop 0.5.0 created."""
+    nothing, on a database that piloop 0.6.0 created."""
     home = tmp_path / 'home'
     env = piloop_install.env(home) | {
         'UV_TOOL_DIR': str(tmp_path / 'uv-tools'),
         'UV_TOOL_BIN_DIR': str(tmp_path / 'bin'),
     }
-    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.5.0'], env=env, check=True)
+    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.6.0'], env=env, check=True)
     subprocess.run([str(tmp_path / 'bin' / 'piloop'), 'migrate'], env=env, check=True, capture_output=True)
     before = (home / 'piloop.db').read_bytes()
     proc = subprocess.run(['piloop', 'migrate'], env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode != 0
-    assert 'is from piloop 0.5 (schema revision core 0073' in proc.stderr, proc.stderr
-    assert "install piloop 0.6 (`uv tool install 'piloop==0.6.*'`)" in proc.stderr, proc.stderr
+    assert 'is from piloop 0.6 (schema revision core 0080' in proc.stderr, proc.stderr
+    assert "install piloop 0.7 (`uv tool install 'piloop==0.7.*'`)" in proc.stderr, proc.stderr
     assert (home / 'piloop.db').read_bytes() == before
     assert list(home.glob('piloop.db.bak-*')) == []
 
@@ -634,9 +629,24 @@ def add_old_shape(upgrade: Upgrade) -> None:
     config = json.dumps(json.loads(OLD_SHAPE_CONFIG.read_text())).replace("'", "''")
     upgrade.smoke.piloop(
         'sql',
-        'INSERT INTO campaigns (name, path, config, paused, paused_reason) VALUES'
-        f" ('{OLD_SHAPE}', '{repo}', '{config}', 'all', 'e2e: an old stored config')",
+        'INSERT INTO campaigns (name, path, config, paused, paused_by, paused_reason) VALUES'
+        f" ('{OLD_SHAPE}', '{repo}', '{config}', 'all', 'human', 'e2e: an old stored config')",
     )
+
+
+def plant_files(upgrade: Upgrade) -> None:
+    """The files that the release keeps beside its database and that this checkout moves into it: the per-unit results
+    of the baseline's measurement, as the release's ``save_units`` writes them for an evaluator that reports units
+    (enwik8's reports none), and the owner id, as the release's ``owner`` makes it when a pool first needs it."""
+    smoke = upgrade.smoke
+    [baseline] = smoke.sql(
+        'SELECT m.id FROM measurements m JOIN candidates c ON c.id = m.candidate_id'
+        " WHERE c.origin = 'baseline' AND m.error IS NULL AND m.rung IS NULL ORDER BY m.id LIMIT 1"
+    )
+    (smoke.home / UNITS).mkdir(exist_ok=True)
+    (smoke.home / UNITS / f'{baseline["id"]}.json').write_text(json.dumps({'bytes': {'enwik8': 3342035.0}}))
+    if not (smoke.home / OWNER).is_file():
+        (smoke.home / OWNER).write_text(uuid.uuid4().hex)
 
 
 def live_dirs(inventory: Inventory) -> list[str]:
@@ -690,20 +700,9 @@ def opened(inventory: Inventory) -> set[tuple[str, object]]:
     return rows
 
 
-def dropped(lost: str, before: Inventory) -> bool:
-    """A loss that the upgrading guide documents: a table of research memory, the ``memory/local`` row of
-    ``migrations`` (core 0085), or the token of an agent that had ended (core 0083)."""
-    table, _, rest = lost.partition('#')
-    if lost.partition(' ')[0] in DROPPED_TABLES:
-        return True
-    if table == 'migrations':
-        return '"memory/local"' in rest
-    if table == 'tokens':
-        rowid = int(rest.partition(':')[0])
-        [token] = [r for r in before.tables['tokens'] if r['__rowid'] == rowid]
-        ended = {r['id'] for r in before.tables['agent_sessions'] if r['state'] not in LIVE_STATES}
-        return token['agent_session_id'] in ended
-    return False
+def dropped(lost: str) -> bool:
+    """A loss that the upgrading guide documents: a row of a table in ``DROPPED_TABLES``."""
+    return lost.partition(' ')[0] in DROPPED_TABLES
 
 
 def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:

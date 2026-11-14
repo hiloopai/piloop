@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piloop"
-version = "0.7.0"
+version = "0.8.0"
 description = "Autoresearch for any repo: coding agents try ideas, piloop scores every commit and keeps what wins"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -50,7 +50,7 @@ Changelog = "https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md"
 Issues = "https://github.com/hiloopai/piloop/issues"
 
 [project.scripts]
-piloop = "piloop.cli.main:main"
+piloop = "piloop.cli:run"
 
 # The commands of piloop itself, which load by their import path when they run (piloop.cli.main.COMMANDS).
 [project.entry-points."piloop.commands"]
@@ -242,12 +242,6 @@ bucket = "piloop.plugins.leader.bucket:BucketLeader"
 [project.entry-points."piloop.mcp_servers"]
 http = "piloop.plugins.mcp_server.http:HttpServer"
 stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
-
-# The bridges of old keys (piloop.deprecated.BRIDGES): each declares the bridges that it runs after or before
-[project.entry-points."piloop.bridges"]
-research_memory = "piloop.deprecated:research_memory"
-wake_budget = "piloop.deprecated:wake_budget"
-evaluator_scoring = "piloop.deprecated:evaluator_scoring"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).

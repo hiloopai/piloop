@@ -59,6 +59,7 @@ from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, Sta
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.section.contract import SECTIONS, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
+from piloop.problems import explain
 from piloop.settings import AgentSettings, settings
 
 CONFIG_FILE = 'piloop.toml'
@@ -476,25 +477,6 @@ class ConfigMissing(ConfigError):
     """A campaign directory without a ``piloop.toml``."""
 
 
-DOCS = 'https://piloop.autoresearch.inc/reference/configuration'
-FIXES = {
-    'extra_forbidden': f'delete the key or correct its spelling; {DOCS} lists every key',
-    'missing': f'add the key; {DOCS} says what it takes',
-}
-
-
-def explain(where: object, error: ValidationError) -> str:
-    """Pydantic's errors as one line per bad key: the key and value (``metrics[0].role = 'boss'``), problem and fix."""
-    lines = [f'{where} is not a valid piloop config ({error.error_count()} problem(s)):']
-    for e in error.errors():
-        key = ''.join(f'[{part}]' if isinstance(part, int) else f'.{part}' for part in e['loc']).lstrip('.')
-        value = '' if e['type'] == 'missing' or isinstance(e['input'], dict | list) else f' = {e["input"]!r}'
-        message = e['msg'].removeprefix('Value error, ')
-        fix = FIXES.get(e['type'], f'{DOCS} describes the key')
-        lines.append(f'  {key or "(the file)"}{value}: {message}. Fix: {fix}')
-    return '\n'.join(lines)
-
-
 def merged(base: object, over: object) -> object:
     """``over`` on top of ``base``, key by key: a table merges into the table of the same key, any other value replaces."""
     match base, over:
@@ -527,6 +509,8 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         raw = tomllib.loads(toml.read_text())
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f'{toml} is not valid TOML: {e}') from e
+    if removed := deprecated.removed_keys(toml, raw, Scope.CAMPAIGN):
+        raise ConfigError('\n'.join(removed))
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
     defaults = settings.campaign_defaults
     raw['plugins'] = merged(defaults, raw.get('plugins', {}))

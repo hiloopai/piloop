@@ -1,3 +1,3 @@
-from piloop.cli.main import main
+from piloop.cli import run
 
-main()
+run()
