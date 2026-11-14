@@ -352,16 +352,16 @@ class Agents:
             implementers = select(AgentSession).where(
                 (AgentSession.subject_kind == RUN), AgentSession.state.in_(winding)
             )
-            of_implementers = implementers.with_only_columns(AgentSession.campaign_id)
+            # one read: an executor thread sets a starting implementer running meanwhile, of a campaign not read here
+            winding_down = s.scalars(implementers).all()
+            of_them = {w.campaign_id for w in winding_down}
             campaigns: dict[CampaignId | None, Campaign] = {
                 c.id: c
-                for c in s.scalars(
-                    select(Campaign).options(undefer(Campaign.config)).where(Campaign.id.in_(of_implementers))
-                )
+                for c in s.scalars(select(Campaign).options(undefer(Campaign.config)).where(Campaign.id.in_(of_them)))
             }
             graces = {
                 w.id: grace
-                for w in s.scalars(implementers)
+                for w in winding_down
                 if (grace := self._end_grace(s, w, campaigns[w.campaign_id])) is not None
             }
             found = {i: end for i, (at, end) in graces.items() if at <= now}
@@ -426,7 +426,10 @@ class Agents:
                 .order_by(AgentSession.id)
             ).all()
             self._liveness(s, asked, now, soonest, kills)
-            for agent_session in s.scalars(implementers.where(AgentSession.state == AgentSessionState.RUNNING)):
+            still_running = implementers.where(
+                AgentSession.state == AgentSessionState.RUNNING, AgentSession.id.in_([w.id for w in winding_down])
+            )
+            for agent_session in s.scalars(still_running):
                 left = self._time_left(s, agent_session, campaigns[agent_session.campaign_id], now)
                 if isinstance(left, TimeLeft):
                     cause = left.cut.value.format(timeout=left.timeout)

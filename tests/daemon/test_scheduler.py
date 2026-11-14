@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from contextlib import closing
 from dataclasses import dataclass, field, replace
@@ -45,7 +45,7 @@ from piloop.campaign import campaigns, inbox, ops
 from piloop.campaign.campaigns import sync
 from piloop.campaign.stop import left, request_cancel, request_stop
 from piloop.config import CampaignConfig, load_campaign_config
-from piloop.daemon.loop import Turn
+from piloop.daemon.loop import Soonest, Turn
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import emit, has, in_order, latest, payload_of
@@ -3062,6 +3062,40 @@ def test_a_wind_down_pass_decodes_the_config_of_its_implementers_campaign_once(
     monkeypatch.setattr(column.adapter, 'validate_python', counted)
     wind_down.run(Turn(utcnow()))
     assert len(decoded) == 1
+
+
+def test_an_implementer_that_starts_running_during_a_wind_down_pass_waits_for_the_next_pass(
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its executor sets it running from a thread of its own, after the pass read the implementers and their campaigns.
+
+    The pass is the first of the campaign to see one running: it must not look up a campaign that it did not read.
+    """
+    starting = running_agent_session(db, campaign, 'build', state=AgentSessionState.STARTING)
+    scheduler = make_scheduler(db, PromptingRuntime(), tmp_path)
+    [wind_down] = [c for c in scheduler.consumers() if c.name == 'wind_down']
+    liveness = Agents._liveness
+
+    def started_meanwhile(
+        agents: Agents,
+        s: Session,
+        agent_sessions: Sequence[AgentSession],
+        now: datetime,
+        soonest: Soonest,
+        kills: list[AgentSessionId],
+    ) -> None:
+        with elsewhere(db) as second, second.session() as other:  # the executor's start, from its own session
+            other.get_one(AgentSession, starting).state = AgentSessionState.RUNNING
+            other.commit()
+        liveness(agents, s, agent_sessions, now, soonest, kills)
+
+    monkeypatch.setattr(Agents, '_liveness', started_meanwhile)
+    wind_down.run(Turn(utcnow()))
+    monkeypatch.undo()
+    wind_down.run(Turn(utcnow()))
+    with db.session() as s:
+        assert s.get_one(AgentSession, starting).state is AgentSessionState.RUNNING
+    scheduler.stop(timeout=5)
 
 
 @pytest.mark.usefixtures('daemon_api')
