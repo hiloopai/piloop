@@ -28,6 +28,7 @@ from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
     AGENT_SESSION_STATES,
     JOB_FILES,
+    AgentEnded,
     Ended,
     Lost,
     NotStarted,
@@ -1535,6 +1536,8 @@ def test_a_startup_death_during_a_stop_leaves_the_run_to_the_stop(
 TIMEOUT = 'implementer timeout after 1s'
 SUBMITTED = RunEndRequested(how=RunEnding.SUBMITTED)
 GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit in memory')
+STOPPED = AgentEnded(reason='max_runs: 2 runs', end=RunEnd.CAMPAIGN_STOPPED)
+STALLED = AgentEnded(reason='no output for 0:20:00', end=RunEnd.STALLED)
 
 
 @pytest.mark.parametrize(
@@ -1544,7 +1547,8 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
         pytest.param(RunFacts(ending=SUBMITTED), (RunEnd.FINISHED, None), id='submitted'),
         pytest.param(RunFacts(ending=GAVE_UP), (RunEnd.GAVE_UP, GAVE_UP.reason), id='gave-up'),
         pytest.param(RunFacts(cancelled=True), (RunEnd.CANCELLED, None), id='cancel'),
-        pytest.param(RunFacts(ended=True), (RunEnd.CAMPAIGN_STOPPED, None), id='stop'),
+        pytest.param(RunFacts(ended=STALLED), (RunEnd.STALLED, STALLED.reason), id='stalled'),
+        pytest.param(RunFacts(ended=STOPPED), (RunEnd.CAMPAIGN_STOPPED, None), id='stop'),
         pytest.param(
             RunFacts(timed_out=True, stop_cut=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-cut'
         ),
@@ -1554,7 +1558,7 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
         pytest.param(RunFacts(submitted=True), (RunEnd.FINISHED, None), id='clean-exit-submitted'),
         pytest.param(RunFacts(), (RunEnd.GAVE_UP, None), id='clean-exit-nothing-submitted'),
         # the overlaps that fix the order: each pair of neighbouring rows, and a run that ends after its worker ended it
-        pytest.param(RunFacts(ending=SUBMITTED, ended=True), (RunEnd.FINISHED, None), id='submitted-stop'),
+        pytest.param(RunFacts(ending=SUBMITTED, ended=STALLED), (RunEnd.FINISHED, None), id='submitted-stalled'),
         pytest.param(RunFacts(ending=SUBMITTED, cancelled=True), (RunEnd.FINISHED, None), id='submitted-cancel'),
         pytest.param(
             RunFacts(ending=SUBMITTED, timed_out=True, error=TIMEOUT), (RunEnd.FINISHED, None), id='submitted-timeout'
@@ -1562,9 +1566,12 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
         pytest.param(
             RunFacts(ending=GAVE_UP, error='implementer exit 1'), (RunEnd.GAVE_UP, GAVE_UP.reason), id='gave-up-error'
         ),
-        pytest.param(RunFacts(ended=True, cancelled=True), (RunEnd.CANCELLED, None), id='cancel-stop'),
+        pytest.param(RunFacts(ended=STOPPED, cancelled=True), (RunEnd.CANCELLED, None), id='cancel-stop'),
         pytest.param(
-            RunFacts(ended=True, timed_out=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-timeout'
+            RunFacts(ended=STOPPED, timed_out=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-timeout'
+        ),
+        pytest.param(
+            RunFacts(ended=STALLED, error='implementer exit -9'), (RunEnd.STALLED, STALLED.reason), id='stalled-killed'
         ),
         pytest.param(
             RunFacts(cancelled=True, timed_out=True, error=TIMEOUT), (RunEnd.CANCELLED, None), id='cancel-timeout'

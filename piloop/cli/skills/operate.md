@@ -104,6 +104,10 @@ Without a name, it uses the campaign in the current directory, else the only act
 
 `piloop watch` shows the same as `piloop status`, live, in the human's terminal.
 
+The daemon owns liveness. Its policy ends a stuck agent, frees its slot and opens its idea again (`piloop status`:
+`ended stalled: …`). Do not end, relaunch or replace agents yourself. Never set an agent count to 0. To change the
+thresholds, edit `[plugins.liveness]` and run `piloop init .`.
+
 If the daemon is down, `requested` rows collect in `agent_sessions` and nothing runs.
 Check with `SELECT id, kind, reason FROM agent_sessions WHERE state = 'requested'`.
 Start the daemon with `piloop serve --detach`.

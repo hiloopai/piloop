@@ -62,10 +62,22 @@ gives it more time. What the implementer left uncommitted becomes a `recovered` 
 | How the run ended | What happens to its idea |
 |---|---|
 | `submitted` | `done` once its last commit has a score. |
-| `gave_up`, failed, timed out or stopped | Back to `open`, for another implementer. |
+| `gave_up`, failed, timed out, `stalled` or stopped | Back to `open`, for another implementer. |
 | Cancelled | `dropped`. |
 
 An implementer that failed to start claimed nothing: its run starts again with a new one, up to two times.
+
+### Stuck agents
+
+The daemon ends an agent that is stuck, so that it does not hold its slot until its timeout. Its liveness policy,
+`[plugins.liveness]` in `piloop.toml`, decides. The default, `probes`, ends an agent that does not run within 15
+minutes of a worker taking its job (`start_within`), or that writes nothing to its session for 20 minutes
+(`quiet_for`). A long tool call writes nothing until it returns: set `quiet_for` above your longest evaluation.
+
+The run of an agent that the policy ended ends `stalled`. That is not an attempt: `max_runs` does not count it, and its
+idea goes back to `open` with a note that says why. `piloop status` shows `ended stalled: <reason>`. The second stall
+of an idea also sends you one escalation; the idea stays open. The policies are a plugin capability: see
+[liveness policies](/plugins/rules#liveness-policies).
 
 ## Talk to a running implementer
 

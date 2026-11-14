@@ -114,6 +114,11 @@ noise_runs = 3                            # evaluations that confirm a candidate
 # plateau = 50                            # finished runs, scored or not, since the last new best or reactivation
 # hold_at = { spend = 1000 }              # facts of the fact sources at which nothing starts; raise one, then `piloop init` again
 
+# [plugins.liveness]                      # when the daemon ends a stuck agent; without the table: probes
+# start_within = "PT15M"                  # it must run this long after a worker took its job
+# quiet_for = "PT20M"                     # and write to its session at least this often; above your longest tool call
+# escalate_at = 2                         # the stall of an idea that tells you, once
+
 # [plugins.fact_source]                   # where the facts of the stop rule and the sections come from
 # use = ["campaign", "optimization", "billing", "spend"]  # if not set: campaign (hours, tokens) and optimization (the research)
 #                                         # a source with a table must be in use; a list lists campaign and optimization too

@@ -1,9 +1,10 @@
 """What the runs tell the stop rule and the campaigns' pass: attempts, new bests and runs, and when they settle."""
 
+from collections.abc import Collection
 from datetime import datetime
 
 from sqlalchemy import ColumnElement, exists, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from piloop.campaign.stop import _over_runs, _since_reopen, reopened_at, run_cancel
 from piloop.db.models import (
@@ -20,7 +21,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED
 from piloop.plugins.campaign_type.kit.pool.scored import last_best_at, new_bests
-from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RunEnd
+from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 
 
@@ -104,6 +105,14 @@ def reopen(s: Session, run: Run, idea: Idea, why: str) -> None:
     idea.status = IdeaStatus.OPEN
     body = f'open: run#{run.id} gave the idea back; {why}'
     s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+
+
+def stalls(s: Session, runs: Collection[RunId]) -> dict[RunId, int]:
+    """Count, for each of ``runs`` that claimed an idea, the other runs of that idea that ended ``stalled``."""
+    other = aliased(Run)
+    stalled = (other.idea_id == Run.idea_id) & (other.id != Run.id) & (other.end == RunEnd.STALLED)
+    rows = s.execute(select(Run.id, func.count(other.id)).join(other, stalled).where(Run.id.in_(runs)).group_by(Run.id))
+    return {RunId(run): count for run, count in rows}
 
 
 def kept(s: Session, campaign: Campaign) -> int:

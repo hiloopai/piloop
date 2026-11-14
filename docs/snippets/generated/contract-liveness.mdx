@@ -1,0 +1,11 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/liveness/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `LivenessPolicy.check(case: AgentCase) -> Alive \| Stalled \| EscalateStall` | Return whether the agent goes on or ends, or tell a human why and then do one of those. |
+| `AgentCase.role: RoleName` | The agent's role: a policy may treat a role apart, such as one whose agents wait long on purpose. |
+| `AgentCase.harness: str \| None` | The `[plugins.harness.<name>]` that runs the agent. None only for a row that a person wrote without one. |
+| `AgentCase.state: AgentSessionState` | `starting`: its job waits for a worker, or its worker sets it up (a clone, the first transfer). `running`: its harness runs. |
+| `AgentCase.running_for: timedelta \| None` | Since a worker took its job (`leases.acquired_at`). None while its job waits for a worker. |
+| `AgentCase.quiet_for: timedelta \| None` | Since its last snapshot of its session file (`SessionSaved`), or since it started running when it saved none since. A worker snapshots the file at most 30 s after it grows. None while it is starting. |
+| `AgentCase.stalls: int` | How many earlier runs of the ideas of its run ended `stalled`. |

@@ -116,6 +116,8 @@ from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchPolicy,
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessChoice, HarnessCase
 from piloop.plugins.harness_choice.round_robin import RoundRobin
+from piloop.plugins.liveness.contract import LIVENESS, LivenessPolicy, AgentCase, Alive, Stalled, EscalateStall
+from piloop.plugins.liveness.probes import Probes
 from piloop.plugins.harness.contract import ModelId
 from piloop.plugins.fact_source.leases import LeaseFacts
 from piloop.plugins.fact_source.models import ModelFacts, Price

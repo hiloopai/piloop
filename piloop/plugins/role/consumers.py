@@ -1,15 +1,15 @@
 """The role capability's machinery: it steers the agents that run, and winds them down.
 
 It hands each running agent the messages for it (``prompts``) and its extensions (``extensions``), and tells an agent
-to wrap up and ends it when its campaign stops, someone cancels it, its role timeout comes, or it ended its run
-(``wind_down``).
+to wrap up and ends it when its campaign stops, someone cancels it, its role timeout comes, or it ended its run, and
+ends an agent that its campaign's liveness policy finds stuck (``wind_down``).
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Final
+from typing import Final, assert_never
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, undefer
@@ -18,12 +18,15 @@ from piloop.actor import Agent, System
 from piloop.agents.results import (
     AgentSessionExtended,
     AgentSessionRunning,
+    AgentSessionStarted,
     PromptOutcome,
+    SessionSaved,
     WrapUp,
     end_agent,
     extension,
     queue_prompt,
 )
+from piloop.campaign import escalations
 from piloop.campaign.launches import close
 from piloop.campaign.stop import (
     ACTING,
@@ -35,7 +38,7 @@ from piloop.campaign.stop import (
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db import feed
 from piloop.db.events import emit, has, in_order, latest
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease
 from piloop.db.requests import pending
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import (
@@ -56,9 +59,12 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 )
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
+from piloop.plugins.campaign_type.kit.runs.stop import stalls
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.contribution import Contribution, DaemonHost
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.contract import AgentKey, Prompt
+from piloop.plugins.liveness.contract import LIVENESS, AgentCase, Alive, EscalateStall, LivenessPolicy, Stalled
 from piloop.plugins.role.contract import PUSHED
 from piloop.settings import AgentSettings
 
@@ -85,10 +91,30 @@ class TimeCut(StrEnum):
 
 
 WINDING: Kinds = frozenset(
-    {RunEndRequested, StopRequested, CancelRequested, CampaignStatusChanged, AgentSessionRunning, AgentSessionExtended}
+    {
+        RunEndRequested,
+        StopRequested,
+        CancelRequested,
+        CampaignStatusChanged,
+        AgentSessionStarted,
+        AgentSessionRunning,
+        AgentSessionExtended,
+    }
 )
-"""What wakes the wind-down: a run's end, a stop or a cancel, an agent that runs, to tell it, and one that got more
-time."""
+"""What wakes the wind-down: a run's end, a stop or a cancel, an agent that starts or runs, to tell it or to ask the
+liveness policy about it, and one that got more time. A snapshot of a session (``SessionSaved``) wakes nothing: at
+1,000 agents that would be about 33 passes a second. The policy's ``recheck`` comes instead."""
+
+
+STALLED_ESCALATION = EscalationView(
+    headline='An agent stalled again on the same idea.',
+    why='',
+    choices=(
+        Choice(id='A', label='Leave the idea open.', result='Another run takes it.'),
+        Choice(id='B', label='Drop the idea.', result='No run takes it again.'),
+    ),
+)
+"""What a liveness policy's ``EscalateStall`` asks, with its reason as ``why``."""
 
 
 @dataclass(frozen=True)
@@ -298,7 +324,12 @@ class Agents:
         ``[daemon] kill_retry`` until it ends: a kill can fail. Then the stops and cancels that are carried out are
         answered (``stop.answer_done``).
 
-        Returns when a grace period or a wrap-up lead ends, or when to send an ending agent's kill again.
+        Then the campaign's liveness policy (``[plugins.liveness]``) is asked about each other agent that is starting or
+        running (``cases``). One that it ends is ended at once: its run ends ``RunEnd.STALLED``, which is not an attempt,
+        and its idea opens again. An ``EscalateStall`` posts its escalation on the agent's run, once for each reason.
+
+        Returns when a grace period, a wrap-up lead or a policy's recheck ends, or when to send an ending agent's kill
+        again.
         """
         now, soonest = turn.now, Soonest()
         kills: list[AgentSessionId] = []
@@ -388,6 +419,13 @@ class Agents:
                     self._end(s, agent_session, reason, end, kills)
                 else:
                     soonest.add(told + grace)
+            asked = s.scalars(
+                select(AgentSession)
+                .where(AgentSession.state.in_(starting_or_running), AgentSession.id.not_in(list(cancels)))
+                .where(AgentSession.id.not_in(stopping))
+                .order_by(AgentSession.id)
+            ).all()
+            self._liveness(s, asked, now, soonest, kills)
             for agent_session in s.scalars(implementers.where(AgentSession.state == AgentSessionState.RUNNING)):
                 left = self._time_left(s, agent_session, campaigns[agent_session.campaign_id], now)
                 if isinstance(left, TimeLeft):
@@ -403,6 +441,42 @@ class Agents:
         for agent_session_id in kills:
             self._controller.executor.cancel(AgentKey(agent_session_id))
         return soonest.at
+
+    def _liveness(
+        self,
+        s: Session,
+        agent_sessions: Sequence[AgentSession],
+        now: datetime,
+        soonest: Soonest,
+        kills: list[AgentSessionId],
+    ) -> None:
+        """Ask the liveness policy of each agent's campaign about it (``cases``), and act on the answer."""
+        policies: dict[CampaignId | None, LivenessPolicy] = {}
+        for agent_session in agent_sessions:
+            if (campaign_id := agent_session.campaign_id) not in policies:
+                plugins = {} if campaign_id is None else s.get_one(Campaign, campaign_id).config.plugins
+                policies[campaign_id] = LIVENESS.selected(plugins)
+        for agent_session, case in zip(agent_sessions, cases(s, agent_sessions, now), strict=True):
+            policy = policies[agent_session.campaign_id]
+            answer = policy.check(case)
+            if isinstance(answer, EscalateStall):
+                asked = STALLED_ESCALATION.model_copy(
+                    update={
+                        'why': answer.reason,
+                        'details': f'Liveness policy {LIVENESS.name_of(policy)}: {answer.reason}',
+                    }
+                )
+                target = agent_session.subject or TargetRef(TargetKind.AGENT_SESSION, agent_session.id)
+                escalations.escalate_once(s, target, asked, priority=0)
+                answer = answer.then
+            match answer:
+                case Alive(recheck=recheck):
+                    soonest.add(None if recheck is None else now + recheck)
+                case Stalled(reason=reason):
+                    self._end(s, agent_session, reason, RunEnd.STALLED, kills)
+                    self._tracer.event('agent_session.stalled', agent_session=agent_session.id, reason=reason)
+                case _:
+                    assert_never(answer)
 
     def _timings(self, s: Session, agent_session: AgentSession) -> AgentSettings:
         """The home's ``[agents]``, with what the agent's campaign sets in its own."""
@@ -467,3 +541,45 @@ class Agents:
         """
         end_agent(s, agent_session, reason, end, self._tracer)
         kills.append(agent_session.id)
+
+
+def cases(s: Session, agent_sessions: Sequence[AgentSession], now: datetime) -> list[AgentCase]:
+    """What a liveness policy reads of each of ``agent_sessions``, starting or running, as of ``now``, in order.
+
+    The start counts from the newest lease of the agent that a worker took (``leases.acquired_at``), and the quiet from
+    its last snapshot (``SessionSaved``) or its start of running (``AgentSessionRunning``), whichever is later. The
+    stalls are the other runs of its run's idea that ended ``stalled``. Four queries, whatever the number of agents.
+    """
+    ids = [w.id for w in agent_sessions]
+    on = (Event.target_kind == TargetKind.AGENT_SESSION) & Event.target_id.in_(ids)
+    taken = dict(
+        s.execute(
+            select(Lease.agent_session_id, func.max(Lease.acquired_at))
+            .where(Lease.agent_session_id.in_(ids))
+            .group_by(Lease.agent_session_id)
+        ).all()
+    )
+    wrote = dict(
+        s.execute(
+            select(Event.target_id, func.max(Event.at))
+            .where(on, has(SessionSaved) | has(AgentSessionRunning))
+            .group_by(Event.target_id)
+        ).all()
+    )
+    runs = {w.id: run for w in agent_sessions if (run := run_of(w)) is not None}
+    stalled = stalls(s, list(runs.values()))
+    found = []
+    for w in agent_sessions:
+        acquired, last = taken.get(w.id), wrote.get(w.id)
+        running = w.state is AgentSessionState.RUNNING
+        found.append(
+            AgentCase(
+                role=w.kind,
+                harness=w.harness,
+                state=w.state,
+                running_for=None if acquired is None else now - acquired,
+                quiet_for=now - last if running and last is not None else None,
+                stalls=stalled.get(runs[w.id], 0) if w.id in runs else 0,
+            )
+        )
+    return found

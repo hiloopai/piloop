@@ -1948,3 +1948,32 @@ def test_optimization_0016_takes_a_merge_origin_keeps_the_lifted_sequence_and_do
     with closing(sqlite3.connect(path)) as con:
         assert con.execute('SELECT origin FROM candidates ORDER BY id').fetchall() == [('run',), ('reference',)]
     assert _schema_of(path, 'candidates')[:3] == before[:3], 'the table, its indexes and its triggers as they were'
+
+
+def test_optimization_0017_takes_a_stalled_end_and_downgrades_it_to_failed(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0016')
+    insert = (
+        'INSERT INTO runs (campaign_id, base_candidate_id, harness, model, status, "end", error) VALUES'
+        " (1, 1, 'pi', 'm', 'failed', 'stalled', 'no output for 0:20:00')"
+    )
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('one', '/one', '{}')")
+        with pytest.raises(sqlite3.IntegrityError, match='CHECK constraint failed: runend'):
+            con.execute(insert)
+    before = _schema_of(path, 'runs')
+    command.upgrade(chain, '0017')
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute(insert)
+        con.execute(
+            'INSERT INTO events (target_kind, target_id, actor, payload)'
+            ' VALUES (\'run\', 1, \'daemon\', \'{"kind": "run.finished", "end": "stalled"}\')'
+        )
+    command.downgrade(chain, '0016')
+    with closing(sqlite3.connect(path)) as con:
+        assert con.execute('SELECT "end", error FROM runs').fetchall() == [('failed', 'no output for 0:20:00')]
+        payloads = con.execute("SELECT payload FROM events WHERE kind = 'run.finished'").fetchall()
+        assert [loads(p)['end'] for (p,) in payloads] == ['failed']
+    assert _schema_of(path, 'runs')[:3] == before[:3], 'the table, its indexes and its triggers as they were'

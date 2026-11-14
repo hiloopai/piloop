@@ -28,6 +28,7 @@ from piloop.plugins.harness_choice.contract import HarnessCase, HarnessChoice
 from piloop.plugins.launch_policy.contract import LaunchCase, LaunchPolicy, Share
 from piloop.plugins.leader.contract import Leader, LeaderConfig, Term
 from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
+from piloop.plugins.liveness.contract import AgentCase, LivenessPolicy
 from piloop.plugins.network.contract import Network, NetworkConfig
 from piloop.plugins.notifier.contract import Notice, Notifier
 from piloop.plugins.price_list.contract import PriceList
@@ -61,6 +62,7 @@ CONTRACTS: dict[str, Contract] = {
     'price-list': Contract((PriceList,), '`piloop/plugins/price_list/contract.py`'),
     'launch-policy': Contract((LaunchPolicy, LaunchCase, Share), '`piloop/plugins/launch_policy/contract.py`'),
     'harness-choice': Contract((HarnessChoice, HarnessCase), '`piloop/plugins/harness_choice/contract.py`'),
+    'liveness': Contract((LivenessPolicy, AgentCase), '`piloop/plugins/liveness/contract.py`'),
     'contribution': Contract(
         (Contributes, Contribution, Consumer, Serves), '`piloop/plugins/contribution.py` and `piloop/daemon/loop.py`'
     ),

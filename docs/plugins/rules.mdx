@@ -13,6 +13,7 @@ import ContractFactSource from '/snippets/generated/contract-fact-source.mdx';
 import ContractPriceList from '/snippets/generated/contract-price-list.mdx';
 import ContractLaunchPolicy from '/snippets/generated/contract-launch-policy.mdx';
 import ContractHarnessChoice from '/snippets/generated/contract-harness-choice.mdx';
+import ContractLiveness from '/snippets/generated/contract-liveness.mdx';
 import ContractEscalation from '/snippets/generated/contract-escalation.mdx';
 import StopAnswers from '/snippets/generated/stop-answers.mdx';
 import Facts from '/snippets/generated/facts.mdx';
@@ -235,6 +236,29 @@ resume comes first, and a full harness passes its turn. A harness that `piloop l
 replaced.
 
 <ContractHarnessChoice />
+
+## Liveness policies
+
+A **liveness policy** decides when the daemon ends an agent that is stuck. Each campaign picks its own, in
+`piloop.toml`:
+
+```toml
+[plugins.liveness]
+provider = "probes"        # the default
+start_within = "PT15M"     # run within this long of a worker taking the job...
+quiet_for = "PT20M"        # ...and write to the session file at least this often
+escalate_at = 2            # the stall of an idea that tells a human, once
+```
+
+On each wind-down pass, the daemon asks the policy about each starting or running agent. `Alive` lets it go on, and
+says when to ask again. `Stalled` ends it: its run ends `stalled`, which is not an attempt, and its idea opens again with a
+note that says why. `EscalateStall` tells a human, once for each reason, and then does its `then`. The role's timeout still
+bounds every agent.
+
+The built-in `probes` counts the start from when a worker took the job, so an agent that waits for a free worker is not
+stuck. A tool call writes nothing until it returns: set `quiet_for` above the longest one.
+
+<ContractLiveness />
 
 ## Escalation policies
 

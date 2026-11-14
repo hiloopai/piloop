@@ -14,6 +14,7 @@
 | launch policy: `LAUNCH_POLICIES` (`piloop.launch_policies`) | pure | `[plugins.launch_policy] provider` in `config.toml` | `fewest_live`: `FewestLive` |
 | leader: `LEADERS` (`piloop.leaders`) | host | `[plugins.leader] provider` in `config.toml` | `bucket`: `BucketLeader`<br/>`local`: `LocalLeader` |
 | lineage: `LINEAGE` (`piloop.lineages`) | host | `[plugins.lineage.<name>]` | `optimization`: `OptimizationLineage` |
+| liveness: `LIVENESS` (`piloop.liveness_policies`) | pure | `[plugins.liveness] provider` | `probes`: `Probes` |
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |
 | notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |

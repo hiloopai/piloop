@@ -238,6 +238,18 @@ Each lineage by name.
 
 With `provider = "optimization"`, the table has no other key.
 
+### `[plugins.liveness]`
+
+The liveness policy. Without a table: `probes`.
+
+With `provider = "probes"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `start_within` | duration | `"PT15M"` | How long after a worker took an agent's job the agent must run: a bad launch, a hung clone or first transfer. |
+| `quiet_for` | duration | `"PT20M"` | How long a running agent may write nothing to its session file: a hung harness, model call or tool. |
+| `escalate_at` | integer | `2` | The stall of an idea, by its count, that escalates, once: by default its second. |
+
 ### `[plugins.mcp_server.<name>]`
 
 Each mcp server by name.

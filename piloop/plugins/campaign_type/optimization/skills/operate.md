@@ -84,7 +84,8 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 
 - A run that became redundant: `piloop run cancel <run> --wrap-up`. The implementer is told to save its work and stop,
   and ended 10 minutes later, with every process it started. Its commits are scored and its idea is dropped. Without
-  `--wrap-up`, it is ended at once.
+  `--wrap-up`, it is ended at once. A cancel is for a run that you judge redundant, not for liveness: the daemon ends a
+  stuck agent itself.
 - A run that needs more time than its timeout: `piloop run extend <run> --by 1h`. The implementer is told its new deadline.
 - In a paused campaign, the daemon still measures what a new evaluator or `piloop candidate remeasure` needs, so the
   pause ends on a measured best. `piloop pause --evals` holds those measurements too.

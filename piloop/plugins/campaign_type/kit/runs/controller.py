@@ -532,8 +532,8 @@ class RunController:
                 case NotStarted():
                     if not self._relaunch(span, run_id, agent_session_id, log_dir):
                         with self._db.session() as s:
-                            end = RunEnd.CANCELLED if run_cancel(s, run_id) is not None else RunEnd.NOT_STARTED
-                        self._close(span, run_id, end, None)
+                            end, error = unstarted_end(s, run_id, agent_session_id)
+                        self._close(span, run_id, end, error)
                         self._settle(run_id, end, None)
                 case Ran():
                     self._ran(
@@ -627,17 +627,13 @@ class RunController:
         versions = self._received(run_id, repo, base_revision, ended.work)
         ending = self._ending(run_id)
         with self._db.session() as s:
-            stop_ended = s.scalar(
-                select(Event.id).where(
-                    Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id), has(AgentEnded)
-                )
-            )
+            ended_by = _ended_by_daemon(s, agent_session_id)
             cancelled = run_cancel(s, run_id) is not None
             unsaved = latest(s, WorkUnsaved, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
             sent = bool(submitted(s, run_id))
         facts = RunFacts(
             ending=ending,
-            ended=stop_ended is not None,
+            ended=ended_by,
             cancelled=cancelled,
             timed_out=outcome.status is ExitStatus.TIMED_OUT,
             stop_cut=stop_cut,
@@ -656,8 +652,9 @@ class RunController:
         The run stays open, so it keeps its slot, attempt number and brief. The ``implementer#<id>`` in the brief becomes the
         new implementer's id. The new implementer signs its notes with its own id. The scheduler launches the new agent session row like any other. The old implementer's transcript is
         renamed so that the new one does not overwrite it. A request made while the daemon stops waits for the next
-        daemon, as every request does. A cancelled run (``run_cancel``) is not queued again, and neither is a run that
-        its campaign would not launch now (``unlaunchable``): it ends at once and frees its slot, rather than wait.
+        daemon, as every request does. A cancelled run (``run_cancel``) is not queued again, nor is one whose
+        implementer the daemon ended (``AgentEnded``: a stop, a cancel, the liveness policy), nor a run that its
+        campaign would not launch now (``unlaunchable``): it ends at once and frees its slot, rather than wait.
         """
         with self.launcher.lock:
             with self._db.session() as s:
@@ -665,6 +662,8 @@ class RunController:
                 role = run.campaign.config.roles.doing_runs().get(run.role)
                 launches = s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) or 0
                 if role is None or launches > role.startup_relaunches or run_cancel(s, run_id) is not None:
+                    return False
+                if _ended_by_daemon(s, agent_session_id) is not None:
                     return False
                 if (why := unlaunchable(s, run.campaign, role.timeout, role.wrap_up_lead)) is not None:
                     span.set(relaunch=why)
@@ -1346,8 +1345,8 @@ class RunFacts:
 
     ending: RunEndRequested | None = None
     """How its worker ended it (``piloop run end``), if it did."""
-    ended: bool = False
-    """The daemon ended the implementer (``AgentEnded``)."""
+    ended: AgentEnded | None = None
+    """How the daemon ended the implementer, if it did (``AgentEnded``)."""
     cancelled: bool = False
     """Someone cancelled the run (``run_cancel``)."""
     timed_out: bool = False
@@ -1373,9 +1372,12 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
         # A cancel, whether the daemon ended the implementer or it ended by itself first.
         case RunFacts(cancelled=True):
             return RunEnd.CANCELLED, None
-        # A stop ended it, whatever the kill left in the outcome.
-        case RunFacts(ended=True):
-            return RunEnd.CAMPAIGN_STOPPED, None
+        # The liveness policy ended it, with why, whatever the kill left in the outcome.
+        case RunFacts(ended=AgentEnded(end=RunEnd.STALLED, reason=reason)):
+            return RunEnd.STALLED, reason
+        # A stop ended it: the end that the daemon gave.
+        case RunFacts(ended=AgentEnded(end=end)):
+            return end, None
         # It ran into the campaign's stop, which cut its session short: no attempt at its idea.
         case RunFacts(timed_out=True, stop_cut=True):
             return RunEnd.CAMPAIGN_STOPPED, None
@@ -1406,6 +1408,27 @@ def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
     finished = RunFinished(end=end, error=error)
     transition(s, RUN_STATES, run.id, end.status, finished, System.DAEMON, end=end, error=error, finished_at=utcnow())
     return run
+
+
+def _ended_by_daemon(s: Session, agent_session_id: AgentSessionId) -> AgentEnded | None:
+    """How the daemon ended the agent (``AgentEnded``), or None: it did not."""
+    found = latest(s, AgentEnded, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
+    return None if found is None else found[1]
+
+
+def unstarted_end(s: Session, run_id: RunId, agent_session_id: AgentSessionId) -> tuple[RunEnd, str | None]:
+    """How a run ends whose implementer did not start to work and that is not queued again, and the error.
+
+    ``cancelled`` by a cancel, ``stalled`` when the liveness policy ended the implementer before it started, with why,
+    else ``not_started``.
+    """
+    if run_cancel(s, run_id) is not None:
+        return RunEnd.CANCELLED, None
+    match _ended_by_daemon(s, agent_session_id):
+        case AgentEnded(end=RunEnd.STALLED, reason=reason):
+            return RunEnd.STALLED, reason
+        case _:
+            return RunEnd.NOT_STARTED, None
 
 
 def _close_unstarted(s: Session, agent_session_id: AgentSessionId, error: str) -> bool:

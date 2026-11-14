@@ -116,6 +116,7 @@ escalation = "piloop.plugins.escalation.contract:ESCALATIONS"
 price_list = "piloop.plugins.price_list.contract:PRICE_LISTS"
 launch_policy = "piloop.plugins.launch_policy.contract:LAUNCH_POLICIES"
 harness_choice = "piloop.plugins.harness_choice.contract:HARNESS_CHOICES"
+liveness = "piloop.plugins.liveness.contract:LIVENESS"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -224,6 +225,9 @@ fewest_live = "piloop.plugins.launch_policy.fewest_live:FewestLive"
 
 [project.entry-points."piloop.harness_choices"]
 round_robin = "piloop.plugins.harness_choice.round_robin:RoundRobin"
+
+[project.entry-points."piloop.liveness_policies"]
+probes = "piloop.plugins.liveness.probes:Probes"
 
 [project.entry-points."piloop.campaign_types"]
 optimization = "piloop.plugins.campaign_type.optimization:Optimization"

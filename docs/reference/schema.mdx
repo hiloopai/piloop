@@ -421,7 +421,7 @@ CREATE TABLE runs (
 	CONSTRAINT fk_runs_campaign_id_campaigns FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
 	CONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')),
-	CONSTRAINT runend CHECK ("end" IN ('finished', 'gave_up', 'failed', 'timed_out', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost'))
+	CONSTRAINT runend CHECK ("end" IN ('finished', 'gave_up', 'failed', 'timed_out', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost', 'stalled'))
 );
 CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
 CREATE INDEX ix_runs_status ON runs (status);

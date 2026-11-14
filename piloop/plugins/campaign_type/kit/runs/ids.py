@@ -51,7 +51,8 @@ class RunEnd(StrEnum):
     or the save of what it left unsaved did (the error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,
     ``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.
     ``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to
-    work. Only the first four are attempts at an idea.
+    work. ``stalled``: the campaign's liveness policy ended its agent, which did not start or went quiet
+    (``[plugins.liveness]``; the error says why). Only the first four are attempts at an idea.
     """
 
     FINISHED = 'finished'
@@ -65,6 +66,7 @@ class RunEnd(StrEnum):
     ROLE_REMOVED = 'role_removed'
     NOT_STARTED = 'not_started'
     WORKER_LOST = 'worker_lost'
+    STALLED = 'stalled'
 
     @property
     def status(self) -> RunStatus:
