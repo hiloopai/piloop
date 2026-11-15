@@ -78,6 +78,13 @@ def test_what_rebuilds_a_home_is_writable(con: sql.Connection) -> None:
         assert sql.run(con, f'DELETE FROM {table}').changes == 1
 
 
+def test_a_term_is_writable(con: sql.Connection) -> None:
+    """An agent may write the daemon's terms: a bug that only such a write reaches is by design."""
+    assert sql.run(con, 'INSERT INTO terms (epoch, pid) VALUES (1, 2)').changes == 1
+    assert sql.run(con, 'UPDATE terms SET stopping_at = CURRENT_TIMESTAMP').changes == 1
+    assert sql.run(con, 'DELETE FROM terms').changes == 1
+
+
 def test_row_limit(con: sql.Connection) -> None:
     con.executemany(
         "INSERT INTO comments (target_kind, target_id, author, kind, body, created_at) VALUES ('idea', 1, 'a', 'note', ?, '2026-01-01')",

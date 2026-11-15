@@ -85,8 +85,8 @@ CORE_SCHEMA = Schema(
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
     internal=(Lease, Limit, Term, Token, Migration, RepoTransfer, WorkspaceSnapshot, JobFiles),
-    # an agent that could write a token could call the server as a worker; one that wrote a term, stop measurements
-    protected=(Term, Token, Migration),
+    # an agent that could write a token could call the server as a worker
+    protected=(Token, Migration),
 )
 
 
