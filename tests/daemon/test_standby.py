@@ -142,7 +142,9 @@ def test_a_standby_stops_on_sigterm_and_a_holder_that_cannot_release_says_so(
             raise Unreachable('as the test says')
 
         monkeypatch.setattr(first._leader, 'release', unreachable)
-        first.shutdown(timeout=5)
+        with pytest.raises(Unreachable, match='^as the test says$'):
+            first.shutdown(timeout=5)
+        first._release()
     assert ('term.not_released', {'error': 'as the test says'}) in events
 
 
@@ -199,6 +201,8 @@ def test_the_next_term_restores_what_the_first_wrote_and_names_its_own_replica_o
         s.commit()
         mark = written.id
     first.shutdown(timeout=5)  # its replica ships the rest, then it releases the term
+    source = stored().source
+    assert source is not None and source.epoch == 1 and source.txid is not None
     second = Daemon(home(tmp_path, 'b'))
     try:
         with second.db.session() as s:
@@ -209,7 +213,7 @@ def test_the_next_term_restores_what_the_first_wrote_and_names_its_own_replica_o
                 break
             threading.Event().wait(0.01)
         assert stored().source == Source(epoch=2), 'its own replica, once it holds the whole database'
-        assert bucket.restores == [(f's3://{BUCKET}/cell/terms/1', None)]
+        assert bucket.restores == [(f's3://{BUCKET}/cell/terms/1', source.txid)]
     finally:
         second.shutdown(timeout=5)
 
@@ -364,7 +368,9 @@ def test_a_standby_forwards_a_worker_and_an_agent_to_the_holder_then_serves_once
                 assert 'made-through-b' in {t.name for t in agent.list_tokens().tokens}
         finally:
             stack.close()
-            a.shutdown(timeout=5)  # its release finds term 2: it says so
+            with pytest.raises(LostTerm, match='after term 1'):
+                a.shutdown(timeout=5)
+            a._release()
             for each in b:
                 each.shutdown(timeout=5)
 

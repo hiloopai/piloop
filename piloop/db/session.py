@@ -847,6 +847,10 @@ class DatabaseClosed(RuntimeError):
     """A session asked of a ``Database`` after its ``close``: the caller outlived the daemon's database."""
 
 
+class DatabaseBusy(RuntimeError):
+    """Database close timed out with readers or checked-out connections: writers are not quiescent."""
+
+
 class NestedCheckout(RuntimeError):
     """A request or a thread that holds a connection asked for a second one (``Database.nested``).
 
@@ -1028,6 +1032,8 @@ class Database:
 
     def _out(self, _driver: object, entry: ConnectionPoolEntry, _proxy: object) -> None:
         with self._committed:
+            if self._closed:
+                raise DatabaseClosed('the database is closed')
             self._holders[id(entry)] = _holder()
             self._committed.notify_all()
 
@@ -1194,7 +1200,8 @@ class Database:
 
         A connection that is checked out while the pool goes is never closed: Python warns when it collects it. So it
         waits for every one to come back, a waiter's read, the doorbell's or any other session's, and opens no new one
-        meanwhile.
+        meanwhile. A timeout raises DatabaseBusy; checked-out connections remain usable until their holders
+        return them, so the caller must not publish a final replica or release ownership. A later close may finish.
         """
         with self._committed:
             self._closed = True
@@ -1203,7 +1210,10 @@ class Database:
         for watch in watches:
             watch.wake(self._generation, closed=True)
         with self._committed:
-            self._committed.wait_for(lambda: self._reading == self._checked_out == 0, CLOSE_WAIT_SECONDS)
+            if not self._committed.wait_for(lambda: self._reading == self._checked_out == 0, CLOSE_WAIT_SECONDS):
+                raise DatabaseBusy(
+                    f'database close timed out: {self._reading} readers, {self._checked_out} connections still held'
+                )
         # The sessionmaker's class holds its listeners for the life of the process: this one would keep the database.
         if event.contains(self._sessions, 'after_commit', self._on_commit):  # a second close finds it gone
             event.remove(self._sessions, 'after_commit', self._on_commit)

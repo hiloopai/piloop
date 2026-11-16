@@ -384,13 +384,35 @@ passes the answer back. While no holder answers, it answers 503 with a `Retry-Af
 readiness probe of a load balancer. Each term streams the home's
 database with [Litestream](https://litestream.io) 0.5 to `terms/<epoch>/` beside the object. The next term restores
 it, then makes the rest of the home again from the CAS: each campaign's repo from its URL and what it received, its
-workspace, and the jobs' logs. A takeover loses what the old holder wrote in its last second or so, which Litestream had
-not shipped. A home that went back to `local` and then to `bucket` again keeps what it wrote under `local`: a host
+workspace, and the jobs' logs. Crash takeover can lose writes that Litestream had not shipped; asynchronous
+replication does not guarantee a fixed recovery point. A home that went back to `local` and then to `bucket` again keeps what it wrote under `local`: a host
 whose database holds a newer term than the bucket's record serves that database rather than restore an older replica.
 Move it back with one daemon first, on the host that ran `local`, then add the others. A holder whose Litestream exits, or whose replica does not hold the whole database within
 `replica_wait` (60 s), logs an error, stops, and exits with a failure: it never goes on serving writes that nothing
 ships. Litestream gets the bucket's region from piloop (the region of its S3 client: `AWS_REGION` or the profile's), so
 it needs no `s3:GetBucketLocation`.
+
+A planned stop closes every database writer, then calls Litestream's
+[`sync -wait`](https://litestream.io/reference/sync/) through a private control socket. It checks a fresh remote
+transaction receipt for the same database file and current epoch, and conditionally pins that epoch and exact
+transaction as the next restore source before releasing the term. Even a short term that stopped before its replica
+watch ran must publish that final source. Term renewal and hard expiry fencing remain active throughout this work.
+Database close stops new connection admission and waits up to 5s for the connections already in use. If any remain,
+the stop fails before sync, source publication or release; renewal and hard fencing still protect those writers.
+A failed finalization cannot be turned into an in-place restart by another restart signal.
+
+The final sync request shares a 5s budget with control-listener startup, plus a 1s outer subprocess allowance.
+Watcher/S3 calls and child cleanup have separate bounds; this is not an overall shutdown deadline.
+Failed sync, lost replies, cancellation,
+database replacement or failed source publication fail the stop and suppress a successful in-place restart; they do
+not authorize term release. Child cleanup is bounded separately, and diagnostic log delivery cannot hold it open.
+This is not a promise of lossless recovery after a failed stop: a killed holder or expired term still follows the
+asynchronous crash-recovery contract. Preserve the original home and investigate a failed stop; do not treat a clean
+Litestream process exit as proof that a remote replica is current. These process guarantees do not set a Kubernetes
+rollout or load-balancer availability bound.
+`piloop stop` observes lock release, not the exit status of an unrelated daemon process or a replication receipt.
+Automation must distinguish process termination from a verified planned handoff; a service-manager restart after a
+failed stop still follows crash recovery.
 
 Under `bucket`:
 

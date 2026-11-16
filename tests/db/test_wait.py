@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import PoolProxiedConnection, QueuePool
 
@@ -19,7 +19,7 @@ from piloop.actor import System
 from piloop.db import feed, session as session_module
 from piloop.db.events import NewEvent, Topic, emit
 from piloop.db.models import Campaign, EventModel, Pause
-from piloop.db.session import Database, DatabaseClosed
+from piloop.db.session import Database, DatabaseBusy, DatabaseClosed
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignPausedChanged, Changed, LimitSet
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.executor.kit.leases import LeasePrompted, WorkerDrained
@@ -543,3 +543,32 @@ def test_a_topic_admits_in_memory_the_events_that_it_matches_in_sql(
         matched = feed.after(s, 0, [topic], limit=1000).ids
     assert [e.id for e in events if topic.admits(e)] == matched
     assert matched, 'a topic that admits nothing proves nothing'
+
+
+def test_close_cannot_report_quiescence_with_a_checked_out_connection(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr('piloop.db.session.CLOSE_WAIT_SECONDS', 0)
+    with db.session() as held:
+        held.execute(select(1))
+        with pytest.raises(DatabaseBusy, match='0 readers, 1 connections still held'):
+            db.close()
+        assert db.closed and db._checked_out == 1
+        assert held.execute(text('SELECT 2')).scalar_one() == 2, 'close cannot revoke an admitted connection'
+    db.close()
+    assert db._checked_out == 0
+
+
+def test_close_refuses_a_late_checkout_from_the_existing_pool(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+    with db.session() as s:
+        s.execute(select(1))
+    dispose = db.engine.dispose
+    monkeypatch.setattr(db.engine, 'dispose', lambda: None)
+    db.close()
+    try:
+        with db.engine.connect():
+            pytest.fail('the pre-existing pool admitted a connection after close')
+    except DatabaseClosed:
+        pass
+    finally:
+        dispose()

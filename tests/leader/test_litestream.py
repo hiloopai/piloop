@@ -19,14 +19,19 @@ import boto3
 import pytest
 from moto import mock_aws
 from mypy_boto3_s3 import S3Client
+from pytest_mock import MockerFixture
+from sqlalchemy import text
 
 from piloop.actor import System
+from piloop.daemon.main import Daemon
 from piloop.db import terms
-from piloop.db.session import Database
+from piloop.db.session import Database, DatabaseBusy
 from piloop.plugins.leader import bucket
-from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Litestream, Replicating
+from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Record
 from piloop.plugins.leader.contract import Unreachable
+from piloop.plugins.leader.kit.litestream import Litestream, Replicating
 from piloop.plugins.leader.local import LocalLeader
+from piloop.settings import Settings
 from scripts.litestream import VERSION
 from tests.conftest import wait_until
 from tests.leader.test_bucket import BUCKET, SKEW, TTL, URL, Clock
@@ -115,6 +120,66 @@ def test_a_replication_over_old_local_state_without_txid_1_ships_every_later_wri
     finally:
         replicating.stop()
     assert restored(litestream, f'file://{new}', tmp_path / 'r.db') == want, 'every row, from the new replica alone'
+
+
+def test_the_control_sync_proves_and_restores_the_final_write(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initial replica')
+        add(database, 'final write after the first upload')
+        txid = running.sync()
+        assert int(txid, 16) > 0
+        restored_db = tmp_path / 'restored.db'
+        assert litestream.restore(f'file://{replica}', txid, restored_db) == txid
+        assert notes(restored_db) == notes(database) == ['final write after the first upload']
+    finally:
+        running.stop()
+
+
+def test_a_failed_control_sync_cannot_supply_a_success_receipt(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    saved = tmp_path / 'saved'
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initial replica')
+        replica.rename(saved)
+        replica.write_text('destination unavailable')
+        add(database, 'unreplicated write')
+        with pytest.raises(Unreachable, match='final sync'):
+            running.sync()
+    finally:
+        if saved.exists():
+            replica.unlink()
+            saved.rename(replica)
+        running.stop()
+
+
+def test_an_existing_empty_database_has_a_restorable_nonzero_position(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = tmp_path / 'empty.db', tmp_path / 'replica'
+    database.touch()
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initialized empty replica')
+        txid = running.sync()
+        assert int(txid, 16) > 0
+        restored_db = tmp_path / 'restored.db'
+        litestream.restore(f'file://{replica}', txid, restored_db)
+        with closing(sqlite3.connect(restored_db)) as db:
+            assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    finally:
+        running.stop()
+
+
+def test_an_immediate_stop_waits_for_actual_control_readiness(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        txid = running.sync()  # no pre-wait for socket, first file, log line or a fixed delay
+        assert int(txid, 16) > 0
+        litestream.restore(f'file://{replica}', txid, tmp_path / 'restored.db')
+    finally:
+        running.stop()
 
 
 class Refusing(BaseHTTPRequestHandler):
@@ -265,3 +330,84 @@ def begin(database: Path, epoch: int) -> None:
     with Database(f'sqlite:///{database}', actor=System.DAEMON).session() as s:
         terms.begin(s, epoch, 1, None)
         s.commit()
+
+
+@pytest.mark.parametrize('writer_returns', [False, True])
+def test_a_real_daemon_proves_its_final_replica_only_after_its_last_writer_returns(
+    litestream: Litestream, client: S3Client, tmp_path: Path, mocker: MockerFixture, writer_returns: bool
+) -> None:
+    home = tmp_path / 'home'
+    home.mkdir()
+    (home / 'config.toml').write_text(
+        f'[plugins.leader]\nprovider="bucket"\nurl="{URL}"\nttl=60\nrenew=0.05\ndeadline=30\n'
+        f'[plugins.cas]\nprovider="s3"\nurl="s3://{BUCKET}/cas"\n'
+    )
+    replica = OnDisk(litestream, tmp_path / 'replicas')
+    mocker.patch.object(bucket, 'Litestream', return_value=replica)
+    daemon = Daemon(Settings(home=home))
+    assert daemon._holding is not None
+    released = mocker.spy(daemon._leader, 'release')
+    finalizing = mocker.spy(daemon, '_release_term')
+    with daemon.db.session() as s:
+        s.execute(text('CREATE TABLE notes (body TEXT)'))
+        s.commit()
+    ready, finish = threading.Event(), threading.Event()
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            with daemon.db.session() as s:
+                s.execute(text('SELECT 1'))
+                ready.set()
+                if writer_returns:
+                    wait_until(lambda: daemon.db.closed, 'close has stopped admission')
+                else:
+                    assert finish.wait(15)
+                s.execute(text("INSERT INTO notes VALUES ('last admitted writer')"))
+                s.commit()
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        assert ready.wait(10)
+        if not writer_returns:
+            mocker.patch('piloop.db.session.CLOSE_WAIT_SECONDS', 0)
+            before = Record.model_validate_json(
+                client.get_object(Bucket=BUCKET, Key='homes/one/term.json')['Body'].read()
+            )
+            with pytest.raises(DatabaseBusy, match='1 connections still held'):
+                daemon.shutdown(timeout=0)
+            after = Record.model_validate_json(
+                client.get_object(Bucket=BUCKET, Key='homes/one/term.json')['Body'].read()
+            )
+            assert daemon._handoff_failed and daemon.db._checked_out == 1
+            assert after.source == before.source and after.until is not None
+            released.assert_not_called()
+            finalizing.assert_not_called()
+            assert all(t.is_alive() for t in daemon._holding._threads), 'hard fencing still protects the writer'
+            finish.set()
+            thread.join(10)
+            assert not errors and not thread.is_alive()
+            assert notes(home / 'piloop.db') == ['last admitted writer']
+        else:
+            daemon.shutdown(timeout=0)
+            released.assert_called_once()
+            finalizing.assert_called_once()
+            source = Record.model_validate_json(
+                client.get_object(Bucket=BUCKET, Key='homes/one/term.json')['Body'].read()
+            ).source
+            assert source is not None and source.txid is not None
+            out = tmp_path / 'restored.db'
+            replica.restore(f'{URL}/terms/1', source.txid, out)
+            assert notes(out) == ['last admitted writer']
+    finally:
+        finish.set()
+        thread.join(15)
+        assert not thread.is_alive() and not errors
+        if daemon._handoff_failed:
+            # Test cleanup only, after the held writer returned: do not turn the failed shutdown into success.
+            daemon.db.close()
+            daemon._release_term()
+            daemon._release()
