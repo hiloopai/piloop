@@ -31,8 +31,8 @@ def serve_argv(listen: Address | None) -> list[str]:
 
 POLL_SECONDS = 0.1
 STOP_SECONDS = 45
-"""How long ``piloop stop`` waits for the daemon by default. The daemon's shutdown keeps within it (``Daemon.shutdown``),
-so a ``piloop serve`` right after a stop finds the lock free."""
+"""How long ``piloop stop`` waits for the daemon's lock by default. A timeout does not force termination,
+authorize another writer or prove remote replication (``Daemon.shutdown``)."""
 LAUNCHD_LABEL = 'dev.piloop.serve'
 RESTART_SIGNAL = signal.SIGUSR1
 """Stop as on SIGTERM, then exec ``piloop serve`` in place.

@@ -145,7 +145,7 @@ Restart(h) == /\ phase[h] = "down" /\ phase' = [phase EXCEPT ![h] = "standby"] /
               /\ Keep(Switch)
 
 \* SWITCH: a daemon that stops cleanly keeps its disk, and starts again as a standby. A holder's stop ships the rest
-\* first (Litestream's last frames): its replica is whole and named.
+\* first (Litestream's synchronous remote proof and conditional source publication): its replica is whole and named.
 Stop(h) == /\ SWITCH
            /\ \/ phase[h] = "local"
               \/ phase[h] = "holding" /\ snapped[h] /\ mine[h] \subseteq shipped[h] /\ src = <<ep[h], ALL>>

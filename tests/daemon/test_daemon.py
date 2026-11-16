@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import System
 from piloop.agents.results import CampaignResults
 from piloop.config import load_campaign_config
+from piloop.daemon.holding import Holding
 from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import LOCK_ENV, RESTART_SIGNAL, SERVE_ARGV, running_pid
 from piloop.db.events import latest
@@ -30,6 +31,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.executor.kit.transfers import BUILDS
+from piloop.plugins.leader.contract import LostTerm, Unreachable
 from piloop.plugins.leader.local import LocalLeader
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
@@ -156,6 +158,44 @@ def test_serve_runs_until_interrupted(tmp_path: Path, mocker: MockerFixture) -> 
     daemon.serve()
     assert loop.called
     assert not (tmp_path / 'home' / 'serve.pid').exists()
+
+
+@pytest.mark.parametrize('phase', ['replication', 'release'])
+@pytest.mark.parametrize('error', [Unreachable('reply lost'), LostTerm('new epoch'), KeyboardInterrupt()])
+def test_a_failed_final_handoff_stops_renewals_without_claiming_a_successful_restart(
+    tmp_path: Path, mocker: MockerFixture, phase: str, error: BaseException
+) -> None:
+    daemon = Daemon(Settings(home=tmp_path / 'home'))
+    holding = mocker.Mock(spec=Holding, term=daemon._term)
+    daemon._holding = holding
+    daemon._restart = True
+    calls: list[str] = []
+    close = mocker.spy(daemon.db, 'close')
+
+    def replication(*args: object) -> None:
+        assert close.called, 'all database writers close while the hard fence is still active'
+        holding.stop.assert_not_called()
+        calls.append('replication')
+        if phase == 'replication':
+            raise error
+
+    def release(*args: object) -> None:
+        holding.stop.assert_called_once()
+        calls.append('release')
+        raise error
+
+    mocker.patch.object(daemon._replicating, '__exit__', side_effect=replication)
+    released = mocker.patch.object(daemon._leader, 'release', side_effect=release)
+    try:
+        with pytest.raises(type(error)):
+            daemon.shutdown(timeout=5)
+        holding.stop.assert_called_once()
+        assert daemon._restart is False
+        assert calls == (['replication'] if phase == 'replication' else ['replication', 'release'])
+        if phase == 'replication':
+            released.assert_not_called()
+    finally:
+        daemon._release()  # this failure happened after writer quiescence, not during a live writer's stop
 
 
 def test_a_daemon_whose_leader_refuses_a_campaign_does_not_start_even_without_renewals(

@@ -137,6 +137,9 @@ class Leader(Protocol):
         Once the replica holds the whole database, the term record names it as the source of the next restore. When the
         replication ends by itself, or the replica is not whole within the provider's bound, the provider calls
         ``unreplicated`` once, with why: the daemon stops.
+
+        The caller closes every database writer before exit. A failed final replication or source publication
+        raises rather than authorizing release of the term; expiry still follows the crash-recovery contract.
         """
         ...
 

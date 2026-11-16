@@ -15,11 +15,14 @@ import pytest
 from moto import mock_aws
 from mypy_boto3_s3 import S3Client
 
+from piloop.actor import System
+from piloop.db import terms
 from piloop.db.session import Database
-from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Litestream, Record, Source
+from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Record, Source
 from piloop.plugins.leader.contract import LeaderHost, LostTerm, Term, Unreachable
+from piloop.plugins.leader.litestream import Litestream
 from tests.conftest import wait_until
-from tests.leader.replica import FakeReplica
+from tests.leader.replica import FakeReplica, Replicating
 from tests.leader.test_bucket import BUCKET, SKEW, TTL, URL, Clock
 
 KEY = 'homes/one/term.json'
@@ -45,6 +48,12 @@ def home_of(db: Database, at: Path) -> LeaderHost:
     ):
         src.backup(dst)
     return LeaderHost(at, at / 'piloop.db')
+
+
+def begin(provider: BucketTerms, term: Term) -> None:
+    with Database(f'sqlite:///{provider._host.database}', actor=System.DAEMON).session() as session:
+        terms.begin(session, term.epoch, 1, None)
+        session.commit()
 
 
 def never(why: str) -> None:
@@ -75,6 +84,7 @@ def test_a_term_restores_what_the_term_before_replicated_and_pins_it_until_its_o
     first = a.attempt('a/1', None)
     assert first is not None and a.restore(first) is False, 'the first term of the bucket keeps its home as it is'
     note(tmp_path / 'a' / 'piloop.db', 'written by term 1')
+    begin(a, first)
     with a.replicate(first, never):
         assert a.named(first) and record(client).source == Source(epoch=1), 'its replica holds the whole database'
         note(tmp_path / 'a' / 'piloop.db', 'its last write')
@@ -86,8 +96,9 @@ def test_a_term_restores_what_the_term_before_replicated_and_pins_it_until_its_o
     assert b.restore(second) is True
     assert notes(tmp_path / 'b' / 'piloop.db') == ['written by term 1', 'its last write'], 'what term 1 left'
     assert record(client).source == Source(epoch=1, txid=f'{2:016x}'), 'pinned: where it restored from, how far'
-    assert replica.restores == [(f'{URL}/terms/1', None)]
+    assert replica.restores == [(f'{URL}/terms/1', f'{2:016x}')]
     assert not b.named(second), 'its own replica has nothing yet: the pin stays'
+    begin(b, second)
     with b.replicate(second, never):
         assert b.named(second) and record(client).source == Source(epoch=2)
 
@@ -100,6 +111,7 @@ def test_a_term_that_dies_before_its_own_replica_leaves_the_pin_and_the_next_res
     first = a.attempt('a/1', None)
     assert first is not None
     note(tmp_path / 'a' / 'piloop.db', 'one')
+    begin(a, first)
     with a.replicate(first, never):
         a.named(first)
     clock.now += TTL + SKEW
@@ -138,6 +150,7 @@ def test_a_pin_that_another_take_beat_fails_and_the_term_never_serves(
     a = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'a'), client, clock, replica)
     first = a.attempt('a/1', None)
     assert first is not None
+    begin(a, first)
     with a.replicate(first, never):
         a.named(first)
     a.release(first)
@@ -156,7 +169,9 @@ def test_a_pin_that_another_take_beat_fails_and_the_term_never_serves(
     monkeypatch.setattr(replica, 'restore', slow)
     with pytest.raises(LostTerm, match='another daemon wrote'):
         b.restore(second)
-    assert record(client).epoch == 3 and record(client).source == Source(epoch=1), 'term 3 takes it as term 1 left it'
+    assert record(client).epoch == 3 and record(client).source == Source(epoch=1, txid=f'{2:016x}'), (
+        'term 3 takes it as term 1 left it'
+    )
 
 
 def test_the_watch_names_the_replica_soon_after_it_is_whole_and_the_stop_ships_the_rest(
@@ -167,13 +182,101 @@ def test_the_watch_names_the_replica_soon_after_it_is_whole_and_the_stop_ships_t
     a = BucketTerms(config, home_of(db, tmp_path / 'a'), client, Clock(), replica)
     first = a.attempt('a/1', None)
     assert first is not None
+    begin(a, first)
     with a.replicate(first, never):
         for _ in range(500):  # the holder's own copy of its last write: moto serves no read beside a write
             if a._held is not None and a._held[0].source is not None:
                 break
             threading.Event().wait(0.01)
-    assert record(client).source == Source(epoch=1), 'named within a few polls'
+    assert record(client).source == Source(epoch=1, txid=f'{2:016x}'), 'final position published after the watch'
     assert len(replica.segments[f'{URL}/terms/1']) == 2, 'its start and its stop each ship the whole database'
+
+
+def test_a_quick_planned_stop_pins_its_final_source_before_the_watch_ever_runs(
+    db: Database, client: S3Client, tmp_path: Path
+) -> None:
+    clock, replica = Clock(), FakeReplica(client)
+    a = BucketTerms(
+        BucketLeader(url=URL, replica_poll=timedelta(seconds=30)), home_of(db, tmp_path / 'a'), client, clock, replica
+    )
+    first = a.attempt('a/1', None)
+    assert first is not None
+    begin(a, first)
+    with a.replicate(first, never):
+        assert record(client).source is None
+        note(a._host.database, 'the final acknowledged write')
+    assert record(client).source == Source(epoch=first.epoch, txid=f'{2:016x}')
+    a.release(first)
+    # A paused old process can only append to its own epoch. The next take uses the exact pin.
+    note(a._host.database, 'a stale tail after release')
+    replica.copy(f'{URL}/terms/1', a._host.database)
+    clock.now += SKEW
+    b = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'b'), client, clock, replica)
+    second = b.attempt('b/1', None)
+    assert second is not None and b.restore(second)
+    assert notes(b._host.database) == ['the final acknowledged write']
+
+
+@pytest.mark.parametrize(
+    'failure',
+    ['sync', 'lost sync reply', 'publish', 'lost publish reply', 'new epoch', 'wrong database epoch', 'cancel'],
+)
+def test_an_unproved_or_unpublished_stop_cannot_authorize_release(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    clock, replica = Clock(), FakeReplica(client)
+    a = BucketTerms(
+        BucketLeader(url=URL, replica_poll=timedelta(seconds=30)), home_of(db, tmp_path / 'a'), client, clock, replica
+    )
+    first = a.attempt('a/1', None)
+    assert first is not None
+    begin(a, first)
+    initial = record(client)
+    original_sync, original_again = Replicating.sync, a._again
+    children: list[Replicating] = []
+
+    def sync(child: Replicating) -> str:
+        children.append(child)
+        if failure == 'sync':
+            raise Unreachable('sync failed')
+        if failure == 'cancel':
+            raise KeyboardInterrupt
+        txid = original_sync(child)
+        if failure == 'lost sync reply':
+            raise Unreachable('reply lost after remote sync')
+        if failure == 'new epoch':
+            clock.now += TTL + SKEW
+            b = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'b'), client, clock, replica)
+            assert b.attempt('b/1', None) is not None
+        if failure == 'wrong database epoch':
+            begin(a, first.model_copy(update={'epoch': 2}))
+        return txid
+
+    def publish(term: Term, until: datetime | None, source: Source | None = None) -> Term:
+        if failure == 'publish':
+            raise Unreachable('conditional publish failed')
+        published = original_again(term, until, source)
+        if failure == 'lost publish reply':
+            raise Unreachable('conditional write applied, reply lost')
+        return published
+
+    monkeypatch.setattr(Replicating, 'sync', sync)
+    monkeypatch.setattr(a, '_again', publish)
+    error = (
+        KeyboardInterrupt
+        if failure == 'cancel'
+        else LostTerm
+        if failure in ('new epoch', 'wrong database epoch')
+        else Unreachable
+    )
+    with pytest.raises(error), a.replicate(first, never):
+        note(a._host.database, 'not safe to hand off')
+    final = record(client)
+    assert final.until is not None and final.until > clock.now or final.epoch > first.epoch
+    assert final.source == (
+        Source(epoch=first.epoch, txid=f'{2:016x}') if failure == 'lost publish reply' else initial.source
+    )
+    assert children and all(child.stopped for child in children)
 
 
 def test_litestream_runs_as_a_child_and_its_errors_are_unreachable(tmp_path: Path) -> None:
@@ -193,17 +296,26 @@ def test_litestream_runs_as_a_child_and_its_errors_are_unreachable(tmp_path: Pat
     assert litestream.restore('s3://b/terms/1', '0000000000000003', tmp_path / 'out.db') == '0000000000000007'
     with pytest.raises(Unreachable, match='no backups found'):
         litestream.restore('s3://gone', None, tmp_path / 'out.db')
+    (tmp_path / 'piloop.db').touch()
     replicating = litestream.replicate(tmp_path / 'piloop.db', 's3://b/terms/2')
     for _ in range(1000):  # it runs: its argv is written
         if len((tmp_path / 'argv').read_text().splitlines()) == 4:
             break
         threading.Event().wait(0.01)
+    config = Path((tmp_path / 'argv').read_text().splitlines()[-1].split()[-1])
+    configured = json.loads(config.read_text())
+    assert configured['dbs'] == [
+        {'path': str(tmp_path / 'piloop.db'), 'replica': {'url': 's3://b/terms/2?region=us-east-1'}}
+    ]
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert config.parent.stat().st_mode & 0o777 == 0o700
     replicating.stop()
+    assert not config.exists()
     assert (tmp_path / 'argv').read_text().splitlines() == [
         f'restore -json -o {tmp_path / "out.db"} s3://b/terms/1?region=us-east-1',
         f'restore -json -o {tmp_path / "out.db"} -txid 0000000000000003 s3://b/terms/1?region=us-east-1',
         f'restore -json -o {tmp_path / "out.db"} s3://gone?region=us-east-1',
-        f'replicate {tmp_path / "piloop.db"} s3://b/terms/2?region=us-east-1',
+        f'replicate -no-expand-env -config {config}',
     ], 'each URL names the region: Litestream asks S3 for none'
     assert Litestream(str(fake), None)._located('s3://b/terms/1') == 's3://b/terms/1', 'no region known: none named'
     assert Litestream(str(fake), 'eu-west-1')._located('file:///r') == 'file:///r'
@@ -215,6 +327,7 @@ def test_a_litestream_that_exits_says_why_with_its_last_lines(
     fake = tmp_path / 'litestream'
     fake.write_text('#!/bin/sh\nfor i in 1 2 3 4 5 6 7; do echo "line $i" >&2; done\nexit 1\n')
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    (tmp_path / 'piloop.db').touch()
     replicating = Litestream(str(fake), None).replicate(tmp_path / 'piloop.db', 'file:///r')
     wait_until(lambda: replicating.exited() is not None, 'Litestream to exit')
     assert replicating.exited() == 'Litestream exited with status 1: line 3 / line 4 / line 5 / line 6 / line 7'
@@ -315,3 +428,42 @@ def test_a_term_whose_replica_is_not_whole_in_time_says_why_and_stops_the_daemon
     assert len(polls) == 3 and len(unreplicated) == 1 and unreplicated[0].startswith(why), 'once, at its bound'
     assert f'piloop: error: {why}' in capsys.readouterr().err
     assert record(client).source is None, 'the record still names no replica of this term'
+
+
+def test_a_failed_cleanup_retains_the_original_proof_failure(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'a'), client, Clock(), FakeReplica(client))
+    first = a.attempt('a/1', None)
+    assert first is not None
+    begin(a, first)
+    sync_failure = Unreachable('remote final write not proved')
+    stop_failure = Unreachable('cleanup exceeded grace')
+
+    def sync(child: Replicating) -> str:
+        raise sync_failure
+
+    def stop(child: Replicating) -> None:
+        raise stop_failure
+
+    monkeypatch.setattr(Replicating, 'sync', sync)
+    monkeypatch.setattr(Replicating, 'stop', stop)
+    with pytest.raises(ExceptionGroup) as raised, a.replicate(first, never):
+        pass
+    assert raised.value.exceptions == (sync_failure, stop_failure)
+
+
+def test_a_different_database_epoch_is_rejected_before_any_final_sync(
+    db: Database, client: S3Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = BucketTerms(BucketLeader(url=URL), home_of(db, tmp_path / 'a'), client, Clock(), FakeReplica(client))
+    first = a.attempt('a/1', None)
+    assert first is not None
+    begin(a, first)
+
+    def forbidden(child: Replicating) -> str:
+        raise AssertionError("a different database epoch cannot supply this term's proof")
+
+    monkeypatch.setattr(Replicating, 'sync', forbidden)
+    with pytest.raises(LostTerm, match='final database does not belong'), a.replicate(first, never):
+        begin(a, first.model_copy(update={'epoch': first.epoch + 1}))

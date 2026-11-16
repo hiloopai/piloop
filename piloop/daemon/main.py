@@ -68,9 +68,8 @@ DECLARED = (JOB_KINDS, TARGET_KINDS, COMMENT_KINDS, CONTRIBUTORS)
 ACTOR = System.DAEMON
 """The actor that the daemon's connections record in ``updated_by``. The change-log triggers use this name."""
 SHUTDOWN_SECONDS = STOP_SECONDS - max(GRACE_SECONDS, API_CLOSE_SECONDS) - 5
-"""What the waits of a stop for the agents, the jobs and the lifecycles share. The close of the servers (their grace,
-or the whole close of the API processes), the flush of the traces and the close of the database come after: the daemon
-frees its lock within ``STOP_SECONDS``."""
+"""What the waits of a stop for the agents, the jobs and the lifecycles share. Server close, trace flush,
+database close and final replication follow with their own bounds; this is not an overall shutdown deadline."""
 
 
 def bound(cfg: Settings) -> list[plugins.Capability[plugins.Parameters]]:
@@ -421,15 +420,21 @@ class Daemon:
     def _release_term(self) -> None:
         """End the term after the daemon's last write, so that another daemon may take the next.
 
-        The replica ships the rest of the database first, and the renewals stop.
+        The replica proves and publishes its final position while renewals and fencing remain active.
+        Failure after writer quiescence stops renewals without releasing or declaring a successful restart.
         """
-        self._replicating.__exit__(None, None, None)
-        if self._holding is not None:
-            self._holding.stop()
+        restart, self._restart = self._restart, False
+        try:
+            self._replicating.__exit__(None, None, None)
+        finally:
+            if self._holding is not None:
+                self._holding.stop()
         try:
             self._leader.release(self._holding.term if self._holding is not None else self._term)
         except (LostTerm, Unreachable) as e:  # the next daemon waits for the term's end instead
             self.tracer.event('term.not_released', error=str(e))
+            raise
+        self._restart = restart
 
     def _wake(self, consumer: str) -> None:
         """Run ``consumer`` in the next turn of the loop: a thread of a provider that the daemon opened ended."""

@@ -35,10 +35,13 @@ class Replicating:
     def exited(self) -> str | None:
         return self.ended
 
-    def stop(self) -> None:
-        """Ship the whole database once more, as Litestream ships its last frames."""
+    def sync(self) -> str:
+        """Ship and prove the quiesced database, as Litestream's control sync does."""
         if self.replica.automatic:
             self.replica.copy(self.url, self.database)
+        return f'{len(self.replica.segments[self.url]):016x}'
+
+    def stop(self) -> None:
         self.stopped = True
 
 

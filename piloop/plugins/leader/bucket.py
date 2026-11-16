@@ -24,17 +24,14 @@ boto3 is imported when the record opens, not with this module: it takes ~0.5 s, 
 that name this provider. Credentials are boto3's own chain: the environment, a profile, an instance role.
 """
 
-import json
 import shutil
-import subprocess
 import sys
 import threading
-from collections import deque
 from collections.abc import Callable, Generator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, Self
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -46,6 +43,7 @@ from piloop.db.models import utcnow
 from piloop.plugins.cas.contract import CasProvider
 from piloop.plugins.host import Check, Severity
 from piloop.plugins.leader.contract import LeaderConfig, LeaderHost, LostTerm, Renewal, Term, Unreachable
+from piloop.plugins.leader.litestream import Litestream, Replica, Replicating
 
 if TYPE_CHECKING:
     from botocore.exceptions import ClientError
@@ -59,8 +57,6 @@ FIRST = '0000/0000000000000001-'
 REFUSED = ('PreconditionFailed', 'ConditionalRequestConflict')
 """What S3 answers a conditional write that another write beat: 412, or 409 while the other is under way."""
 NOT_FOUND = ('404', 'NoSuchKey', 'NotFound')
-TAIL = 5
-"""How many of Litestream's last log lines say why it exited."""
 
 
 class Source(BaseModel):
@@ -78,100 +74,6 @@ class Record(Term):
     """The object: the term, and the source of the next restore. None: there is nothing to restore."""
 
     source: Source | None = None
-
-
-class Replicating(Protocol):
-    """A replication that runs: ``stop`` ends it once it shipped what it has."""
-
-    def exited(self) -> str | None:
-        """Why the replication ended by itself, or None while it runs."""
-        ...
-
-    def stop(self) -> None:
-        """Ship what it has, then end."""
-        ...
-
-
-class Replica(Protocol):
-    """What replicates the home's database to a prefix of the bucket, and restores it from one: Litestream."""
-
-    def restore(self, url: str, txid: str | None, out: Path) -> str:
-        """Write the database of the replica at ``url`` to ``out``, and return the last transaction that it holds.
-
-        It holds those up to ``txid``; None: the replica's newest.
-
-        Raises:
-            Unreachable: The replica could not be read.
-        """
-        ...
-
-    def replicate(self, database: Path, url: str) -> Replicating:
-        """Ship ``database`` to the replica at ``url``, which is new, from now on: its first file holds all of it."""
-        ...
-
-
-class Litestream:
-    """``litestream`` (0.5) in a child process: what the hosted image holds.
-
-    Each ``s3://`` URL names the bucket's region: the region of the provider's own S3 client. Without one, Litestream
-    asks S3 for it (``s3:GetBucketLocation``), a right that the home's objects do not otherwise need, and exits when
-    it is refused.
-    """
-
-    def __init__(self, executable: str, region: str | None) -> None:
-        self._executable = executable
-        self._region = region
-
-    def _located(self, url: str) -> str:
-        return f'{url}?region={self._region}' if self._region and url.startswith('s3://') else url
-
-    def restore(self, url: str, txid: str | None, out: Path) -> str:
-        located = self._located(url)
-        argv = [self._executable, 'restore', '-json', '-o', str(out), *(['-txid', txid] if txid else []), located]
-        done = subprocess.run(argv, capture_output=True, text=True, check=False)
-        if done.returncode != 0:
-            raise Unreachable(f'litestream restore {located}: {done.stderr.strip()[-500:]}')
-        return str(json.loads(done.stdout)['txid'])
-
-    def replicate(self, database: Path, url: str) -> Replicating:
-        """Start Litestream with no local state: what an earlier replication left there belongs to another replica.
-
-        That replication may be an earlier term's on this host, or a sidecar's. Once Litestream's L0 retention dropped
-        TXID 1 from that state, a new replica gets one snapshot and then fails every upload: no later write ships.
-        Nothing needs that state: each term's replica is new, and starts at TXID 1.
-        """
-        with suppress(FileNotFoundError):
-            shutil.rmtree(database.with_name(f'.{database.name}-litestream'))
-        return _Child([self._executable, 'replicate', str(database), self._located(url)])
-
-
-class _Child:
-    """Litestream's ``replicate``. Its log goes on to the daemon's, and its last lines say why when it exits."""
-
-    def __init__(self, argv: list[str]) -> None:
-        self.process = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        self._tail: deque[str] = deque(maxlen=TAIL)
-        self._log = threading.Thread(target=self._relay, name='litestream-log', daemon=True)
-        self._log.start()
-
-    def _relay(self) -> None:
-        assert self.process.stderr is not None
-        with self.process.stderr:
-            for line in self.process.stderr:
-                self._tail.append(line.rstrip())
-                sys.stderr.write(line)
-
-    def exited(self) -> str | None:
-        if (code := self.process.poll()) is None:
-            return None
-        self._log.join()
-        return f'Litestream exited with status {code}: ' + ' / '.join(self._tail)
-
-    def stop(self) -> None:
-        """SIGTERM: Litestream ships its last frames, then exits."""
-        self.process.terminate()
-        self.process.wait()
-        self._log.join()
 
 
 class BucketLeader(LeaderConfig):
@@ -352,7 +254,23 @@ class BucketTerms:
         finally:
             stop.set()
             watch.join()
-            replicating.stop()
+            try:
+                if terms.newest_in(self._host.database) != term.epoch:
+                    raise LostTerm(f'final database does not belong to term {term.epoch}')
+                txid = replicating.sync()
+                if terms.newest_in(self._host.database) != term.epoch:
+                    raise LostTerm(f'final database no longer belongs to term {term.epoch}')
+                # A short term can stop before the watch names its replica. Pin the proven final
+                # position, not the inherited source or a later stale writer's remote tail.
+                self._again(term, None, Source(epoch=term.epoch, txid=txid))
+            except BaseException as error:  # cleanup must retain cancellation and the original proof failure
+                try:
+                    replicating.stop()
+                except BaseException as cleanup:
+                    raise BaseExceptionGroup('Final replication and cleanup both failed', [error, cleanup]) from None
+                raise
+            else:
+                replicating.stop()
 
     def _watch(
         self, term: Term, stop: threading.Event, replicating: Replicating, unreplicated: Callable[[str], None]

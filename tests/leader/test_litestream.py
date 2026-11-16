@@ -24,8 +24,9 @@ from piloop.actor import System
 from piloop.db import terms
 from piloop.db.session import Database
 from piloop.plugins.leader import bucket
-from piloop.plugins.leader.bucket import BucketLeader, BucketTerms, Litestream, Replicating
+from piloop.plugins.leader.bucket import BucketLeader, BucketTerms
 from piloop.plugins.leader.contract import Unreachable
+from piloop.plugins.leader.litestream import Litestream, Replicating
 from piloop.plugins.leader.local import LocalLeader
 from scripts.litestream import VERSION
 from tests.conftest import wait_until
@@ -115,6 +116,66 @@ def test_a_replication_over_old_local_state_without_txid_1_ships_every_later_wri
     finally:
         replicating.stop()
     assert restored(litestream, f'file://{new}', tmp_path / 'r.db') == want, 'every row, from the new replica alone'
+
+
+def test_the_control_sync_proves_and_restores_the_final_write(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initial replica')
+        add(database, 'final write after the first upload')
+        txid = running.sync()
+        assert int(txid, 16) > 0
+        restored_db = tmp_path / 'restored.db'
+        assert litestream.restore(f'file://{replica}', txid, restored_db) == txid
+        assert notes(restored_db) == notes(database) == ['final write after the first upload']
+    finally:
+        running.stop()
+
+
+def test_a_failed_control_sync_cannot_supply_a_success_receipt(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    saved = tmp_path / 'saved'
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initial replica')
+        replica.rename(saved)
+        replica.write_text('destination unavailable')
+        add(database, 'unreplicated write')
+        with pytest.raises(Unreachable, match='final sync'):
+            running.sync()
+    finally:
+        if saved.exists():
+            replica.unlink()
+            saved.rename(replica)
+        running.stop()
+
+
+def test_an_existing_empty_database_has_a_restorable_nonzero_position(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = tmp_path / 'empty.db', tmp_path / 'replica'
+    database.touch()
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        wait_until(lambda: (replica / FIRST).is_file(), 'initialized empty replica')
+        txid = running.sync()
+        assert int(txid, 16) > 0
+        restored_db = tmp_path / 'restored.db'
+        litestream.restore(f'file://{replica}', txid, restored_db)
+        with closing(sqlite3.connect(restored_db)) as db:
+            assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    finally:
+        running.stop()
+
+
+def test_an_immediate_stop_waits_for_actual_control_readiness(litestream: Litestream, tmp_path: Path) -> None:
+    database, replica = written(tmp_path), tmp_path / 'replica'
+    running = litestream.replicate(database, f'file://{replica}')
+    try:
+        txid = running.sync()  # no pre-wait for socket, first file, log line or a fixed delay
+        assert int(txid, 16) > 0
+        litestream.restore(f'file://{replica}', txid, tmp_path / 'restored.db')
+    finally:
+        running.stop()
 
 
 class Refusing(BaseHTTPRequestHandler):
