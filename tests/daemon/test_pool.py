@@ -12,7 +12,7 @@ from piloop.actor import Agent, System
 from piloop.campaign.ops import Refused
 from piloop.config import load_campaign_config
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign, Event
+from piloop.db.models import AgentSession, Campaign, Event, Pause
 from piloop.db.session import Database
 from piloop.ids import Revision, TargetRef
 from piloop.otel import Tracer
@@ -190,6 +190,54 @@ def test_a_first_score_that_beats_the_best_is_confirmed_to_noise_runs_and_scored
     assert evaluations(db, campaign, baseline(db, campaign.id).id)[1] == 1, 'the sealed split scored the baseline'
     assert pool(db, campaign).best() == better
     assert told(db, better) == 'score 3 over 3 evals: the best of the score track now, rank 1 of 2; vs parent +2'
+
+
+def test_the_baseline_is_scored_on_the_sealed_split_from_the_start_not_once_a_candidate_beats_it(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The best rule compares each candidate with the baseline on the sealed split. The baseline is the best, so it
+    never beats the best: it is due there as soon as the campaign has a sealed command, and once only."""
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('none')})
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        assert [c.id for c in due(s, s.get_one(Campaign, campaign.id))] == [base], 'confirmed, but not sealed'
+    ex = controller(db, runtime, tmp_path)
+    ex.remeasure(base)
+    assert evaluations(db, campaign, base) == (1, 1), 'scored on the sealed split only'
+    with db.session() as s:
+        assert due(s, s.get_one(Campaign, campaign.id)) == []
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
+    ex.score_submission(better)
+    assert evaluations(db, campaign, base) == (1, 1)
+    assert pool(db, campaign).best() == better
+
+
+def test_a_baseline_whose_evaluate_crashes_holds_its_campaign_whatever_the_sealed_split_scores(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The sealed split scores the baseline alongside its visible evaluations: that score is no visible one."""
+    configure(db, campaign, evaluate=['sh', '-c', 'exit 3'], evaluator={'noise_runs': 1, 'sealed': lines('none')})
+    with db.session() as s:
+        s.execute(delete(Measurement))
+        s.commit()
+    base = baseline(db, campaign.id).id
+    controller(db, runtime, tmp_path).remeasure(base)
+    assert evaluations(db, campaign, base) == (1, 1)
+    with db.session() as s:
+        assert s.get_one(Campaign, campaign.id).paused is Pause.LAUNCHES
+
+
+def test_a_baseline_whose_repo_is_gone_is_a_crash_of_the_split_that_is_due_only(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Confirmed, and due for its seal alone: the crash settles the seal, and adds no visible evaluation."""
+    configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('none')})
+    Path(campaign.path).rename(tmp_path / 'moved')
+    base = baseline(db, campaign.id).id
+    controller(db, runtime, tmp_path).remeasure(base)
+    assert evaluations(db, campaign, base) == (1, 1)
+    with db.session() as s:
+        assert due(s, s.get_one(Campaign, campaign.id)) == [], 'the seal is settled'
 
 
 @pytest.mark.parametrize('order', [('a', 'b'), ('b', 'a')])
@@ -489,8 +537,9 @@ def test_one_evaluation_confirms_but_the_sealed_split_still_scores_what_beats_th
     assert evaluations(db, campaign, better) == (1, 1) and pool(db, campaign).best() == better
     configure(db, campaign, evaluator={'noise_runs': 1, 'sealed': lines('other')})
     assert pool(db, campaign).best() == baseline(db, campaign.id).id, 'the new sealed split has scored it not'
+    base = baseline(db, campaign.id).id
     with db.session() as s:
-        assert [c.id for c in due(s, s.get_one(Campaign, campaign.id))] == [better]
+        assert [c.id for c in due(s, s.get_one(Campaign, campaign.id))] == [base, better], 'the baseline first'
     ex.remeasure(better)
     assert evaluations(db, campaign, better) == (1, 1), 'scored on the new split only'
     assert pool(db, campaign).best() == better

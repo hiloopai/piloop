@@ -56,7 +56,8 @@ its scorer outside the repo:
 sealed = ["python3", "/srv/sealed/score.py"]
 ```
 
-piloop runs it on the baseline and on each candidate that would beat the best. Its score is the primary of the first
+piloop runs it on the baseline, alongside the baseline's first evaluations, and on each candidate that would beat the
+best. Its score is the primary of the first
 track. A result that piloop refuses is a fault of the setup: piloop escalates, and runs it again later. Fix the command
 and run `piloop campaign sync`.
 

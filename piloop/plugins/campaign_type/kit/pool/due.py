@@ -29,7 +29,8 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     1. The ``carried`` best, until it is confirmed (``Status.needs``): it is the best again once the new evaluator scores
        it.
     2. The baseline, until it is confirmed: runs wait for it, and its evaluations show whether the evaluator is
-       deterministic.
+       deterministic. With a sealed split, also until the split answered it (``Pool.seal_due``): it is scored there
+       alongside its visible evaluations.
     3. Each candidate that someone asked to measure again (``requested``), oldest request first.
     4. Each candidate that the sealed split is due to score (``Pool.seal_due``), such as the would-be best after a new
        sealed command: its visible evaluations stand.
@@ -48,14 +49,16 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     if campaign.status is not CampaignStatus.ACTIVE:
         return list(dict.fromkeys(asked))
     confirm = confirm_runs(s, campaign, campaign.evaluator_id)
-    unconfirmed = [c for c in firsts(s, campaign) if status(c, campaign.evaluator_id).needs(confirm)]
+    pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
+    unconfirmed = [
+        c for c in firsts(s, campaign) if status(c, campaign.evaluator_id).needs(confirm) or pool.seal_due(c.id)
+    ]
     new = select(Candidate).where(
         Candidate.campaign_id == campaign.id,
         Candidate.origin == Origin.REFERENCE,
         ~Candidate.measurements.any(),
         ~Candidate.cancels.any(),
     )
-    pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
     sealing = [s.get_one(Candidate, c) for c in pool.ranked_all() if pool.seal_due(c)]
     candidates = dict.fromkeys([*unconfirmed, *asked, *sealing, *s.scalars(new.order_by(Candidate.id))])
     return [c for c in candidates if task_holds.key(c) not in held]

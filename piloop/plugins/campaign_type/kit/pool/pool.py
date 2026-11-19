@@ -328,12 +328,13 @@ class Pool:
         return self.beats_best(c) and self.entries[c].status.needs(self.confirm) > 0
 
     def seal_due(self, c: CandidateId) -> bool:
-        """Whether the sealed split is to score ``c``: the campaign has one, ``c`` beats the best, and the split has not.
+        """Whether the sealed split is to score ``c``: there is one, it has not, and ``c`` is the baseline or beats the best.
 
-        A crash of the sealed command is the split's answer too, and a cancel stands (``Status.settled``): only a new
-        sealed command, or an ask, runs it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
+        The baseline is due from the start: the best rule compares every candidate with it there. A crash of the sealed
+        command is the split's answer too, and a cancel stands (``Status.settled``): only a new sealed command, or an
+        ask, runs it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
         """
-        return self.sealed and not self.entries[c].seal.settled and self.beats_best(c)
+        return self.sealed and not self.entries[c].seal.settled and (c == self.baseline or self.beats_best(c))
 
     def beats_best(self, c: CandidateId) -> bool:
         """Whether the mean of ``c``, not excluded and not the best, beats the best's."""

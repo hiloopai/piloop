@@ -18,7 +18,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import task_holds
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured, Reading
-from piloop.plugins.campaign_type.kit.evaluation.measure import record, status
+from piloop.plugins.campaign_type.kit.evaluation.measure import Split, record, split_of, status
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, EvaluationTaskFailure, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, track_of
@@ -26,17 +26,22 @@ from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.facts import reading
 
 
+def visible(candidate: Candidate) -> list[Measurement]:
+    """The measurements of ``candidate`` by a visible evaluator: the sealed split's say nothing of the evaluate command."""
+    return [m for m in candidate.measurements if split_of(m.evaluator) is Split.VISIBLE]
+
+
 def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None) -> None:
     """Hold the launches of the campaign (``hold``) when ``candidate`` is its baseline and no evaluator scored it.
 
     It holds once the current evaluator's evaluations of it crashed (``Measured.CRASHED``). Nothing can be compared with a baseline without a score, and no agent should spend on a campaign that has none.
-    One that an older evaluator scored has one, and its campaign goes on. The pause measures what is asked, so it
+    One that an older visible evaluator scored has one, and its campaign goes on: a score of the sealed split is none. The pause measures what is asked, so it
     can end on a measured baseline. The reason is the last error, with ``logs``, where that evaluation left its logs,
     and what to do. The caller commits.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     now = status(candidate, campaign.evaluator_id)
-    ever = any(m.reading is Reading.SCORE for m in candidate.measurements)
+    ever = any(m.reading is Reading.SCORE for m in visible(candidate))
     if candidate.origin is not Origin.BASELINE or now.state is not Measured.CRASHED or ever:
         return
     *_, last = (m.error for m in candidate.measurements if m.reading is Reading.CRASH)
@@ -52,7 +57,7 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
     says so. The caller commits.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    if candidate.origin is not Origin.BASELINE or candidate.measurements:
+    if candidate.origin is not Origin.BASELINE or visible(candidate):
         return
     hold(
         campaign,

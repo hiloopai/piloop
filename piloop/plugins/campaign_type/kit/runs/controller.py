@@ -792,8 +792,9 @@ class RunController:
         (``Evaluation.ask``), and the baseline and the carried best the ones that confirm them (``Status.needs``);
         anything else gets one. A candidate whose mean now beats the best's, such as a new reference, is confirmed
         (``_confirm``), and a run's worker hears where its candidate stands (``CandidateScored``). A confirmed candidate
-        that the sealed split is due to score (``Pool.seal_due``) is only scored there. A baseline that fails and never
-        measured pauses its campaign (``hold_on_failed_baseline``).
+        that the sealed split is due to score (``Pool.seal_due``) is only scored there. The baseline is scored there
+        alongside its visible evaluations. A baseline that fails and never measured pauses its campaign
+        (``hold_on_failed_baseline``).
         """
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
@@ -806,28 +807,54 @@ class RunController:
             need = now.needs(confirm_runs(s, campaign, evaluator_id))
             repeats = asked[1].repeats if asked is not None else max(need, 1) if confirming else 1
             ask = asked[0].id if asked is not None else None
-            visible = asked is not None or confirming or not now.measured
+            sealing = candidate.origin is Origin.BASELINE and Pool.of(s, campaign, cfg.all_tracks[0]).seal_due(
+                candidate_id
+            )
+            hidden = sealed_evaluator(s, campaign, cfg) if sealing else None
+            s.commit()
+            # a confirmed baseline that is due for its seal alone gets no visible evaluation
+            visible = asked is not None or not now.measured or (confirming and (need > 0 or hidden is None))
+            seal = [(candidate_id, candidate.revision)] if hidden is not None else []
+            hidden_id = hidden.id if hidden is not None else None
             campaign_id, revision, run_id = campaign.id, candidate.revision, candidate.run_id
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
         try:
             with closing(vcs.open(campaign_path)):
                 pass
-        except Exception as e:  # a repo that is gone is the candidate's crash, not a job's
+        except Exception as e:  # a repo that is gone is the candidate's crash, not a job's: each split due answers
             with self._db.session() as s:
                 error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
-                record(s, self.cas, None, candidate_id, evaluator_id, error)
+                answering = ([evaluator_id] if visible else []) + ([hidden_id] if hidden_id is not None else [])
+                for answered in answering:
+                    record(s, self.cas, None, candidate_id, answered, error)
                 hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), None)
                 s.commit()
             return
         with self._tracer.span('piloop.remeasure', candidate=candidate_id) as span:
             try:
-                ended = (
-                    self._measure(
-                        None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, repeats=repeats, ask=ask
-                    )
-                    if visible
-                    else Measuring.MEASURED
+                ended = self._alongside(
+                    None,
+                    campaign_id,
+                    cfg,
+                    hidden_id,
+                    seal,
+                    eval_dir,
+                    lambda: (
+                        self._measure(
+                            None,
+                            campaign_id,
+                            cfg,
+                            revision,
+                            candidate_id,
+                            evaluator_id,
+                            eval_dir,
+                            repeats=repeats,
+                            ask=ask,
+                        )
+                        if visible
+                        else Measuring.MEASURED
+                    ),
                 )
             except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
                 span.error(e)
@@ -971,7 +998,37 @@ class RunController:
             campaign_id, revision, evaluator_id = campaign.id, candidate.revision, campaign.evaluator_id
             hidden_id = hidden.id if hidden is not None else None
         assert evaluator_id is not None  # a campaign that measured a candidate has an evaluator
-        with ThreadPoolExecutor(1, thread_name_prefix=f'sealed-{candidate_id}') as threads:
+        return self._alongside(
+            run_id,
+            campaign_id,
+            cfg,
+            hidden_id,
+            seal,
+            eval_dir,
+            lambda: (
+                self._measure(
+                    run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'confirm', repeats=need
+                )
+                if need > 0
+                else Measuring.MEASURED
+            ),
+        )
+
+    def _alongside(
+        self,
+        run_id: RunId | None,
+        campaign_id: CampaignId,
+        cfg: CampaignConfig,
+        hidden_id: EvaluatorId | None,
+        seal: list[tuple[CandidateId, Revision]],
+        eval_dir: Path,
+        visible: Callable[[], Measuring],
+    ) -> Measuring:
+        """Score each of ``seal`` on the sealed split ``hidden_id``, one at a time, while ``visible`` measures.
+
+        Return how ``visible`` ended, or ``STOPPED`` when the daemon stopped a sealed evaluation.
+        """
+        with ThreadPoolExecutor(1, thread_name_prefix=f'sealed-{campaign_id}') as threads:
             sealing = [
                 threads.submit(
                     self._measure,
@@ -987,13 +1044,7 @@ class RunController:
                 for c, commit in seal
                 if hidden_id is not None
             ]
-            ended = (
-                self._measure(
-                    run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'confirm', repeats=need
-                )
-                if need > 0
-                else Measuring.MEASURED
-            )
+            ended = visible()
             halted = [h for f in sealing if (h := f.result()) is Measuring.STOPPED]
         return Measuring.STOPPED if halted else ended
 
