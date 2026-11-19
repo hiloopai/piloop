@@ -6,6 +6,8 @@ The run closes when its implementer ends, so the implementer slot is free while 
 
 import math
 import re
+import threading
+from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -108,6 +110,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted, submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.pool import judging
 from piloop.plugins.campaign_type.kit.pool.due import firsts
 from piloop.plugins.campaign_type.kit.pool.pool import (
     UNSCORED,
@@ -291,6 +294,8 @@ class RunController:
         self._jobs: dict[int, EvaluationJob] = {}
         """The job of each evaluation that this daemon asked for, by its queue row, until the row goes: a lost one is
         submitted again. A row without one is another daemon's: a reap drops it, and what needs it asks again."""
+        self._judging: dict[CampaignId, threading.Lock] = defaultdict(threading.Lock)
+        """One judge at a time for each campaign (``judge``): two would run a rule's program twice for one case."""
 
     def _wait(self, evaluation_id: int, candidate_id: CandidateId) -> bool:
         """Wait until the evaluation leaves the queue, and return True; False once the daemon stops.
@@ -871,6 +876,7 @@ class RunController:
             s.commit()
         if first or self._confirm(run_id, candidate_id, eval_dir) is not Measuring.MEASURED:
             return
+        self.judge(campaign_id)
         if run_id is not None:
             self._scored(candidate_id)
 
@@ -968,6 +974,7 @@ class RunController:
                 break
         if ended is not Measuring.MEASURED:
             return ended
+        self.judge(campaign_id)
         self._scored(candidate_id)
         return Measuring.MEASURED
 
@@ -1047,6 +1054,17 @@ class RunController:
             ended = visible()
             halted = [h for f in sealing if (h := f.result()) is Measuring.STOPPED]
         return Measuring.STOPPED if halted else ended
+
+    def judge(self, campaign_id: CampaignId) -> None:
+        """Ask the best rule each case that the best of a track of the campaign waits for (``judging.judge``).
+
+        Never raises: a failure goes into the span, and the next pass asks again.
+        """
+        with self._tracer.span('piloop.judge', campaign=campaign_id) as span, self._judging[campaign_id]:
+            try:
+                judging.judge(self._db, self.cas, campaign_id)
+            except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
+                span.error(e)
 
     def _scored(self, candidate_id: CandidateId) -> None:
         """Record where a candidate stands now (``CandidateScored``): its run's worker hears it."""

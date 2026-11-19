@@ -24,7 +24,7 @@ from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Criterion, Keep, Refuse
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.claude import Claude
@@ -57,7 +57,8 @@ from piloop.plugins.runtime.subprocess import Subprocess
 from piloop.plugins.section.contract import SECTIONS
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import PLUGIN, example, forget_loaded, install_plugins, package
-from tests.fixtures.plugin import AsMeasured, Checked, Needy, Typed
+from tests.fixtures.plugin import BEST_CHECKS, AsMeasured, Checked, Needy, Typed
+from tests.scoring.test_best_rule import case
 from tests.test_docs import BASE_CONFIG
 
 
@@ -310,13 +311,7 @@ def test_activation_goes_in_order_teardown_newest_first_and_a_failure_undoes_onl
     assert log[-1] == '-store'
 
 
-CASE = Case(
-    Criterion('score', Direction.HIGHER),
-    (),
-    Scores('candidate#2', {'score': 13.0}, 1, None),
-    Scores('candidate#1', {'score': 10.0}, 1, None),
-    None,
-)
+CASE = case({'score': 13.0}, {'score': 10.0}, measured=1)
 """A case of the best rules, the pure capability that these tests install a provider of."""
 
 
@@ -332,8 +327,8 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     cfg = load_campaign_config(campaign_path, plugins={'best_rule': {'provider': 'min_gain', 'min_gain': 2}})
     rule = BEST_RULES.selected(cfg.plugins)
     assert rule == piloop_min_gain.MinGain(min_gain=2)
-    assert rule.refuse(CASE) is None, 'a gain of 3'
-    assert piloop_min_gain.MinGain(min_gain=5).refuse(CASE) == 'its gain 3 is below min_gain 5'
+    assert rule.judge(CASE) == Keep(), 'a gain of 3'
+    assert piloop_min_gain.MinGain(min_gain=5).judge(CASE) == Refuse('its gain 3 is below min_gain 5')
     assert BEST_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
     home = Settings(home=tmp_path)
     assert not any(line.startswith('demo: best rule min_gain') for line in selections(home)), 'not selected yet'
@@ -376,10 +371,6 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
             'is not a subclass of piloop.plugins.campaign_type.kit.pool.best_rule.contract.BestRule$',
         ),
         (
-            f'{PLUGIN}:Unrefusing',
-            'does not implement piloop.plugins.campaign_type.kit.pool.best_rule.contract.BestRule: it has no refuse$',
-        ),
-        (
             'piloop.plugins.stop_rule.limits:Limits',
             'is not a subclass of piloop.plugins.campaign_type.kit.pool.best_rule.contract',
         ),
@@ -391,6 +382,12 @@ def test_a_provider_is_a_class_that_implements_its_contract(
     install_plugins(monkeypatch, [EntryPoint('odd', value, BEST_RULES.group)])
     with pytest.raises(PluginError, match=f'^entry point odd = {value} in piloop.best_rules {error}'):
         BEST_RULES.providers()
+
+
+def test_a_provider_that_lacks_a_method_of_its_contract_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_plugins(monkeypatch, [EntryPoint('odd', f'{PLUGIN}:Unchecked', BEST_CHECKS.group)])
+    with pytest.raises(PluginError, match=r'does not implement tests\.fixtures\.plugin\.BestCheck: it has no check$'):
+        BEST_CHECKS.providers()
 
 
 @dataclass(frozen=True)
@@ -491,11 +488,11 @@ def test_a_plugin_declares_a_capability_calls_its_providers_and_another_package_
     table = {'provider': 'checked', 'vetoes': [{'provider': 'as_measured'}]}
     rule = BEST_RULES.selected(load_campaign_config(campaign_path, plugins={'best_rule': table}).plugins)
     assert rule == Checked(vetoes=[AsMeasured()])
-    assert rule.refuse(CASE) is None, 'as many evaluations as the baseline'
+    assert rule.judge(CASE) == Keep(), 'as many evaluations as the baseline'
     fewer = replace(CASE, baseline=replace(CASE.baseline, measured=3))
-    assert rule.refuse(fewer) == 'as_measured: candidate#2 has 1 evaluations, the baseline 3'
+    assert rule.judge(fewer) == Refuse('as_measured: candidate#9 has 1 evaluations, the baseline 3')
     floored = replace(fewer, primary=Criterion('score', Direction.HIGHER, floor=20))
-    assert rule.refuse(floored) == 'floor: score 13 past its floor 20', "baseline's reason first"
+    assert rule.judge(floored) == Refuse('floor: score 13 past its floor 20'), "baseline's reason first"
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path))
     printed: list[str] = []
     monkeypatch.setattr(common.console, 'print', lambda text, **_: printed.append(text))

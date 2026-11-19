@@ -17,7 +17,8 @@ example hears:
 | **candidate** | One state of the code, identified by its git tree. Each submitted commit is one. |
 | **baseline** | The first candidate: the repo's `HEAD` when you registered the campaign. |
 | **confirmed** | A candidate with `[evaluator] noise_runs` successful evaluations, 3 by default. |
-| **best** | The candidate with the best mean of the primary among the baseline and the confirmed candidates that the [best rule](#the-best) allows. |
+| **ready** | A confirmed candidate that is not excluded and, with a [sealed split](#the-sealed-split), that the split scored. |
+| **best** | The last candidate that the [best rule](#the-best) kept, or the baseline. |
 | **line** | A candidate's chain of parents. |
 
 ## Scoring
@@ -26,7 +27,8 @@ example hears:
    evaluation at a rung.
 2. When the score beats the best's mean, the daemon evaluates the submission until it is confirmed. It also scores it
    on the [sealed split](#the-sealed-split), if the campaign has one.
-3. The daemon tells the implementer where the submission stands.
+3. When the submission beats the best, the daemon asks the [best rule](#the-best). Then it tells the implementer where
+   the submission stands.
 
 The daemon evaluates the baseline `noise_runs` times before runs start. When those evaluations agree, the evaluator is
 deterministic, and one evaluation confirms. Otherwise the standard deviation of the best's evaluations is the noise,
@@ -34,17 +36,23 @@ deterministic, and one evaluation confirms. Otherwise the standard deviation of 
 
 ## The best
 
-The best is a query of the pool: nothing stores it, and the order of the evaluations never decides it. When a
-remeasure changes a mean, the best follows.
+piloop walks the ready candidates in the order in which they became ready, from the baseline. A candidate whose mean
+of the primary beats the best so far asks the **best rule**. When the rule keeps it, it is the best. On a tie, the best
+so far stays.
 
-The **best rule** says whether a confirmed candidate may be the best. The default rule, `baseline`, refuses a candidate
-when:
+piloop stores each answer of the rule, in the table `judgements`, and asks the rule once for each case. A remeasure,
+an exclusion or a change of `[plugins.best_rule]` makes new cases, and the daemon asks the rule again on its next pass.
+Until it answers, the best stays where it is.
+
+The default rule, `baseline`, refuses a candidate when:
 
 1. A primary or a guardrail is past its `floor`.
 2. A guardrail is worse than the baseline's by more than its `margin` or `fraction`.
 3. The campaign has a sealed split, and the candidate does not beat the baseline there.
 
-A plugin can replace the rule: see [Best rules](/plugins/rules#best-rules).
+`baseline` compares each candidate with the baseline only. So the best is the best mean among the candidates that it
+allows, and the order decides only between equal means. A rule that compares with the best so far, such as a test of
+significance, can be any program: see [Best rules](/plugins/rules#best-rules).
 
 ## The sealed split
 

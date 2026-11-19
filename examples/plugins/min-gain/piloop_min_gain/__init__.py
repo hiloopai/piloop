@@ -4,7 +4,7 @@ Use it when a tiny gain is not worth a new best. The rule is the built-in rule `
 guardrails, the sealed split and the reasons stay those of ``baseline``. No state, no I/O.
 """
 
-from piloop.capabilities import Baseline, Case, number
+from piloop.capabilities import Baseline, Case, Keep, Refuse, Unanswered, number
 
 
 class MinGain(Baseline):
@@ -13,11 +13,15 @@ class MinGain(Baseline):
     min_gain: float
     """The smallest gain over the baseline that may be best, in the primary metric's units."""
 
-    def refuse(self, case: Case) -> str | None:
-        if (why := super().refuse(case)) is not None:
-            return why
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        if not isinstance(first := super().judge(case), Keep):
+            return first
         name = case.primary.name
         if name not in case.baseline.means:
-            return None
+            return first
         gain = case.primary.direction.gain(case.candidate.means[name], case.baseline.means[name])
-        return None if gain >= self.min_gain else f'its gain {number(gain)} is below min_gain {number(self.min_gain)}'
+        return (
+            first
+            if gain >= self.min_gain
+            else Refuse(f'its gain {number(gain)} is below min_gain {number(self.min_gain)}')
+        )

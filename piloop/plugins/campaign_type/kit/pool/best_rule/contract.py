@@ -1,28 +1,31 @@
-"""The contract of a best rule: whether a confirmed candidate may be the best of its track.
+"""The contract of a best rule: whether a candidate may replace the best of its track.
 
-piloop scores every candidate into the campaign's pool. The **best** of a track is the candidate with the best mean of
-the track's primary among those that may be best: the baseline, and each candidate that is confirmed (it has
-``[evaluator] noise_runs`` evaluations) and that the best rule does not refuse. piloop calls the rule's ``refuse`` with a
-``Case``: the candidate's scores, the baseline's, and the metrics that decide. The rule returns why the candidate may
-not be best, or None.
+piloop scores every candidate into the campaign's pool. A candidate is **ready** once it is confirmed (it has
+``[evaluator] noise_runs`` evaluations), and, with a sealed split, once the split answered it. piloop walks the ready
+candidates in the order in which they became ready, from the baseline. When one beats the best so far on the track's
+primary, piloop calls the rule's ``judge`` with a ``Case``: the candidate, the best that it would replace, the baseline,
+its parent, and the metrics. On ``Keep`` the candidate is the best. piloop stores each answer, so it asks once for each
+case.
 
 The rule reads nothing else: it is a pure provider. ``[plugins.best_rule] provider`` in ``piloop.toml`` selects the
 rule, and the other keys of that table are its fields. Without the table, the rule is ``baseline``.
 
-This module imports only the Python standard library, the plugin host and the metric types. A rule imports this module,
-and nothing else of piloop.
+This module imports only the Python standard library, the plugin host, the metric types and the compat markers. A rule
+imports this module, and nothing else of piloop.
 """
 
-from abc import ABC, abstractmethod
+import warnings
+from abc import ABC
 from dataclasses import dataclass
 
+from piloop import deprecated
 from piloop.plugins.host import Capability, One, Parameters, Scope, Tier
-from piloop.plugins.metric import Direction, number
+from piloop.plugins.metric import Direction, MetricRole, number
 
 
 @dataclass(frozen=True)
 class Criterion:
-    """A metric that decides: the primary of the candidate's track, or one of its guardrails."""
+    """A metric of ``piloop.toml``: the primary of the candidate's track, a guardrail, or a ``watch`` metric."""
 
     name: str
     """The metric's name, as the evaluate command reports it."""
@@ -35,6 +38,10 @@ class Criterion:
     fraction: float | None = None
     """The largest regression from the baseline that a guardrail may show, as a fraction of the baseline's value. A
     guardrail has a ``margin`` or a ``fraction``, never both."""
+    role: MetricRole = MetricRole.WATCH
+    """How the metric decides, as ``[[metrics]] role`` says."""
+    track: str | None = None
+    """The track that a primary decides, or None for another metric."""
 
     def allowed(self, baseline: float) -> float:
         """The largest regression from ``baseline``, the baseline's value, in the metric's units.
@@ -55,8 +62,22 @@ class Criterion:
 
 
 @dataclass(frozen=True)
+class CaseSample:
+    """One successful evaluation of one side of the case."""
+
+    id: int
+    """The id of its measurement."""
+    rung: str | None
+    """The rung of the ladder that it measured, or None for the full panel."""
+    metrics: dict[str, float]
+    """What the evaluate command reported."""
+    units: dict[str, dict[str, float]]
+    """Each metric's per-unit results: metric, then unit id, then the unit's contribution. Empty without units."""
+
+
+@dataclass(frozen=True)
 class Scores:
-    """One side of the case: the candidate, or the baseline."""
+    """One side of the case: the candidate, the best that it would replace, the baseline, or the candidate's parent."""
 
     name: str
     """How a reason names it: ``candidate#73``."""
@@ -66,30 +87,84 @@ class Scores:
     """How many successful evaluations of the full panel ``means`` are over."""
     sealed: float | None
     """Its score on the sealed split (``[evaluator] sealed``), or None when the split did not score it."""
+    id: int
+    """Its candidate id."""
+    parent: int | None
+    """The candidate id of its parent, or None for the baseline."""
+    samples: tuple[CaseSample, ...]
+    """Its successful evaluations by the current evaluator, every rung included, oldest first."""
+    sealed_samples: tuple[CaseSample, ...]
+    """Its successful evaluations by the sealed split, oldest first."""
 
 
 @dataclass(frozen=True)
 class Case:
-    """All that a rule gets to decide whether one confirmed candidate may be best."""
+    """All that a rule gets to decide whether one candidate may replace the best of its track."""
 
     primary: Criterion
     """The primary metric of the track."""
     guardrails: tuple[Criterion, ...]
     """The campaign's guardrails, then the primary of every other track."""
     candidate: Scores
-    """The confirmed candidate."""
+    """The candidate: confirmed, and better than ``incumbent`` on the primary."""
     baseline: Scores
-    """The campaign's baseline, which may always be best."""
+    """The campaign's baseline."""
     sealed: Criterion | None
     """The metric that the sealed split scores, the primary of the first track, or None without a sealed split."""
+    track: str
+    """The track whose best the candidate would become."""
+    metrics: tuple[Criterion, ...]
+    """Every metric of ``piloop.toml``, ``watch`` metrics included."""
+    incumbent: Scores
+    """The best that the candidate would replace. It is the baseline until a candidate replaces it."""
+    parent: Scores | None
+    """The candidate's parent, or None when it has none in the pool."""
+
+
+@dataclass(frozen=True)
+class Keep:
+    """The candidate replaces the best."""
+
+    reason: str | None = None
+    """Why, or None."""
+
+
+@dataclass(frozen=True)
+class Refuse:
+    """The candidate may not be best."""
+
+    reason: str
+    """Why: its worker hears it. Name no hidden unit in it."""
+
+
+@dataclass(frozen=True)
+class Unanswered:
+    """The rule could not decide, such as a program that failed. piloop escalates, and the best stays."""
+
+    error: str
+    """What failed: the escalation shows it."""
 
 
 class BestRule(Parameters, ABC):
-    """A best rule: its fields are its parameters. A rule has no error case: it answers every case."""
+    """A best rule: its fields are its parameters."""
 
-    @abstractmethod
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        """Return whether ``case.candidate`` may replace ``case.incumbent`` as the best of ``case.track``.
+
+        The answer must be a function of the case: piloop stores the first answer for a case and never asks again.
+        """
+        deprecated.until('0.10.0', 'a best rule that defines refuse, not judge: make judge abstract, delete refuse')
+        warnings.warn(
+            f'{type(self).__name__} defines refuse: define judge instead; refuse is removed in piloop 0.10.0',
+            deprecated.PiloopDeprecationWarning,
+            stacklevel=2,
+        )
+        why = self.refuse(case)
+        return Keep() if why is None else Refuse(why)
+
     def refuse(self, case: Case) -> str | None:
-        """Return why ``case.candidate`` may not be the best of its track, or None when it may."""
+        """Deprecated: define ``judge``. Return why ``case.candidate`` may not be best, or None when it may."""
+        raise NotImplementedError(f'{type(self).__name__} defines neither judge nor refuse')
 
 
 BEST_RULES = Capability('best_rule', BestRule, tier=Tier.PURE, table=One(Scope.CAMPAIGN, default='baseline'))

@@ -152,6 +152,14 @@ The best rule. Without a table: `baseline`.
 
 With `provider = "baseline"`, the table has no other key.
 
+With `provider = "command"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `command` | list\[string\] | required | The program (argv). Keep it, and its data, outside the repo. Example: `["python3", "/srv/rules/paired.py"]`. |
+| `timeout` | number | `60` | The seconds that the program can take. |
+| `version` | string \| null | `null` | Any value. piloop asks the rule again for each case when the table changes: change it after you edit the program. |
+
 ### `[plugins.escalation]`
 
 The escalation policy. Without a table: `structured`.

@@ -10,7 +10,7 @@ from piloop_inference.min_speedup import MinSpeedup
 from sqlalchemy import update
 
 from piloop.campaign.stop import check, gather
-from piloop.capabilities import SECTIONS, Case, Criterion, Direction, Escalate, Go, Hold, Rendering, Scores
+from piloop.capabilities import SECTIONS, Case, Criterion, Direction, Escalate, Go, Hold, Keep, Refuse, Rendering
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins import host
@@ -20,6 +20,7 @@ from tests.campaign.test_stop import add_run
 from tests.conftest import cas_of, example
 from tests.daemon.test_scheduler import set_config
 from tests.reports.test_overview import NOW
+from tests.scoring.test_best_rule import case
 
 
 @pytest.fixture
@@ -34,18 +35,21 @@ def inference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
 
 def against_100(candidate: float, match: float = 1.0) -> Case:
     """A confirmed candidate of ``candidate`` tokens/s against a baseline of 100, with the guardrail ``match``."""
-    throughput, guardrail = Criterion('tokens_per_s', Direction.HIGHER), Criterion('match', Direction.HIGHER, 0.01)
-    mine = Scores('candidate#2', {'tokens_per_s': candidate, 'match': match}, 3, None)
-    baseline = Scores('candidate#1', {'tokens_per_s': 100, 'match': 1.0}, 3, None)
-    return Case(throughput, (guardrail,), mine, baseline, None)
+    throughput = Criterion('tokens_per_s', Direction.HIGHER)
+    return case(
+        {'tokens_per_s': candidate, 'match': match},
+        {'tokens_per_s': 100, 'match': 1.0},
+        Criterion('match', Direction.HIGHER, 0.01),
+        primary=throughput,
+    )
 
 
 def test_min_speedup_lets_be_best_only_a_gain_of_at_least_its_fraction_of_the_baseline() -> None:
     rule = MinSpeedup(min_speedup=0.05)
-    assert rule.refuse(against_100(110)) is None
-    assert rule.refuse(against_100(103)) == '3.0% is below min_speedup 5%'
-    assert rule.refuse(against_100(90)) == '-10.0% is below min_speedup 5%'
-    assert rule.refuse(against_100(110, match=0.9)) == (
+    assert rule.judge(against_100(110)) == Keep()
+    assert rule.judge(against_100(103)) == Refuse('3.0% is below min_speedup 5%')
+    assert rule.judge(against_100(90)) == Refuse('-10.0% is below min_speedup 5%')
+    assert rule.judge(against_100(110, match=0.9)) == Refuse(
         'guardrails: match 0.9 vs the baseline 1 beyond its margin 0.01'
     ), 'what baseline refuses stays refused'
 

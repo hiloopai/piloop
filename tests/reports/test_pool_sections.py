@@ -13,7 +13,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.section.trajectory import STEPS_SHOWN
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
-from tests.conftest import cas_of, reconfigured
+from tests.conftest import cas_of, judged, reconfigured
 from tests.reports.test_overview import NOW, candidate, score_at
 
 
@@ -51,6 +51,7 @@ def test_each_recent_candidate_says_where_it_stands_in_the_pool(db: Database, ca
         s.add(Measurement(candidate_id=crashed.id, evaluator_id=p.evaluator_id, metrics={}, error='died'))
         s.add(Candidate(campaign_id=p.id, parent_id=2, tree_sha='k', revision='k', origin=Origin.SKIPPED))
         s.commit()
+    judged(db, campaign.id)
     assert shown(db, campaign, 'candidates') == snapshot("""\
 ## Recent candidates (8 of 8; score)
 

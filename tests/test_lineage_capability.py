@@ -52,6 +52,7 @@ from piloop.plugins.lineage.contract import (
 from piloop.plugins.metric import Direction
 from piloop.settings import Settings
 from tests.conftest import forget_loaded, install_plugins, reconfigured, route_host, serving_api, store_config
+from tests.reports.test_overview import judge_in
 
 T0 = datetime(2026, 10, 27, 12, tzinfo=UTC)
 PATH = '/v1/campaigns/{campaign}/lineage'
@@ -273,6 +274,7 @@ def grow(
             )
             s.flush()
             if scores:
+                judge_in(s, row)
                 record_scored(s, Pool.of(s, row, row.config.all_tracks[0]), c.id)
             parent = c.id if sum(v is not None for v in scores) >= 3 else parent
             found.append(c.id)

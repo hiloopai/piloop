@@ -300,6 +300,17 @@ erDiagram
         varchar cancelled_by
         integer ask
     }
+    judgements {
+        integer id PK
+        integer candidate_id FK
+        integer incumbent_id FK
+        integer evaluator_id FK
+        varchar key
+        Answer answer
+        varchar reason
+        double seconds
+        datetime created_at
+    }
     measurements {
         integer id PK
         integer candidate_id FK
@@ -350,6 +361,9 @@ erDiagram
     evaluators ||--o{ cancels : "evaluator_id"
     candidates ||--o{ evaluations : "candidate_id"
     evaluators ||--o{ evaluations : "evaluator_id"
+    candidates ||--o{ judgements : "candidate_id"
+    candidates ||--o{ judgements : "incumbent_id"
+    evaluators ||--o{ judgements : "evaluator_id"
     candidates ||--o{ measurements : "candidate_id"
     evaluators ||--o{ measurements : "evaluator_id"
     runs ||--o{ submissions : "run_id"

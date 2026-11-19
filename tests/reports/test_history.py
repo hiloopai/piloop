@@ -42,6 +42,7 @@ from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.section.contract import Briefing, Rendering, markdown
 from piloop.text import CELL_CHARS, cell, cost
 from tests.conftest import cas_of, has_lines, spent
+from tests.reports.test_overview import judge_in
 
 SHOWN = Pack()
 """The research pack's default bounds."""
@@ -107,7 +108,7 @@ def scored(
         s.add(c)
         s.flush()
         s.add(Measurement(candidate_id=c.id, evaluator_id=evaluator_id, metrics=metrics, error=error))
-        s.flush()
+        judge_in(s, row.campaign)
         record_scored(s, Pool.of(s, row.campaign, track_of(row.campaign.config, c)), c.id)
         parent = c.id
     return c

@@ -18,6 +18,14 @@ class Direction(StrEnum):
         return a - b if self is Direction.HIGHER else b - a
 
 
+class MetricRole(StrEnum):
+    """How a metric decides which candidate is best. https://piloop.autoresearch.inc/concepts/pool explains it."""
+
+    PRIMARY = 'primary'
+    GUARDRAIL = 'guardrail'
+    WATCH = 'watch'
+
+
 def number(value: float, *, signed: bool = False) -> str:
     """Format a value in a reason: whole numbers in full (``3688770``), others to 4 significant digits (``0.8312``).
 

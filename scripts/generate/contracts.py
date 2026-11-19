@@ -15,7 +15,16 @@ from pathlib import Path
 
 from piloop.daemon.loop import Consumer
 from piloop.plugins.archive.contract import ArchiveConfig, Archiver
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import (
+    BestRule,
+    Case,
+    CaseSample,
+    Criterion,
+    Keep,
+    Refuse,
+    Scores,
+    Unanswered,
+)
 from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
 from piloop.plugins.contribution import Contributes, Contribution, Serves
 from piloop.plugins.escalation.contract import EscalationPolicy, EscalationView
@@ -54,7 +63,8 @@ CONTRACTS: dict[str, Contract] = {
     'executor': Contract((ExecutorConfig, Executor), '`piloop/plugins/executor/contract.py`'),
     'network': Contract((NetworkConfig, Network), '`piloop/plugins/network/contract.py`'),
     'best-rule': Contract(
-        (BestRule, Case, Criterion, Scores), '`piloop/plugins/campaign_type/kit/pool/best_rule/contract.py`'
+        (BestRule, Case, Keep, Refuse, Unanswered, Criterion, Scores, CaseSample),
+        '`piloop/plugins/campaign_type/kit/pool/best_rule/contract.py`',
     ),
     'section': Contract((Section, Rendering), '`piloop/plugins/section/contract.py`'),
     'stop-rule': Contract((StopRule, StopCase), '`piloop/plugins/stop_rule/contract.py`'),

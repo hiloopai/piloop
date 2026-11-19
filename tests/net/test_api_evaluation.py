@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.settings import Settings
-from tests.conftest import EveryClient, serving_api
+from tests.conftest import EveryClient, judged, serving_api
 from tests.daemon.test_run_controller import set_config
 from tests.daemon.test_submissions import commit, running, worktree
 
@@ -214,7 +214,10 @@ def scored(
         record(s, row, here.evaluator_id, System.DAEMON, metrics=metrics or {}, error=error, seconds=1.0)
         if (asked := remeasure_asked(s, row)) is not None:
             answer_remeasure(s, row, here.evaluator_id, asked[0].id)
-        s.flush()
+        s.commit()
+    judged(db, campaign.id)  # the best rule answers before the worker hears where its candidate stands
+    with db.session() as s:
+        row, here = s.get_one(Candidate, candidate), s.get_one(Campaign, campaign.id)
         told = record_scored(s, Pool.of(s, here, track_of(here.config, row)), candidate).told
         s.commit()
         return told

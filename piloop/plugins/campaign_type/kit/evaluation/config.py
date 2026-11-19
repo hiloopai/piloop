@@ -1,7 +1,6 @@
 """The ``evaluation`` component's keys of ``piloop.toml``: its evaluator, its metrics, its tracks and its ladder."""
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Self
 
 from pydantic import (
@@ -12,7 +11,7 @@ from pydantic import (
 )
 
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
-from piloop.plugins.metric import Direction
+from piloop.plugins.metric import Direction, MetricRole
 
 
 class EvaluatorConfig(BaseModel):
@@ -37,14 +36,6 @@ class EvaluatorConfig(BaseModel):
     best. The standard deviation of the best's evaluations is the noise that a worker's message names. When the
     baseline's evaluations agree, the evaluator is deterministic, and one evaluation confirms. 1: one evaluation
     confirms."""
-
-
-class MetricRole(StrEnum):
-    """How a metric decides which candidate is best. https://piloop.autoresearch.inc/concepts/pool explains it."""
-
-    PRIMARY = 'primary'
-    GUARDRAIL = 'guardrail'
-    WATCH = 'watch'
 
 
 class Tolerance(BaseModel):

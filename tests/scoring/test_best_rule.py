@@ -12,9 +12,18 @@ from pathlib import Path
 import pytest
 from piloop_min_gain import MinGain
 
+from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.campaign_type.kit.pool.best_rule import baseline as baseline_module
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import (
+    BEST_RULES,
+    BestRule,
+    Case,
+    Criterion,
+    Keep,
+    Refuse,
+    Scores,
+)
 from piloop.plugins.host import Tier, data_errors
 from piloop.plugins.metric import Direction
 
@@ -23,22 +32,33 @@ SIZE = Criterion('size', Direction.LOWER, margin=3)
 SEALED = Criterion('score', Direction.HIGHER)
 
 
+def side(c: int, means: Mapping[str, float], sealed: float | None = None, *, measured: int = 3) -> Scores:
+    """One side of a case: candidate#``c``, a child of the baseline candidate#1, with ``means`` and no samples."""
+    return Scores(f'candidate#{c}', dict(means), measured, sealed, c, 1 if c != 1 else None, (), ())
+
+
 def case(
     mine: Mapping[str, float],
     theirs: Mapping[str, float],
     *guardrails: Criterion,
     primary: Criterion = SCORE,
     sealed: tuple[float | None, float | None] | None = None,
+    measured: int = 3,
 ) -> Case:
-    """The case of candidate#9 against the baseline, candidate#1: with a sealed split when ``sealed`` gives the two
-    sealed scores."""
+    """The case of candidate#9 against the baseline, candidate#1, its parent and the best: with a sealed split when
+    ``sealed`` gives the two sealed scores."""
     ours, base = sealed if sealed is not None else (None, None)
+    baseline = side(1, theirs, base, measured=measured)
     return Case(
-        primary,
-        guardrails,
-        Scores('candidate#9', dict(mine), 3, ours),
-        Scores('candidate#1', dict(theirs), 3, base),
-        SEALED if sealed is not None else None,
+        primary=primary,
+        guardrails=guardrails,
+        candidate=side(9, mine, ours, measured=measured),
+        baseline=baseline,
+        sealed=SEALED if sealed is not None else None,
+        track=primary.name,
+        metrics=(primary, *guardrails),
+        incumbent=baseline,
+        parent=baseline,
     )
 
 
@@ -141,6 +161,7 @@ def test_the_built_in_rule_imports_only_the_standard_library_its_contract_and_th
         n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module is not None
     }
     assert {m for m in imported if m.split('.')[0] not in sys.stdlib_module_names} == {
+        'piloop',  # its compat markers (piloop.deprecated)
         'piloop.plugins.campaign_type.kit.pool.best_rule.contract',
         'piloop.plugins.metric',
     }
@@ -160,10 +181,55 @@ def test_the_example_rule_min_gain_keeps_every_refusal_of_baseline(
 ) -> None:
     """``examples/plugins/min-gain`` calls the built-in rule and changes one thing, through the host's contract."""
     found = case(mine, theirs, SIZE, sealed=sealed)
-    assert MinGain(min_gain=2).refuse(found) == Baseline().refuse(found)
+    assert MinGain(min_gain=2).judge(found) == Baseline().judge(found)
 
 
 def test_the_example_rule_min_gain_refuses_a_gain_over_the_baseline_below_min_gain() -> None:
-    assert MinGain(min_gain=2).refuse(case({'score': 11, 'size': 10}, {'score': 10, 'size': 10}, SIZE)) == (
+    assert MinGain(min_gain=2).judge(case({'score': 11, 'size': 10}, {'score': 10, 'size': 10}, SIZE)) == Refuse(
         'its gain 1 is below min_gain 2'
     )
+    assert MinGain(min_gain=1).judge(case({'score': 11, 'size': 10}, {'score': 10, 'size': 10}, SIZE)) == Keep()
+
+
+def test_baseline_judges_with_the_reason_of_refuse() -> None:
+    assert Baseline().judge(case({'score': 12}, {'score': 10}, sealed=(None, 10))) == Refuse(
+        'the sealed split did not score it'
+    )
+    assert Baseline().judge(case({'score': 12}, {'score': 10})) == Keep()
+
+
+class OnlyRefuse(BestRule):
+    """A rule of piloop 0.8: it defines ``refuse`` alone."""
+
+    def refuse(self, case: Case) -> str | None:
+        return None if case.candidate.means['score'] > 11 else 'too small'
+
+
+class ExtendsBaseline(Baseline):
+    """A rule of piloop 0.8 that extends ``baseline`` through ``refuse``, as ``min_gain`` did."""
+
+    def refuse(self, case: Case) -> str | None:
+        return super().refuse(case) or ('too small' if case.candidate.means['score'] <= 11 else None)
+
+
+@pytest.mark.parametrize('rule', [OnlyRefuse(), ExtendsBaseline()])
+def test_a_rule_that_defines_refuse_alone_still_judges_and_warns(rule: BestRule) -> None:
+    with pytest.warns(PiloopDeprecationWarning, match='define judge instead; refuse is removed in piloop 0.10.0'):
+        assert rule.judge(case({'score': 12}, {'score': 10})) == Keep()
+    with pytest.warns(PiloopDeprecationWarning):
+        assert rule.judge(case({'score': 11}, {'score': 10})) == Refuse('too small')
+
+
+def test_a_rule_that_extends_baseline_through_refuse_keeps_its_refusals() -> None:
+    with pytest.warns(PiloopDeprecationWarning):
+        assert ExtendsBaseline().judge(case({'score': 12, 'size': 20}, {'score': 10, 'size': 10}, SIZE)) == Refuse(
+            'guardrails: size 20 vs the baseline 10 beyond its margin 3'
+        )
+
+
+def test_a_rule_that_defines_neither_judge_nor_refuse_fails_when_asked() -> None:
+    class Nothing(BestRule):
+        pass
+
+    with pytest.warns(PiloopDeprecationWarning), pytest.raises(NotImplementedError, match='neither judge nor refuse'):
+        Nothing().judge(case({'score': 12}, {'score': 10}))

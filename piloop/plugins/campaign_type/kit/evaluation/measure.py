@@ -442,27 +442,6 @@ def stored_units(cas: Cas, units: Units) -> Cid | None:
     return cas.put(UNITS.dump_json(units)) if units else None
 
 
-def _blob(cas: Cas, cid: Cid) -> bytes:
-    if (data := cas.get(cid)) is None:
-        raise LookupError(f'per-unit results {cid} are not in the CAS')
-    return data
-
-
-def units(cas: Cas, candidate: Candidate, evaluator_id: EvaluatorId) -> Units:
-    """Return the candidate's per-unit results under ``evaluator_id``: each unit's mean over its measurements."""
-    rows = [
-        UNITS.validate_json(_blob(cas, m.units))
-        for m in candidate.measurements
-        if m.evaluator_id == evaluator_id and m.reading is Reading.SCORE and m.units is not None
-    ]
-    per_metric: dict[str, dict[str, list[float]]] = {}
-    for row in rows:
-        for name, values in row.items():
-            for unit, value in values.items():
-                per_metric.setdefault(name, {}).setdefault(unit, []).append(value)
-    return {name: {unit: fmean(v) for unit, v in values.items()} for name, values in per_metric.items()}
-
-
 def gate_of(bar: Candidate, evaluator_id: EvaluatorId, cfg: CampaignConfig) -> Gate:
     """What the ladder's stops compare with: ``bar``'s means at each rung, and the metrics' directions."""
     return Gate(bar=rungs(bar, evaluator_id), directions={m.name: m.direction for m in cfg.metrics})

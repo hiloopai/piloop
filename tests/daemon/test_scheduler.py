@@ -122,6 +122,7 @@ from tests.conftest import (
     events,
     factory,
     home_cas,
+    judged,
     live_limit,
     pinned,
     reconfigured,
@@ -751,6 +752,7 @@ def test_a_run_starts_from_the_best_as_of_its_start_not_as_of_the_idea(
         s.flush()
         s.add(Measurement(candidate_id=2, evaluator_id=1, metrics={'score': 9, 'size': 9}))
         s.commit()
+    judged(db, campaign.id)
     scheduler = make_scheduler(db, runtime, tmp_path)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)

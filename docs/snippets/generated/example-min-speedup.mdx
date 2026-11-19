@@ -12,7 +12,7 @@ run starts from the best by default, so a lucky best costs the runs after it. Th
 test: its guardrails, sealed split and reasons stay.
 """
 
-from piloop.capabilities import Baseline, Case
+from piloop.capabilities import Baseline, Case, Keep, Refuse, Unanswered
 
 
 class MinSpeedup(Baseline):
@@ -21,13 +21,15 @@ class MinSpeedup(Baseline):
     min_speedup: float
     """The smallest gain over the baseline that may be best, as a fraction of the baseline: ``0.05`` for 5%."""
 
-    def refuse(self, case: Case) -> str | None:
-        if (why := super().refuse(case)) is not None:
-            return why
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        if not isinstance(first := super().judge(case), Keep):
+            return first
         name = case.primary.name
         base = case.baseline.means.get(name)
         if not base:
-            return None
+            return first
         speedup = case.primary.direction.gain(case.candidate.means[name], base) / abs(base)
-        return None if speedup >= self.min_speedup else f'{speedup:.1%} is below min_speedup {self.min_speedup:.0%}'
+        if speedup < self.min_speedup:
+            return Refuse(f'{speedup:.1%} is below min_speedup {self.min_speedup:.0%}')
+        return first
 ```

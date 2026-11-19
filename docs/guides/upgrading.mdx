@@ -125,6 +125,18 @@ Before 1.0, a minor release may break these, and the changelog says so:
 
 ## Upgrading to the next release
 
+### The best rule judges against the best
+
+The best of a track is the last candidate that the best rule kept, in the order in which the candidates became ready.
+The table `judgements` stores each answer of the rule. The migration adds it empty, and the daemon's first pass asks
+the rule for each case, also on a stopped campaign: run `piloop restart` after the upgrade. With the default rule, the
+best stays the same, but on an exact tie of the mean, where the candidate that became ready first wins.
+
+- A plugin's best rule defines `judge(case) -> Keep | Refuse | Unanswered` in place of `refuse(case) -> str | None`.
+  A rule that defines only `refuse` works, with a `PiloopDeprecationWarning`, until 0.10.0.
+- `Case` has the track, every metric, the best that the candidate would replace (`incumbent`) and the parent. Each side
+  has its id, its parent, and every sample with its per-unit results.
+
 ### A run claims any number of ideas
 
 A run may claim ideas, and propose its own, as many times as its implementer wants. The table `run_claims` (`run_id`,

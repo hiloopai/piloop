@@ -11,7 +11,7 @@ from inline_snapshot import snapshot
 from piloop import config as config_module
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.ids import RoleName
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.pool.pool import criterion
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
@@ -21,7 +21,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import Harness, each_provider
-from piloop.plugins.metric import Direction
+from piloop.plugins.metric import Direction, MetricRole
 from piloop.plugins.role.contract import Continuity, ImplementerRole
 from piloop.plugins.section.goal import Goal
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule

@@ -1,16 +1,26 @@
-"""``baseline``: the default best rule. A confirmed candidate may be best when it holds against the baseline.
+"""``baseline``: the default best rule. A candidate may be best when it holds against the baseline.
 
 It must keep every guardrail within its floor and its tolerance of the baseline's value, and, in a campaign with a
-sealed split, beat the baseline there on the primary. The rule imports only the standard library and its contract, as a
-rule from a plugin does.
+sealed split, beat the baseline there on the primary. It reads neither the best that the candidate would replace nor
+the parent, so the order in which candidates become ready decides only between equal means. The rule imports only the
+standard library and its contract, as a rule from a plugin does.
 """
 
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
+from piloop import deprecated
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case, Keep, Refuse, Unanswered
 from piloop.plugins.metric import number
 
 
 class Baseline(BestRule):
     """``baseline``: within each guardrail of the baseline, and better than the baseline on the sealed split."""
+
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        """Refuse the candidate with the reason of ``refuse``, else keep it."""
+        if type(self).refuse is not Baseline.refuse:
+            deprecated.until('0.10.0', 'a rule that extends baseline through refuse: delete this branch')
+            return super().judge(case)
+        why = self.refuse(case)
+        return Keep() if why is None else Refuse(why)
 
     def refuse(self, case: Case) -> str | None:
         """Return why the candidate may not be best, in this order, or None.

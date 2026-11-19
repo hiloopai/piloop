@@ -484,6 +484,24 @@ CREATE TABLE evaluations (
 	FOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE,
 	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id)
 );
+CREATE TABLE judgements (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	candidate_id INTEGER NOT NULL,
+	incumbent_id INTEGER NOT NULL,
+	evaluator_id INTEGER NOT NULL,
+	"key" VARCHAR NOT NULL,
+	answer VARCHAR(16) NOT NULL,
+	reason VARCHAR,
+	seconds DOUBLE NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	UNIQUE (candidate_id, "key"),
+	CONSTRAINT "judgements.key must be a text value" CHECK (typeof(key) IN ('text')),
+	CONSTRAINT "judgements.reason must be a text value" CHECK (typeof(reason) IN ('text', 'null')),
+	FOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE,
+	FOREIGN KEY(incumbent_id) REFERENCES candidates (id) ON DELETE CASCADE,
+	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id),
+	CONSTRAINT answer CHECK (answer IN ('keep', 'refuse', 'unanswered'))
+);
 CREATE TABLE measurements (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	candidate_id INTEGER NOT NULL,

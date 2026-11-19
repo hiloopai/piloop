@@ -9,6 +9,7 @@ import argparse
 
 from scripts.generate import (
     Mode,
+    best_rule_case,
     capabilities,
     cas_providers,
     cli,
@@ -24,6 +25,7 @@ from scripts.generate import (
     example_min_gain,
     example_min_speedup,
     example_nice_runtime,
+    example_paired_rule,
     example_sqlite_cas,
     example_stop_after_bests,
     harnesses,
@@ -62,6 +64,8 @@ GENERATORS = (
     example_gpu_hours,
     example_min_speedup,
     example_latency,
+    example_paired_rule,
+    best_rule_case,
     capabilities,
     openapi,
 )

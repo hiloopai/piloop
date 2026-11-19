@@ -64,6 +64,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, Score
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
+from piloop.plugins.campaign_type.kit.pool.judging import judge
 from piloop.plugins.campaign_type.kit.pool.wire import PoolClient
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
@@ -759,6 +760,11 @@ def disk(home: Path) -> Cas:
 def home_cas(db: Database) -> Cas:
     """The default CAS of the home of ``db``, the directory of its file."""
     return disk(Path(db.engine.url.database or '').parent)
+
+
+def judged(db: Database, campaign_id: CampaignId) -> None:
+    """Answer each case that the best of the campaign waits for, as the daemon's pass does: after rows by hand."""
+    judge(db, home_cas(db), campaign_id)
 
 
 def cas_of(s: Session) -> Cas:

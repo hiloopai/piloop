@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, R
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, working_on
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import Git
-from tests.conftest import EVALUATE, ScriptRuntime, bare_config, baseline, factory, reports, serving
+from tests.conftest import EVALUATE, ScriptRuntime, bare_config, baseline, factory, judged, reports, serving
 
 SUBMIT = {'noise_runs': 3}
 """Each candidate whose first score beats the best's is evaluated until it has 3 evaluations."""
@@ -259,6 +259,7 @@ def test_two_candidates_confirmed_in_either_order_give_the_same_best(
             ids[name] = c.id
             s.add_all(Measurement(candidate_id=c.id, evaluator_id=evaluator, metrics={'score': v}) for v in means[name])
         s.commit()
+    judged(db, campaign.id)
     found = pool(db, campaign)
     assert found.best() == ids['a'] and found.ranked == [ids['a'], ids['b'], first.id]
 
@@ -469,6 +470,7 @@ def test_the_brief_lists_the_best_and_the_best_of_three_other_lines_one_per_line
             made[name] = c.id
             s.add(Measurement(candidate_id=c.id, evaluator_id=evaluator, metrics={'score': score}))
         s.commit()
+    judged(db, campaign.id)
     assert pool(db, campaign).worth_branching() == [made['a2'], made['b'], made['c'], made['d']]
     with db.session() as s:
         shown = branching(s, s.get_one(Campaign, campaign.id))

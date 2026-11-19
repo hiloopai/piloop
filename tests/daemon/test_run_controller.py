@@ -63,8 +63,6 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     request_remeasure,
     requested,
     status,
-    stored_units,
-    units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES
@@ -115,12 +113,12 @@ from tests.conftest import (
     Gate,
     ScriptRuntime,
     baseline,
-    disk,
     escalation_sql,
     events,
     example,
     factory,
     home_cas,
+    judged,
     pinned,
     reports,
     scoring,
@@ -397,7 +395,7 @@ def test_successful_run_scores_the_commit(
     with scoring(ex, db):
         execute(ex, db, run_id)
     named = {s.name: s for s in spans.get_finished_spans() if s.name != 'piloop.job'}
-    assert sorted(named) == ['piloop.agent', 'piloop.measure', 'piloop.run', 'piloop.submission']
+    assert sorted(named) == ['piloop.agent', 'piloop.judge', 'piloop.measure', 'piloop.run', 'piloop.submission']
     agent, measure, submission, run_span = (
         named[n] for n in ('piloop.agent', 'piloop.measure', 'piloop.submission', 'piloop.run')
     )
@@ -1100,7 +1098,11 @@ def test_a_new_evaluator_measures_the_baseline_and_the_old_best_then_what_someon
         fresh = Candidate(campaign_id=campaign.id, tree_sha='fresh', revision='fresh', origin=Origin.REFERENCE)
         s.add(fresh)
         request_remeasure(s, rows['b'], System.ORCHESTRATOR)
-        s.flush()
+        s.commit()
+    judged(db, campaign.id)  # the best under the old evaluator, as the daemon's pass found it then
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        rows = {tree: s.get_one(Candidate, c.id) for tree, c in rows.items()}
         assert [c.tree_sha for c in due(s, proj)] == ['b', 'fresh'], 'the ask, and a reference that nothing measured'
         proj.evaluator_id = new = s.scalar(
             insert(Evaluator).values(campaign_id=campaign.id, key='next', definition={}).returning(Evaluator.id)
@@ -2144,31 +2146,6 @@ def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
         assert (is_best(s, c), told_of(s, c.id)) == snapshot(
             (False, 'score 2 over 1 eval: it may not be best: floor: size 10 past its floor 8')
         )
-
-
-def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
-    db: Database, campaign: Campaign, tmp_path: Path
-) -> None:
-    with db.session() as s:
-        evaluator_id = s.get_one(Campaign, campaign.id).evaluator_id
-        assert evaluator_id is not None
-        c = Candidate(campaign_id=campaign.id, tree_sha='t', revision='t')
-        s.add(c)
-        s.flush()
-        rows = [Measurement(candidate_id=c.id, evaluator_id=evaluator_id, metrics={'score': 1.0}) for _ in range(4)]
-        rows[3].error = 'crashed'
-        cas = home_cas(db)
-        for row, per_unit in zip(
-            rows, ({'a': 1.0, 'b': 0.0}, {'a': 3.0, 'b': 0.0}, {}, {'a': 100.0, 'b': 0.0}), strict=True
-        ):
-            row.units = stored_units(cas, {'score': per_unit} if per_unit else {})
-        s.add_all(rows)
-        s.flush()
-        assert rows[2].units is None, 'none stored for a measurement without per-unit results'
-        assert units(cas, c, evaluator_id) == {'score': {'a': 2.0, 'b': 0.0}}, 'a crashed measurement does not count'
-        rows[0].units = disk(tmp_path / 'elsewhere').put(b'{}')  # a blob that this CAS lacks
-        with pytest.raises(LookupError, match=f'per-unit results {rows[0].units} are not in the CAS'):
-            units(cas, c, evaluator_id)
 
 
 def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | None, int, int | None]]:

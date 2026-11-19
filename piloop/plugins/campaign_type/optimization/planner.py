@@ -16,7 +16,7 @@ from piloop.actor import System
 from piloop.campaign.launches import choose_harness, full_harnesses, remove_checkouts, resumed_on
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, EventModel, ReadBy, count
-from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, CampaignType, CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
@@ -24,6 +24,7 @@ from piloop.plugins.campaign_type.kit.evaluation import submissions, task_holds
 from piloop.plugins.campaign_type.kit.evaluation.measure import status
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_if_exhausted
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
+from piloop.plugins.campaign_type.kit.pool.judging import waiting
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
@@ -78,6 +79,8 @@ class OptimizationPlanner:
         self._controller = host.controller
         self._scoring: dict[tuple[TargetKind, int], Future[None]] = {}
         """Scoring outside an implementer: a run's resumed scoring by run id, or a campaign's re-measure by campaign id."""
+        self._judges: dict[CampaignId, Future[None]] = {}
+        """The best rule at work for a campaign (``RunController.judge``), by campaign id."""
 
     def drain(self, s: Session, campaign: Campaign) -> None:
         """Fail the campaign's queued runs at its stop: their requested implementers are closed by the pass."""
@@ -142,7 +145,10 @@ class OptimizationPlanner:
     def in_flight(self) -> dict[str, Future[None]]:
         """The scoring in flight, by what it scores, after it forgets what ended. Scoring never raises."""
         self._scoring = {key: fut for key, fut in self._scoring.items() if not fut.done()}
-        return {f'{kind}#{i}': fut for (kind, i), fut in self._scoring.items()}
+        self._judges = {key: fut for key, fut in self._judges.items() if not fut.done()}
+        return {f'{kind}#{i}': fut for (kind, i), fut in self._scoring.items()} | {
+            f'judge#{i}': fut for i, fut in self._judges.items()
+        }
 
     def _ours(self) -> ColumnElement[bool]:
         """Select the runs of the campaigns of its type: the daemon asks each type's planner about every run."""
@@ -179,7 +185,9 @@ class OptimizationPlanner:
     def remeasure(self, s: Session, campaign: Campaign) -> None:
         """Measure what the current evaluator must measure (``pool.due``), one candidate at a time per campaign.
 
-        Each submission that waits for its score is scored at once, on a thread of its own (``score_submission``).
+        Each submission that waits for its score is scored at once, on a thread of its own (``score_submission``). When
+        the best of a track waits for the best rule, such as after an exclusion, the rule answers on a thread of its own
+        (``RunController.judge``), also for a stopped campaign.
 
         After an evaluator change, no candidate has a score from the new evaluator. The baseline and the best before
         the change are measured first, and runs wait until both have a score (``queue``). Then the candidates that
@@ -189,6 +197,8 @@ class OptimizationPlanner:
         if hold_if_exhausted(s, campaign, held_tasks):
             return
         self._score_submissions(s, campaign, held_tasks)
+        if ((judge := self._judges.get(campaign.id)) is None or judge.done()) and waiting(s, campaign) is not None:
+            self._judges[campaign.id] = self._host.submit(partial(self._controller.judge, campaign.id))
         key = (TargetKind.CAMPAIGN, campaign.id)
         if ((busy := self._scoring.get(key)) is not None and not busy.done()) or not (todo := due(s, campaign)):
             return

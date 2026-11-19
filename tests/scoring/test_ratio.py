@@ -14,7 +14,7 @@ from piloop.plugins.campaign_type.kit.evaluation.config import Ratio
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, derive
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.pool import Pool
-from tests.conftest import baseline
+from tests.conftest import baseline, judged
 
 SOLVED = {'name': 'solved', 'direction': 'higher', 'role': 'primary'}
 COST = {'name': 'cost_usd', 'direction': 'lower'}
@@ -92,10 +92,12 @@ def test_the_pool_reads_a_ratio_guardrail_as_the_ratio_of_the_means_against_the_
             for c, values in runs.items()
             for solved, cost in values
         )
-        s.flush()
+        s.commit()
+        pricey = pricier.id
+    judged(db, campaign.id)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
         pool = Pool.of(s, p, p.config.all_tracks[0])
-        assert pool.entries[pricier.id].means == {'solved': 6.0, 'cost_usd': 4.5, 'cost_per_solved': 0.75}
-        assert (
-            pool.refusal(pricier.id) == 'guardrails: cost_per_solved 0.75 vs the baseline 0.5 beyond its fraction 0.05'
-        )
+        assert pool.entries[pricey].means == {'solved': 6.0, 'cost_usd': 4.5, 'cost_per_solved': 0.75}
+        assert pool.refusal(pricey) == 'guardrails: cost_per_solved 0.75 vs the baseline 0.5 beyond its fraction 0.05'
         assert pool.best() == first.id

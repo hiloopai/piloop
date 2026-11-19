@@ -20,7 +20,7 @@ from piloop.ids import AgentSessionId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import AGENT_SESSIONS
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Case, Keep, Refuse, Unanswered
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import RunClaim
@@ -205,6 +205,10 @@ class BestCheck(Parameters, ABC):
 BEST_CHECKS = Capability('best_check', BestCheck, tier=Tier.PURE)
 
 
+class Unchecked(BestCheck):
+    """A best check without ``check``."""
+
+
 class AsMeasured(BestCheck):
     """``as_measured``: refuses a candidate with fewer evaluations than the baseline has."""
 
@@ -218,15 +222,11 @@ class Checked(Baseline):
 
     vetoes: list[Annotated[BestCheck, BEST_CHECKS.entry]]
 
-    def refuse(self, case: Case) -> str | None:
-        if (why := super().refuse(case)) is not None:
-            return why
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        if not isinstance(first := super().judge(case), Keep):
+            return first
         held = [f'{BEST_CHECKS.name_of(c)}: {why}' for c in self.vetoes if (why := c.check(case)) is not None]
-        return '; '.join(held) or None
-
-
-class Unrefusing(BestRule):
-    """A best rule without ``refuse``."""
+        return Refuse('; '.join(held)) if held else first
 
 
 NOT_A_ROLE = 'auditor'

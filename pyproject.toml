@@ -145,6 +145,7 @@ http = "piloop.plugins.cas.http:Http"
 
 [project.entry-points."piloop.best_rules"]
 baseline = "piloop.plugins.campaign_type.kit.pool.best_rule.baseline:Baseline"
+command = "piloop.plugins.campaign_type.kit.pool.best_rule.command:CommandRule"
 
 [project.entry-points."piloop.stop_rules"]
 limits = "piloop.plugins.stop_rule.limits:Limits"

@@ -14,6 +14,7 @@ from piloop.campaign import campaigns as campaign_module
 from piloop.cli import common
 from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
+from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
@@ -22,7 +23,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.settings import Settings
 from tests.cli.test_cli import run_cli
-from tests.conftest import at_head, bare_config
+from tests.conftest import at_head, bare_config, judged
 
 pytestmark = pytest.mark.usefixtures('api')
 
@@ -104,9 +105,15 @@ def test_measurement_add_records_a_report_and_says_where_the_candidate_stands_wi
     report.write_text(json.dumps({'metrics': {'score': 3, 'size': 7.5}, 'seconds': 2500}))
     run_cli(['measurement', 'add', str(c), '--report', str(report)])
     assert out().strip() == (
-        f'measurement#3 of candidate#{c}: score 3 over 1 eval: the best of the score track now, rank 1 of 2;'
-        ' vs parent +2'
-    ), 'its mean includes it at once'
+        f'measurement#3 of candidate#{c}: score 3 over 1 eval: it may not be best: the best rule has not judged it yet;'
+        ' vs parent +2, vs best candidate#1 +2'
+    ), 'its mean includes it at once; the best follows once the best rule answers, on the next pass of the daemon'
+    with database() as db:
+        judged(db, CampaignId(1))
+    run_cli(['candidate', 'show', str(c)])
+    assert out().splitlines()[0] == (
+        f'candidate#{c} run: score 3 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +2'
+    )
     report.write_text('{"metrics": {"score": 5, "size": 4}}')
     run_cli(['measurement', 'add', '1', '--report', str(report)])
     assert out().strip() == (

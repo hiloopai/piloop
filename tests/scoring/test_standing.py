@@ -3,16 +3,20 @@
 These build a ``Pool`` from its entries, without a database: ``tests/daemon/test_pool.py`` scores real submissions.
 """
 
+from dataclasses import replace
 from statistics import fmean
 
 from piloop.config import CampaignConfig
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
-from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric
+from piloop.plugins.campaign_type.kit.evaluation.ids import MeasurementId, RungName, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import Status
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.pool import Entry, Pool
-from piloop.plugins.metric import Direction
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import CaseSample, Keep, Refuse, Unanswered
+from piloop.plugins.campaign_type.kit.pool.judging import case
+from piloop.plugins.campaign_type.kit.pool.pool import Entry, Ids, Pool
+from piloop.plugins.campaign_type.kit.pool.tables import Answer
+from piloop.plugins.metric import Direction, MetricRole
 
 MODELS = {'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}}}
 C = CandidateId
@@ -44,6 +48,7 @@ def entry(
     rows = [({name: v[i] for name, v in samples.items()}, None, None, None) for i in range(n)]
     rows += [({}, 'exit 1', None, None)] * failed
     rows += [({}, None, RungName('screen'), stopped)] if stopped is not None else []
+    scored = tuple(MeasurementId(100 * c + i) for i in range(n))  # a later candidate measured later
     return Entry(
         id=C(c),
         parent=None if parent is None else C(parent),
@@ -54,20 +59,37 @@ def entry(
         samples=samples,
         seal=Status(),
         sealed=sealed,
+        ids=Ids(scored=scored, samples=scored),
     )
 
 
 def pool(*entries: Entry, cfg: CampaignConfig = SCORED, track: str | None = None, confirm: int = 1) -> Pool:
     """The pool of ``track`` (the first by default) of ``entries``, whose first is the baseline."""
-    return Pool(
-        track=cfg.track(TrackName(track)) if track is not None else cfg.all_tracks[0],
-        cfg=cfg,
-        entries={e.id: e for e in entries},
-        baseline=entries[0].id if entries else None,
-        confirm=confirm,
-        rule=Baseline(),
-        sealed=False,
+    return judged(
+        Pool(
+            track=cfg.track(TrackName(track)) if track is not None else cfg.all_tracks[0],
+            cfg=cfg,
+            entries={e.id: e for e in entries},
+            baseline=entries[0].id if entries else None,
+            confirm=confirm,
+            rule=Baseline(),
+            sealed=False,
+        )
     )
+
+
+def judged(found: Pool) -> Pool:
+    """``found`` with the rule's answer to each case that its fold asks, as the daemon stores them."""
+    answers: dict[tuple[CandidateId, str], tuple[Answer, str | None]] = {}
+    while (step := (found := replace(found, answers=answers)).fold.waiting) is not None:
+        match found.rule.judge(case(found, step, lambda i: CaseSample(i, None, {}, {}))):
+            case Keep(reason=why):
+                answers[step.candidate, step.key] = (Answer.KEEP, why)
+            case Refuse(reason=why):
+                answers[step.candidate, step.key] = (Answer.REFUSE, why)
+            case Unanswered(error=why):
+                answers[step.candidate, step.key] = (Answer.UNANSWERED, why)
+    return found
 
 
 def score(*values: float) -> dict[str, list[float]]:

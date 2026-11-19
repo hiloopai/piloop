@@ -47,7 +47,7 @@ from piloop.plugins.campaign_type.optimization import Optimization
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.vcs.git import Git
 from piloop.plugins.vcs.git.commands import Identity, commit_env
-from tests.conftest import HARNESS_APPEND, ScriptRuntime, register, write_toml
+from tests.conftest import HARNESS_APPEND, ScriptRuntime, judged, register, write_toml
 from tests.daemon.test_pool import controller
 from tests.daemon.test_submissions import at_once
 from tests.test_lease_model import State, Value, _at, _steps
@@ -168,10 +168,14 @@ class Replay:
             for _ in range(times):
                 metrics = {'score': value, 'size': 1.0}
                 s.add(Measurement(candidate_id=candidate, evaluator_id=campaign.evaluator_id, metrics=metrics))
-            s.flush()
-            if record:
-                found = s.get_one(Candidate, candidate)
-                record_scored(s, Pool.of(s, campaign, track_of(campaign.config, found)), candidate)
+            s.commit()
+        if not record:
+            return
+        judged(self.db, self.campaign.id)  # as the controller does before it records a score
+        with self.db.session() as s:
+            campaign = s.get_one(Campaign, self.campaign.id)
+            found = s.get_one(Candidate, candidate)
+            record_scored(s, Pool.of(s, campaign, track_of(campaign.config, found)), candidate)
             s.commit()
 
     def _top(self) -> float:

@@ -94,11 +94,13 @@ from piloop.plugins.role.contract import ROLES, ImplementerRole, StartsItsAgents
 from piloop.plugins.role.contract import Continuity, Quiet, Wake
 from piloop.plugins.role.contract import RoleConfig
 
-from piloop.plugins.metric import Direction
+from piloop.plugins.metric import Direction, MetricRole
 from piloop.plugins.metric import number
 
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import CaseSample, Keep, Refuse, Unanswered
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
+from piloop.plugins.campaign_type.kit.pool.best_rule.command import CommandRule
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings

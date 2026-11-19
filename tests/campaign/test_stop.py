@@ -98,6 +98,7 @@ from tests.conftest import (
     end_of,
     example,
     install_plugins,
+    judged,
     run_all,
     settle,
     span_named,
@@ -179,7 +180,10 @@ def add_run(
                     candidate_id=candidate_id, evaluator_id=row.evaluator_id, metrics={'score': keep_score or 0}
                 )
             )
-            s.flush()
+            s.commit()
+        judged(db, campaign.id)
+        with db.session() as s:
+            row = s.get_one(Campaign, campaign.id)
             record_scored(s, Pool.of(s, row, row.config.all_tracks[0]), candidate_id)
             [scored] = [e for e in s.new if isinstance(e, Event)]
             scored.at = s.get_one(Run, run.id).finished_at
@@ -254,6 +258,7 @@ def test_target_on_the_best_in_the_metric_direction(db: Database, campaign: Camp
         for m in s.scalars(select(Measurement).where(Measurement.candidate_id == 3)):
             m.metrics = {'score': 3.4}
         s.commit()
+    judged(db, campaign.id)  # a corrected row is a new case for the best rule
     assert reason(db, campaign) == 'target: score 3.4 ≥ 3', 'the best is a query of the measurements'
 
 

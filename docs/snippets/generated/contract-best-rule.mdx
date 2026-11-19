@@ -2,17 +2,27 @@
 
 | Member | What it is |
 |---|---|
-| `BestRule.refuse(case: Case) -> str \| None` | Return why `case.candidate` may not be the best of its track, or None when it may. |
+| `BestRule.judge(case: Case) -> Keep \| Refuse \| Unanswered` | Return whether `case.candidate` may replace `case.incumbent` as the best of `case.track`. |
+| `BestRule.refuse(case: Case) -> str \| None` | Deprecated: define `judge`. Return why `case.candidate` may not be best, or None when it may. |
 | `Case.primary: Criterion` | The primary metric of the track. |
 | `Case.guardrails: tuple[Criterion, ...]` | The campaign's guardrails, then the primary of every other track. |
-| `Case.candidate: Scores` | The confirmed candidate. |
-| `Case.baseline: Scores` | The campaign's baseline, which may always be best. |
+| `Case.candidate: Scores` | The candidate: confirmed, and better than `incumbent` on the primary. |
+| `Case.baseline: Scores` | The campaign's baseline. |
 | `Case.sealed: Criterion \| None` | The metric that the sealed split scores, the primary of the first track, or None without a sealed split. |
+| `Case.track: str` | The track whose best the candidate would become. |
+| `Case.metrics: tuple[Criterion, ...]` | Every metric of `piloop.toml`, `watch` metrics included. |
+| `Case.incumbent: Scores` | The best that the candidate would replace. It is the baseline until a candidate replaces it. |
+| `Case.parent: Scores \| None` | The candidate's parent, or None when it has none in the pool. |
+| `Keep.reason: str \| None` | Why, or None. |
+| `Refuse.reason: str` | Why: its worker hears it. Name no hidden unit in it. |
+| `Unanswered.error: str` | What failed: the escalation shows it. |
 | `Criterion.name: str` | The metric's name, as the evaluate command reports it. |
 | `Criterion.direction: Direction` | Whether a larger or a smaller value is better. |
 | `Criterion.margin: float \| None` | The largest regression from the baseline that a guardrail may show, in the metric's units. None on a primary. |
 | `Criterion.floor: float \| None` | The worst value that a candidate may have, or None. |
 | `Criterion.fraction: float \| None` | The largest regression from the baseline that a guardrail may show, as a fraction of the baseline's value. A guardrail has a `margin` or a `fraction`, never both. |
+| `Criterion.role: MetricRole` | How the metric decides, as `[[metrics]] role` says. |
+| `Criterion.track: str \| None` | The track that a primary decides, or None for another metric. |
 | `Criterion.allowed(baseline: float) -> float` | The largest regression from `baseline`, the baseline's value, in the metric's units. |
 | `Criterion.limit() -> str` | How a reason names the regression allowed: `margin 20` or `fraction 0.1`. |
 | `Criterion.past_floor(value: float) -> bool` | Whether `value` is past the floor, in the metric's direction. |
@@ -20,3 +30,11 @@
 | `Scores.means: dict[str, float]` | The mean of each metric over its successful evaluations of the full panel. |
 | `Scores.measured: int` | How many successful evaluations of the full panel `means` are over. |
 | `Scores.sealed: float \| None` | Its score on the sealed split (`[evaluator] sealed`), or None when the split did not score it. |
+| `Scores.id: int` | Its candidate id. |
+| `Scores.parent: int \| None` | The candidate id of its parent, or None for the baseline. |
+| `Scores.samples: tuple[CaseSample, ...]` | Its successful evaluations by the current evaluator, every rung included, oldest first. |
+| `Scores.sealed_samples: tuple[CaseSample, ...]` | Its successful evaluations by the sealed split, oldest first. |
+| `CaseSample.id: int` | The id of its measurement. |
+| `CaseSample.rung: str \| None` | The rung of the ladder that it measured, or None for the full panel. |
+| `CaseSample.metrics: dict[str, float]` | What the evaluate command reported. |
+| `CaseSample.units: dict[str, dict[str, float]]` | Each metric's per-unit results: metric, then unit id, then the unit's contribution. Empty without units. |

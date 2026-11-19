@@ -5,6 +5,8 @@ description: Plugins that decide which candidate may be the best and when a camp
 ---
 
 import ExampleMinGain from '/snippets/generated/example-min-gain.mdx';
+import ExamplePairedRule from '/snippets/generated/example-paired-rule.mdx';
+import BestRuleCase from '/snippets/generated/best-rule-case.mdx';
 import ExampleStopAfterBests from '/snippets/generated/example-stop-after-bests.mdx';
 import ExampleBestCost from '/snippets/generated/example-best-cost.mdx';
 import ContractBestRule from '/snippets/generated/contract-best-rule.mdx';
@@ -24,17 +26,59 @@ supply what a stop rule or a section reads.
 
 ## Best rules
 
-The best of a track is the candidate with the best mean of its primary among those that may be best
-([The pool](/concepts/pool#the-best)). For each confirmed candidate, piloop asks the best rule why it may not be best.
-piloop gives the rule a `Case`: the scores of the candidate, the scores of the baseline, and the metrics that decide.
-The rule returns a reason, or None when the candidate may be best. When the rule refuses a candidate that would be
-the best, its worker hears the reason.
+The best rule decides whether a candidate may replace the best of its track
+([The pool](/concepts/pool#the-best)). piloop asks it when a ready candidate beats the best so far on the primary.
+The rule gets a `Case`: the candidate, the best that it would replace, the baseline, the candidate's parent, and the
+metrics. It answers `Keep`, `Refuse` with a reason, or `Unanswered` when it cannot decide. The worker of a refused
+candidate hears the reason.
 
-### Example: a gain of a fixed size
+### Example: a program that tests significance over the best
 
-This rule [calls the built-in rule](/plugins/overview#call-a-built-in-provider) `baseline` and changes one thing: a
-candidate whose gain over the baseline is below `min_gain` may not be best. `min_gain` is in the units of the primary
-metric:
+The built-in rule `command` runs a program. `baseline` answers first, so the guardrails, the floors and the sealed split
+still apply. The program judges only what `baseline` allows:
+
+```toml
+[plugins.best_rule]
+provider = "command"
+command = ["python3", "/srv/rules/paired.py", "/srv/rules/folds.json"]
+timeout = 60     # seconds
+# version = "2"  # change it after you edit the program: piloop asks again for each case
+```
+
+piloop writes the case as JSON to the file that `$PILOOP_CASE_FILE` names. Each side of the case has every sample of
+its evaluations, with the rung and the per-unit results. The program writes one line of JSON to
+`$PILOOP_RESULT_FILE`:
+
+```json
+{"answer": "refuse", "reason": "paired 90% lower bound -0.140, up in 2 of 5 folds"}
+```
+
+`reason` is required on `refuse`, at most 500 characters. A program that does not start, takes longer than `timeout`,
+exits with a code other than 0, or writes anything but one valid line does not answer. Then the best stays, and piloop
+escalates once. piloop does not ask the same case again: fix the program, change `version`, and run
+`piloop campaign sync`.
+
+This program keeps a candidate when its per-unit gain over the best is significant, and when it holds in 4 of 5 folds
+of the units. `folds.json` maps each unit to its fold:
+
+<ExamplePairedRule />
+
+Keep the program and its data outside the repo, as the [sealed split](/concepts/pool#the-sealed-split)'s. The program
+runs on the server, in a private temporary directory, with the daemon's environment. It must be a function of the case:
+piloop keeps the first answer for a case. The reason is public: an implementer reads it, so do not name a unit or a fold
+of the hidden data in it.
+
+<Accordion title="The JSON Schema of the case">
+
+<BestRuleCase />
+
+</Accordion>
+
+### Example: a plugin with a gain of a fixed size
+
+A rule can also be a Python plugin. This rule [calls the built-in rule](/plugins/overview#call-a-built-in-provider)
+`baseline` and changes one thing: a candidate whose gain over the baseline is below `min_gain` may not be best.
+`min_gain` is in the units of the primary metric:
 
 <ExampleMinGain />
 
@@ -50,9 +94,9 @@ A best rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a s
 
 <ContractBestRule />
 
-The rule decides only whether a candidate may be best. piloop decides when a candidate is confirmed, and ranks those
-that may be best by their mean. `baseline` is the rule of a campaign without `[plugins.best_rule]`:
-[The best](/concepts/pool#the-best) describes it.
+The rule decides only whether a candidate may replace the best. piloop decides when a candidate is ready, and asks the
+rule only for a candidate whose mean beats the best's. `baseline` is the rule of a campaign without
+`[plugins.best_rule]`: [The best](/concepts/pool#the-best) describes it.
 
 ## Stop rules
 

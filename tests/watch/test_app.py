@@ -63,6 +63,7 @@ from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
 from tests.conftest import AUDITOR, has_lines, reconfigured, register, serving_api, spent, store_config
 from tests.reports.test_history import idea
+from tests.reports.test_overview import judge_in
 
 
 def ago(**delta: float) -> datetime:
@@ -233,6 +234,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
             s.flush()
             s.add(Measurement(candidate_id=n, evaluator_id=1, metrics={'score': value, 'size': 1}, seconds=2))
             s.flush()
+            judge_in(s, p)
             record_scored(s, Pool.of(s, p, p.config.all_tracks[0]), CandidateId(n))
         live = idea(s, p, 'longer lines', IdeaStatus.CLAIMED, created_at=ago(minutes=20))
         live_run = Run(

@@ -40,7 +40,6 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
@@ -54,6 +53,7 @@ from piloop.plugins.campaign_type.optimization.history import (
     titled_table,
 )
 from piloop.plugins.escalation.contract import DECISION
+from piloop.plugins.metric import MetricRole
 from piloop.text import HEADING, NONE, metric
 
 WALK_ENTRIES = 20_000

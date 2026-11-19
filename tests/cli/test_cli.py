@@ -54,7 +54,7 @@ from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, C
 from piloop.db.schema import CORE
 from piloop.db.session import Database, alembic_config, described, heads, migrate
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
-from piloop.ids import CampaignStatus, CommentId, CommentKind, Ending, TargetKind, TargetRef
+from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.ops import BaseChosen
@@ -84,6 +84,7 @@ from tests.conftest import (
     disk,
     example,
     hold_lock,
+    judged,
     launched,
     measuring,
     reports_py,
@@ -1166,6 +1167,8 @@ def test_candidate_show_prints_its_metrics_beside_its_parents_and_each_rung_of_i
             ]
         )
         s.commit()
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db:
+        judged(db, CampaignId(1))  # the daemon's pass, after rows by hand
     run_cli(['candidate', 'show', '2'])
     assert out().splitlines() == snapshot(
         [
@@ -1253,6 +1256,8 @@ def test_candidate_exclude_takes_a_candidate_out_of_the_race_for_the_best_with_t
         s.flush()
         s.add(Measurement(candidate_id=c.id, evaluator_id=1, metrics={'score': 9.0, 'size': 5.0}))
         s.commit()
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db:
+        judged(db, CampaignId(1))  # the daemon's pass, after rows by hand
     run_cli(['candidate', 'show', '2'])
     assert out().splitlines()[0] == (
         'candidate#2 run: score 9 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +8'
@@ -2776,13 +2781,19 @@ def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_score(
     assert out().strip() == 'candidate#2 is queued: where it stands comes as a [piloop] message', 'no wait'
     run_cli(['submit', revision])
     assert out().strip() == 'candidate#2 is queued: where it stands comes as a [piloop] message', 'not scored yet'
-    with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db, db.session() as s:
-        candidate = s.get_one(Candidate, run_candidate(db, run_id))
-        campaign = s.get_one(Campaign, candidate.campaign_id)
-        s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
-        s.flush()
-        record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate.id)
-        s.commit()
+    with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db:
+        with db.session() as s:
+            candidate = s.get_one(Candidate, run_candidate(db, run_id))
+            campaign = s.get_one(Campaign, candidate.campaign_id)
+            s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
+            s.commit()
+            campaign_id = campaign.id
+        judged(db, campaign_id)  # as the daemon does before it tells where the candidate stands
+        with db.session() as s:
+            candidate = s.get_one(Candidate, run_candidate(db, run_id))
+            campaign = s.get_one(Campaign, candidate.campaign_id)
+            record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate.id)
+            s.commit()
     run_cli(['submit', revision])
     assert out().strip() == (
         'candidate#2: score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'

@@ -1,0 +1,280 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update `piloop/plugins/campaign_type/kit/pool/best_rule/contract.py` if you want to change anything here. */}
+
+```json
+{
+  "$defs": {
+    "CaseSample": {
+      "description": "One successful evaluation of one side of the case.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "rung": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rung"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "units": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "title": "Units",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "rung",
+        "metrics",
+        "units"
+      ],
+      "title": "CaseSample",
+      "type": "object"
+    },
+    "Criterion": {
+      "description": "A metric of ``piloop.toml``: the primary of the candidate's track, a guardrail, or a ``watch`` metric.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "margin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Margin"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Floor"
+        },
+        "fraction": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fraction"
+        },
+        "role": {
+          "$ref": "#/$defs/MetricRole",
+          "default": "watch"
+        },
+        "track": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track"
+        }
+      },
+      "required": [
+        "name",
+        "direction"
+      ],
+      "title": "Criterion",
+      "type": "object"
+    },
+    "Direction": {
+      "description": "Whether a larger or a smaller value of a metric is better.",
+      "enum": [
+        "higher",
+        "lower"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "MetricRole": {
+      "description": "How a metric decides which candidate is best. https://piloop.autoresearch.inc/concepts/pool explains it.",
+      "enum": [
+        "primary",
+        "guardrail",
+        "watch"
+      ],
+      "title": "MetricRole",
+      "type": "string"
+    },
+    "Scores": {
+      "description": "One side of the case: the candidate, the best that it would replace, the baseline, or the candidate's parent.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "means": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Means",
+          "type": "object"
+        },
+        "measured": {
+          "title": "Measured",
+          "type": "integer"
+        },
+        "sealed": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sealed"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/CaseSample"
+          },
+          "title": "Samples",
+          "type": "array"
+        },
+        "sealed_samples": {
+          "items": {
+            "$ref": "#/$defs/CaseSample"
+          },
+          "title": "Sealed Samples",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "means",
+        "measured",
+        "sealed",
+        "id",
+        "parent",
+        "samples",
+        "sealed_samples"
+      ],
+      "title": "Scores",
+      "type": "object"
+    }
+  },
+  "description": "All that a rule gets to decide whether one candidate may replace the best of its track.",
+  "properties": {
+    "primary": {
+      "$ref": "#/$defs/Criterion"
+    },
+    "guardrails": {
+      "items": {
+        "$ref": "#/$defs/Criterion"
+      },
+      "title": "Guardrails",
+      "type": "array"
+    },
+    "candidate": {
+      "$ref": "#/$defs/Scores"
+    },
+    "baseline": {
+      "$ref": "#/$defs/Scores"
+    },
+    "sealed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Criterion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "track": {
+      "title": "Track",
+      "type": "string"
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/Criterion"
+      },
+      "title": "Metrics",
+      "type": "array"
+    },
+    "incumbent": {
+      "$ref": "#/$defs/Scores"
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scores"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "primary",
+    "guardrails",
+    "candidate",
+    "baseline",
+    "sealed",
+    "track",
+    "metrics",
+    "incumbent",
+    "parent"
+  ],
+  "title": "Case",
+  "type": "object"
+}
+```

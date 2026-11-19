@@ -13,6 +13,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import (
     Evaluator,
     Measurement,
 )
+from piloop.plugins.campaign_type.kit.pool.tables import Judgement
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim, Submission
 
 TABLES = (
@@ -28,6 +29,7 @@ TABLES = (
     Cancel,
     Technique,
     EvaluationTaskFailure,
+    Judgement,
 )
 SCHEMA = Schema(
     tables=TABLES,

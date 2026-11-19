@@ -1,0 +1,45 @@
+"""Keep a candidate only when its per-unit gain over the best is significant and holds in most folds.
+
+Usage, in piloop.toml: command = ["python3", "/srv/rules/paired.py", "/srv/rules/folds.json"]. folds.json maps each
+unit id to its fold. Keep it, and this script, outside the repo.
+"""
+
+import json
+import os
+import random
+import sys
+from pathlib import Path
+
+FOLDS = json.loads(Path(sys.argv[1]).read_text())  # unit id -> fold
+DRAWS, LEVEL, MIN_FOLDS = 4000, 0.10, 4
+
+
+def per_unit(side: dict, metric: str) -> dict[str, float]:
+    """Each unit's mean contribution to ``metric`` over the full-panel samples of one side of the case."""
+    rows = [m['units'][metric] for m in side['samples'] if m['rung'] is None and metric in m['units']]
+    return {u: sum(r[u] for r in rows) / len(rows) for u in rows[0]} if rows else {}
+
+
+def judge(case: dict) -> dict:
+    """Keep when the paired lower bound of the gain over the best is above 0 and the gain holds in ``MIN_FOLDS``."""
+    primary = case['primary']
+    sign = 1 if primary['direction'] == 'higher' else -1
+    mine, best = per_unit(case['candidate'], primary['name']), per_unit(case['incumbent'], primary['name'])
+    if not mine or mine.keys() != best.keys():
+        return {'answer': 'refuse', 'reason': 'no paired per-unit results for the candidate and the best'}
+    units = sorted(mine)
+    gains = [sign * (mine[u] - best[u]) for u in units]
+    rng = random.Random(f'{case["candidate"]["id"]}:{case["incumbent"]["id"]}')  # same case, same answer
+    draws = sorted(sum(rng.choices(gains, k=len(gains))) for _ in range(DRAWS))
+    low = draws[int(LEVEL * DRAWS)]
+    folds: dict[str, float] = {}
+    for u, g in zip(units, gains, strict=True):
+        folds[FOLDS[u]] = folds.get(FOLDS[u], 0.0) + g
+    up = sum(g > 0 for g in folds.values())
+    why = f'paired {1 - LEVEL:.0%} lower bound {low:+.3f}, up in {up} of {len(folds)} folds'
+    return {'answer': 'keep' if low > 0 and up >= MIN_FOLDS else 'refuse', 'reason': why}
+
+
+case = json.loads(Path(os.environ['PILOOP_CASE_FILE']).read_text())
+with open(os.environ['PILOOP_RESULT_FILE'], 'a') as out:
+    out.write(json.dumps(judge(case)) + '\n')

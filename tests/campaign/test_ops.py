@@ -50,7 +50,7 @@ from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.campaign_type.optimization.ops import follow_up
 from piloop.plugins.vcs.git import PILOOP, GitRepository
-from tests.conftest import bare_config, end_of, reconfigured
+from tests.conftest import bare_config, end_of, judged, reconfigured
 
 ACTOR = System.ORCHESTRATOR
 
@@ -248,6 +248,7 @@ def test_an_exclusion_is_the_actors_with_the_reason_in_its_event_and_takes_the_c
     with me.session() as s:
         evaluation_ops.add_measurement(s, c, evaluation_api.Report(metrics={'score': 5.0, 'size': 1.0}), actor=ACTOR)
         s.commit()
+        judged(me, campaign.id)
         best = best_of(s, s.get_one(Campaign, 1))
         assert best is not None and best.id == c, 'its mean, 2.5, beats the baseline'
         assert pool_ops.exclude(s, c, ' gamed the evaluation ', actor=ACTOR).id == c
@@ -277,7 +278,8 @@ def test_an_exclusion_is_the_actors_with_the_reason_in_its_event_and_takes_the_c
 def test_a_measurement_by_hand_is_recorded_and_says_where_its_candidate_stands(
     me: Database, campaign: Campaign
 ) -> None:
-    """Its mean includes the measurement at once, so the pool and its best follow: nothing is judged again."""
+    """Its mean includes the measurement at once. The best follows once the best rule answers, as the daemon's next
+    pass asks it: the standing that the call returns is the one before."""
     c = run_candidate(me, campaign)
     report = evaluation_api.Report(metrics={'score': 3.0, 'size': 9.0}, seconds=12.5)
     with me.session() as s:
@@ -285,11 +287,17 @@ def test_a_measurement_by_hand_is_recorded_and_says_where_its_candidate_stands(
         s.commit()
         measurement = added.measurement
         assert added.standing == (
-            'score 1.5 over 2 evals: the best of the score track now, rank 1 of 2; vs parent +0.5'
-        ), 'the mean of 0 and 3 beats the baseline'
+            'score 1.5 over 2 evals: it may not be best: the best rule has not judged it yet; vs parent +0.5,'
+            ' vs best candidate#1 +0.5'
+        ), 'the mean of 0 and 3 beats the baseline: the rule has the last word'
         assert (measurement.evaluator_id, measurement.metrics, measurement.seconds) == (1, report.metrics, 12.5)
+        judged(me, campaign.id)
         best = best_of(s, s.get_one(Campaign, 1))
         assert best is not None and best.id == c
+        pool = Pool.of(s, s.get_one(Campaign, 1), s.get_one(Campaign, 1).config.all_tracks[0])
+        assert pool.standing(c).told() == (
+            'score 1.5 over 2 evals: the best of the score track now, rank 1 of 2; vs parent +0.5'
+        )
     assert kinds(me, MEASUREMENT, measurement.id) == [
         (
             'measurement.recorded',
@@ -779,6 +787,11 @@ def test_a_reference_measured_by_hand_enters_the_pool_and_may_be_the_best(me: Da
             s, composed, evaluation_api.Report(metrics={'score': 2.0, 'size': 1.0}), actor=ACTOR
         )
         s.commit()
-        assert added.standing == 'score 2 over 1 eval: the best of the score track now, rank 1 of 2'
+        assert added.standing == (
+            'score 2 over 1 eval: it may not be best: the best rule has not judged it yet; vs best candidate#1 +1'
+        ), 'before the best rule answers'
+        judged(me, campaign.id)
+        pool = Pool.of(s, s.get_one(Campaign, 1), s.get_one(Campaign, 1).config.all_tracks[0])
+        assert pool.standing(composed).told() == 'score 2 over 1 eval: the best of the score track now, rank 1 of 2'
         best = best_of(s, s.get_one(Campaign, 1))
         assert best is not None and (best.id, best.origin) == (composed, Origin.REFERENCE)

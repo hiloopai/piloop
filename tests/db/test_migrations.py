@@ -46,7 +46,9 @@ from piloop.db.session import (
     stamps,
 )
 from piloop.db.triggers import PERSISTENT
+from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.pool.judging import judge
 from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.version import Version, installed
 from scripts.release_triggers import PATH as RELEASE_TRIGGERS, ReleaseTriggers
@@ -1305,6 +1307,7 @@ def test_optimization_0009_keeps_every_verdict_in_an_event_drops_the_columns_and
     command.upgrade(chain, 'head')  # today's pool reads today's tables
     database = session.Database(f'sqlite:///{path}', actor=System.DAEMON)
     try:
+        judge(database, disk(tmp_path), CampaignId(1))  # the daemon's first pass: nothing backfills the answers
         with database.session() as s:
             campaign = s.get_one(Campaign, 1)
             assert Pool.of(s, campaign, campaign.config.all_tracks[0]).best() == 3, 'the old head'

@@ -19,8 +19,11 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Keep, Refuse, Unanswered
+from piloop.plugins.campaign_type.kit.pool.judging import case_of, waiting
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
+from piloop.plugins.campaign_type.kit.pool.tables import Answer, Judgement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
@@ -127,9 +130,36 @@ def candidate(s: Session, campaign: Campaign, parent: int, value: float, when: f
     return row
 
 
-def score_at(s: Session, campaign: Campaign, c: Candidate, when: float) -> None:
-    """Record where ``c`` stands, as the daemon does once it scored it, at minute ``when``."""
+def judge_in(s: Session, campaign: Campaign) -> None:
+    """Answer each case that the best of ``campaign`` waits for, in ``s``: what the daemon's judge stores once the
+    rows are committed (``judging.judge``)."""
     s.flush()
+    while (found := waiting(s, campaign)) is not None:
+        pool, step = found
+        assert pool.evaluator is not None
+        match pool.rule.judge(case_of(s, cas_of(s), pool, step)):
+            case Keep(reason=reason):
+                verdict = Answer.KEEP
+            case Refuse(reason=reason):
+                verdict = Answer.REFUSE
+            case Unanswered() as never:
+                raise AssertionError(f'a rule of these tests answers every case: {never}')
+        row = Judgement(
+            candidate_id=step.candidate,
+            incumbent_id=step.incumbent,
+            evaluator_id=pool.evaluator,
+            key=step.key,
+            answer=verdict,
+            reason=reason,
+            seconds=0.0,
+        )
+        s.add(row)
+        s.flush()
+
+
+def score_at(s: Session, campaign: Campaign, c: Candidate, when: float) -> None:
+    """Record where ``c`` stands, as the daemon does once it scored it, at minute ``when``: the best rule first."""
+    judge_in(s, campaign)
     record_scored(s, Pool.of(s, campaign, track_of(campaign.config, c)), c.id)
     s.flush()
     s.scalars(select(Event).order_by(Event.id.desc()).limit(1)).one().at = at(when)

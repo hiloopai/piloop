@@ -3,7 +3,7 @@
 | Capability | Tier | Selected by | Built-in providers |
 |---|---|---|---|
 | archive: `ARCHIVES` (`piloop.archives`) | host | `[plugins.archive] provider` in `config.toml` | `local`: `LocalArchive` |
-| best rule: `BEST_RULES` (`piloop.best_rules`) | pure | `[plugins.best_rule] provider` | `baseline`: `Baseline` |
+| best rule: `BEST_RULES` (`piloop.best_rules`) | pure | `[plugins.best_rule] provider` | `baseline`: `Baseline`<br/>`command`: `CommandRule` |
 | campaign type: `CAMPAIGN_TYPES` (`piloop.campaign_types`) | host | its name, where the configuration uses it | `accumulating`: `Accumulating`<br/>`optimization`: `Optimization` |
 | cas: `CAS` (`piloop.cas`) | host | `[plugins.cas] provider` in `config.toml` | `cached`: `Cached`<br/>`disk`: `Disk`<br/>`gcs`: `Gcs`<br/>`http`: `Http`<br/>`s3`: `S3` |
 | escalation: `ESCALATIONS` (`piloop.escalations`) | host | `[plugins.escalation] provider` | `structured`: `Structured` |

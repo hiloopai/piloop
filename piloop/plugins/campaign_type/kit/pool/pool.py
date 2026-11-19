@@ -1,16 +1,21 @@
 """The pool: every scored candidate of a campaign, and the best of each track, read from the measurements.
 
 A candidate enters the pool with its first evaluation. It is **confirmed** once it has ``[evaluator] noise_runs``
-successful evaluations of the full panel (one with a deterministic evaluator). The **best** of a track is the
-candidate with the best mean of the track's primary among the baseline and the confirmed candidates that the best rule
-does not refuse (``best_rule``). It is a query: nothing stores it, so no order of the evaluations decides it.
+successful evaluations of the full panel (one with a deterministic evaluator). It is **ready** once it is confirmed,
+not excluded, and, with a sealed split, once the split answered it. The **best** of a track is a fold over the ready
+candidates, in the order in which they became ready, from the baseline: a candidate whose mean of the track's primary
+beats the best so far replaces it when the best rule keeps it (``Pool.fold``). It is a query of the measurements and of
+the rule's stored answers (``Judgement``): nothing stores the best.
 """
 
+import hashlib
+import json
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from functools import cached_property
 from math import sqrt
 from statistics import fmean, stdev
+from typing import assert_never
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -20,7 +25,14 @@ from piloop.db.models import Campaign
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured, RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import (
+    EvaluatorId,
+    Measured,
+    MeasurementId,
+    Reading,
+    RungName,
+    TrackName,
+)
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
     Status,
@@ -31,14 +43,32 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     split_of,
     status,
 )
-from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
-from piloop.plugins.metric import number
+from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluator, Measurement, read
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Criterion
+from piloop.plugins.campaign_type.kit.pool.tables import Answer, Judgement
+from piloop.plugins.metric import MetricRole, number
 
 UNSCORED = frozenset({Origin.RECOVERED, Origin.SKIPPED})
 """The origins of the candidates that never enter the pool: the daemon does not measure them."""
 WITHIN = 2
 """How many standard deviations of a difference a delta must exceed to be more than noise, in what a worker hears."""
+
+
+@dataclass(frozen=True)
+class Ids:
+    """The ids of one candidate's measurements under one evaluator and its sealed split, oldest first."""
+
+    scored: tuple[MeasurementId, ...] = ()
+    """Its evaluations of the full panel that scored: the ``confirm``-th confirmed it."""
+    samples: tuple[MeasurementId, ...] = ()
+    """Its successful evaluations, every rung included."""
+    sealed: tuple[MeasurementId, ...] = ()
+    """Its successful evaluations by the sealed split."""
+    seal: MeasurementId | None = None
+    """The sealed split's first answer, a score or a crash, or None."""
+    content: tuple[str, ...] = ()
+    """What each of ``samples``, then of ``sealed``, says: its id, metrics, rung and per-unit results. A correction of a
+    row by hand (``piloop sql``) changes it, so the case is asked again."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +90,8 @@ class Entry:
     """What the sealed split measured of it: nothing without one."""
     sealed: float | None
     """Its score on the sealed split, or None."""
+    ids: Ids = field(default_factory=lambda: Ids())
+    """The ids of its measurements: what names its side of a case, and when it became ready."""
 
     @property
     def name(self) -> str:
@@ -68,7 +100,8 @@ class Entry:
 
 def criterion(m: Metric) -> Criterion:
     """Return what a best rule reads of a metric of ``piloop.toml``."""
-    return Criterion(m.name, m.direction, m.margin, m.floor, m.fraction)
+    track = m.track_name if m.role is MetricRole.PRIMARY else None
+    return Criterion(m.name, m.direction, m.margin, m.floor, m.fraction, m.role, track)
 
 
 def best_rule(cfg: CampaignConfig) -> BestRule:
@@ -194,6 +227,30 @@ class Standing:
 
 
 @dataclass(frozen=True)
+class Step:
+    """One step of the fold that needs the best rule: may ``candidate`` replace ``incumbent``, under ``key``."""
+
+    candidate: CandidateId
+    incumbent: CandidateId
+    key: str
+    """Names the case (``Pool.key``)."""
+
+
+@dataclass(frozen=True)
+class Fold:
+    """The best of a track, and what the best rule said on the way to it (``Pool.fold``)."""
+
+    best: CandidateId | None
+    """None before the campaign has a baseline."""
+    refused: dict[CandidateId, str]
+    """The candidates that the rule refused on the way, with its reasons."""
+    waiting: Step | None = None
+    """The step where the fold stops: the rule has not answered it. None when the fold reached the end."""
+    error: str | None = None
+    """Why the rule could not answer ``waiting`` (``Answer.UNANSWERED``), or None while nobody asked it yet."""
+
+
+@dataclass(frozen=True)
 class Pool:
     """The pool of one track under one evaluator: each scored candidate, the baseline, and the rule that judges them."""
 
@@ -204,6 +261,9 @@ class Pool:
     confirm: int
     rule: BestRule
     sealed: bool
+    evaluator: EvaluatorId | None = None
+    answers: dict[tuple[CandidateId, str], tuple[Answer, str | None]] = field(default_factory=dict)
+    """The rule's stored answers under ``evaluator``, by candidate and key (``Judgement``)."""
 
     @classmethod
     def of(cls, s: Session, campaign: Campaign, track: Track, evaluator_id: EvaluatorId | None = None) -> Pool:
@@ -223,22 +283,32 @@ class Pool:
         ).all()
         ours = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
         visible, split = _statuses(s, ours, ev), _statuses(s, ours, hidden.id) if hidden is not None else {}
-        name, none = cfg.all_tracks[0].primary.name, Status()
+        name, none = cfg.all_tracks[0].primary.name, (Status(), ())
         entries = {
             c: Entry(
                 id=c,
                 parent=parent,
                 origin=origin,
                 excluded=excluded,
-                status=(mine := visible.get(c, none)),
+                status=(mine := (shown := visible.get(c, none))[0]),
                 means=derive(means(mine.scores), found),
                 samples=_samples(mine.scores),
-                seal=(seal := split.get(c, none)),
+                seal=(seal := (hid := split.get(c, none))[0]),
                 # the sealed command reports the score, or its result is refused
                 sealed=fmean(v[name] for v in seal.scores) if seal.scores else None,
+                ids=Ids(
+                    scored=tuple(i for i, reading, _ in shown[1] if reading is Reading.SCORE),
+                    samples=tuple(i for i, reading, _ in shown[1] if reading is not Reading.CRASH),
+                    sealed=tuple(i for i, reading, _ in hid[1] if reading is not Reading.CRASH),
+                    seal=next((i for i, _, _ in hid[1]), None),
+                    content=tuple(said for _, reading, said in (*shown[1], *hid[1]) if reading is not Reading.CRASH),
+                ),
             )
             for c, parent, origin, excluded in rows
         }
+        stored = select(Judgement.candidate_id, Judgement.key, Judgement.answer, Judgement.reason).where(
+            Judgement.evaluator_id == ev, Judgement.candidate_id.in_(ours)
+        )
         return cls(
             track=track,
             cfg=cfg,
@@ -247,6 +317,8 @@ class Pool:
             confirm=confirm_runs(s, campaign, ev),
             rule=best_rule(cfg),
             sealed=cfg.evaluator.sealed is not None,
+            evaluator=ev,
+            answers={(c, key): (answer, reason) for c, key, answer, reason in s.execute(stored)},
         )
 
     @property
@@ -262,7 +334,11 @@ class Pool:
         return self.entries[c].status.scored >= self.confirm
 
     def refusal(self, c: CandidateId) -> str | None:
-        """Why ``c`` may not be best, or None. The baseline may always be best."""
+        """Why ``c`` may not be best, or None. The baseline may always be best.
+
+        A ready candidate has a reason only when the fold reached it: the best rule refused it, has not judged it
+        yet, or failed.
+        """
         entry = self.entries[c]
         if c == self.baseline:
             return None
@@ -272,27 +348,112 @@ class Pool:
             return 'no successful evaluation'
         if not self.confirmed(c):
             return f'{entry.status.scored} of the {self.confirm} evaluations that confirm it'
-        assert self.baseline is not None  # a campaign with a candidate has a baseline
-        sealed = criterion(self.cfg.all_tracks[0].primary) if self.sealed else None
-        case = Case(
-            criterion(self.primary),
-            tuple(map(criterion, self.track.guardrails)),
-            self._scores(entry),
-            self._scores(self.entries[self.baseline]),
-            sealed,
-        )
-        return self.rule.refuse(case)
+        if self.sealed and not entry.seal.settled:
+            return 'the sealed split has not scored it yet'
+        fold = self.fold
+        if c in fold.refused:
+            return fold.refused[c]
+        if fold.waiting is not None and fold.waiting.candidate == c:
+            return (
+                'the best rule has not judged it yet' if fold.error is None else f'the best rule failed: {fold.error}'
+            )
+        return None
 
-    def _scores(self, entry: Entry) -> Scores:
-        return Scores(entry.name, entry.means, entry.status.scored, entry.sealed)
+    def criteria(self) -> tuple[Criterion, tuple[Criterion, ...], Criterion | None, tuple[Criterion, ...]]:
+        """What a case says of the metrics: the primary, the guardrails, the sealed split's metric, and every metric."""
+        sealed = criterion(self.cfg.all_tracks[0].primary) if self.sealed else None
+        everything = tuple(map(criterion, self.cfg.metrics))
+        return criterion(self.primary), tuple(map(criterion, self.track.guardrails)), sealed, everything
+
+    def ready(self) -> list[CandidateId]:
+        """The ready candidates, in the order in which they became ready: by the id of the measurement that made it.
+
+        That is the evaluation that confirmed it, or the sealed split's first answer when that came later. Measurement
+        ids only grow, so a new candidate goes at the end.
+        """
+        place: dict[CandidateId, MeasurementId] = {}
+        for c, entry in self.entries.items():
+            if c == self.baseline or entry.excluded is not None or self.mean(c) is None or not self.confirmed(c):
+                continue
+            if self.sealed and not entry.seal.settled:
+                continue
+            at = entry.ids.scored[self.confirm - 1]
+            place[c] = max(at, entry.ids.seal) if entry.ids.seal is not None else at
+        return sorted(place, key=lambda c: (place[c], c))
+
+    def key(self, c: CandidateId, incumbent: CandidateId) -> str:
+        """Name the case of ``c`` against ``incumbent``: a hash of the rule's table, the metrics, and each side.
+
+        A side is its candidate, its parent and the ids of its measurements, which never change: the case that it names
+        is always the same. A remeasure, an exclusion that moves the incumbent, or another table makes a new key.
+        """
+        parent = self.entries[c].parent
+        sides = {
+            'candidate': c,
+            'incumbent': incumbent,
+            'baseline': self.baseline,
+            'parent': parent if parent in self.entries else None,
+        }
+        primary, guardrails, sealed, everything = self.criteria()
+        case = {
+            'track': self.track.name,
+            'metrics': [asdict(m) for m in (primary, *guardrails, *everything)],
+            'sealed': asdict(sealed) if sealed is not None else None,
+            'sides': {role: self._side(x) for role, x in sides.items()},
+        }
+        rule = [type(self.rule).__module__, type(self.rule).__qualname__, self.rule.model_dump(mode='json')]
+        text = json.dumps({'rule': rule, 'case': case}, sort_keys=True)
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def _side(self, c: CandidateId | None) -> list[object] | None:
+        if c is None:
+            return None
+        entry = self.entries[c]
+        return [c, entry.parent, list(entry.ids.samples), list(entry.ids.sealed), list(entry.ids.content)]
+
+    @cached_property
+    def fold(self) -> Fold:
+        """Walk the ready candidates in order from the baseline: each that beats the best so far asks the best rule.
+
+        Strictly beats: on a tie the best stays. A ``keep`` makes the candidate the best, and a ``refuse`` passes over
+        it. The fold stops at a step that the rule has not answered: the candidates after it wait. For a rule that does
+        not read the incumbent, such as ``baseline``, the best is the best mean among those that it keeps.
+        """
+        best: CandidateId | None = self.baseline
+        refused: dict[CandidateId, str] = {}
+        for c in self.ready():
+            if not self._beats(c, best):
+                continue
+            assert best is not None  # a ready candidate's campaign has a baseline
+            step = Step(c, best, self.key(c, best))
+            if (found := self.answers.get((c, step.key))) is None:
+                return Fold(best, refused, step)
+            answer, reason = found
+            match answer:
+                case Answer.KEEP:
+                    best = c
+                case Answer.REFUSE:
+                    refused[c] = reason or 'refused'
+                case Answer.UNANSWERED:
+                    return Fold(best, refused, step, reason or 'no error')
+                case never:
+                    assert_never(never)
+        return Fold(best, refused)
+
+    def _beats(self, c: CandidateId, best: CandidateId | None) -> bool:
+        mine, theirs = self.mean(c), self.mean(best)
+        assert mine is not None  # ready
+        return theirs is None or self.primary.direction.better(mine, theirs)
 
     @cached_property
     def ranked(self) -> list[CandidateId]:
-        """Those that may be best and have a mean, best first; the older first on a tie."""
+        """Those that may be best and have a mean: the best first, then by mean; the older first on a tie."""
         direction = self.primary.direction
         may = [c for c in self.entries if self.mean(c) is not None and self.refusal(c) is None]
         ordered = sorted(may)
         ordered.sort(key=lambda c: self.mean(c) or 0.0, reverse=direction.better(1.0, 0.0))
+        best = self.best()
+        ordered.sort(key=lambda c: c != best)
         return ordered
 
     def ranked_all(self) -> list[CandidateId]:
@@ -302,8 +463,8 @@ class Pool:
         return ordered
 
     def best(self) -> CandidateId | None:
-        """The best: the first of ``ranked``, else the baseline, else None before the campaign has a baseline."""
-        return next(iter(self.ranked), self.baseline)
+        """The best: the result of the ``fold``, or None before the campaign has a baseline."""
+        return self.fold.best
 
     def line(self, c: CandidateId) -> Iterator[CandidateId]:
         """The candidates on the chain of parents of ``c``, its parent first."""
@@ -425,19 +586,42 @@ class Pool:
         return taken
 
 
-def _statuses(s: Session, ours: Select[CandidateId], evaluator_id: EvaluatorId | None) -> dict[CandidateId, Status]:
-    """The ``Status`` under ``evaluator_id`` of each candidate of ``ours`` that it measured or that a cancel holds."""
+type _Read = tuple[MeasurementId, Reading, str]
+"""A measurement's id, its reading, and what it says, as JSON (``Ids.content``)."""
+
+
+def _statuses(
+    s: Session, ours: Select[CandidateId], evaluator_id: EvaluatorId | None
+) -> dict[CandidateId, tuple[Status, tuple[_Read, ...]]]:
+    """The ``Status`` under ``evaluator_id`` of each candidate of ``ours`` that it measured or that a cancel holds.
+
+    With it, the id and the reading of each of its measurements, oldest first.
+    """
     rows: dict[CandidateId, list[tuple[dict[str, float], str | None, RungName | None, str | None]]] = {}
+    reads: dict[CandidateId, list[_Read]] = {}
     evaluated = (
-        select(Measurement.candidate_id, Measurement.metrics, Measurement.error, Measurement.rung, Measurement.stopped)
+        select(
+            Measurement.candidate_id,
+            Measurement.id,
+            Measurement.metrics,
+            Measurement.error,
+            Measurement.rung,
+            Measurement.stopped,
+            Measurement.units,
+        )
         .where(Measurement.candidate_id.in_(ours), Measurement.evaluator_id == evaluator_id)
         .order_by(Measurement.id)
     )
-    for c, values, error, rung, stopped in s.execute(evaluated):
+    for c, i, values, error, rung, stopped, units in s.execute(evaluated):
         rows.setdefault(c, []).append((values, error, rung, stopped))
+        said = json.dumps([i, values, rung, str(units) if units is not None else None], sort_keys=True)
+        reads.setdefault(c, []).append((i, read(error, rung, stopped), said))
     held = select(Cancel.candidate_id).where(Cancel.candidate_id.in_(ours), Cancel.evaluator_id == evaluator_id)
     cancelled = set(s.scalars(held))
-    return {c: Status.of(rows.get(c, ()), cancelled=c in cancelled) for c in rows.keys() | cancelled}
+    return {
+        c: (Status.of(rows.get(c, ()), cancelled=c in cancelled), tuple(reads.get(c, ())))
+        for c in rows.keys() | cancelled
+    }
 
 
 def _samples(rows: Sequence[dict[str, float]]) -> dict[str, list[float]]:
@@ -504,13 +688,8 @@ def best_scores(s: Session, campaign: Campaign) -> list[BestScore]:
     return found
 
 
-def carried(s: Session, campaign: Campaign) -> Candidate | None:
-    """The best of the first track under the evaluator before the current one, when it is not the baseline.
-
-    After an evaluator change no candidate has a score: the daemon measures this one, so that the best stays where it
-    was until the new scores say otherwise.
-    """
-    first = baseline(s, campaign)
+def before(s: Session, campaign: Campaign) -> EvaluatorId | None:
+    """The visible evaluator before the current one: the newest other one that measured a candidate, or None."""
     visible = select(Measurement.evaluator_id).where(
         Measurement.candidate_id.in_(select(Candidate.id).where(Candidate.campaign_id == campaign.id)),
         Measurement.evaluator_id != campaign.evaluator_id,
@@ -520,8 +699,17 @@ def carried(s: Session, campaign: Campaign) -> Candidate | None:
         for e in s.scalars(select(Evaluator).where(Evaluator.campaign_id == campaign.id))
         if split_of(e) is Split.SEALED
     }
-    before = max((e for e in s.scalars(visible.distinct()) if e not in hidden), default=None)
-    if before is None or first is None:
+    return max((e for e in s.scalars(visible.distinct()) if e not in hidden), default=None)
+
+
+def carried(s: Session, campaign: Campaign) -> Candidate | None:
+    """The best of the first track under the evaluator before the current one, when it is not the baseline.
+
+    After an evaluator change no candidate has a score: the daemon measures this one, so that the best stays where it
+    was until the new scores say otherwise.
+    """
+    first, old = baseline(s, campaign), before(s, campaign)
+    if old is None or first is None:
         return None
-    best = Pool.of(s, campaign, campaign.config.all_tracks[0], before).best()
+    best = Pool.of(s, campaign, campaign.config.all_tracks[0], old).best()
     return None if best is None or best == first.id else s.get_one(Candidate, best)
