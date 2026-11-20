@@ -152,10 +152,15 @@ class Machine:
         self.clones.remove(job.artifact, self.cwd(job))
 
     def files(self, job: Job) -> dict[str, Cid]:
-        """Put the files of the job's log directory, its checkout aside, into the CAS, and return them by path."""
+        """Put the files of the job's log directory into the CAS, and return them by path.
+
+        Every checkout is left out, its own and those of the jobs whose places are under it: an agent's run holds the
+        evaluations of its submissions, each with a checkout while it runs. One report carried 2,934 files of two
+        evaluations, and wrote them back after the evaluations had removed them.
+        """
         log_dir = self.log_dir(job)
-        names = [name for name in os.listdir(log_dir) if name != WORKTREE] if log_dir.is_dir() else []
-        stored = put_tree(self.cas, log_dir, names, seen=self.seen)
+        names = os.listdir(log_dir) if log_dir.is_dir() else []
+        stored = put_tree(self.cas, log_dir, names, seen=self.seen, skip=(WORKTREE,))
         return {e.path: e.blob for e in stored.manifest.entries if e.blob is not None}
 
 

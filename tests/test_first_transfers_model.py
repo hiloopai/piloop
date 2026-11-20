@@ -489,7 +489,7 @@ def test_a_build_whose_end_is_not_written_after_its_deadline_is_failed(
     [(name, actions, states)] = [t for t in traces(TRACES / 'bugs') if t[0] == 'unwritten_end_never_failed.itf.json']
     driver = driven(name, actions, states)
     assert driver.due is not None, 'the unwritten end woke the consumer'
-    loop = Loop(db, [driver.builds.consumer()], now=lambda: driver.now)
+    loop = Loop(db, [driver.builds.consumer()], now=lambda: driver.now, tracer=Tracer(None))
     with db.session() as s:
         loop._cursor = newest(s)  # every event so far was read: the trace's runs read them
     loop.wake(BUILDS)  # the build's wake reaches the daemon's loop so (`Host.wake`)

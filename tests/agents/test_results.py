@@ -5,18 +5,20 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 from covalence import Cid
 from git import Repo
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.agents import results as results_module
 from piloop.agents.results import (
+    FILES_UNWRITTEN,
     MERGE_LOCK,
     AgentEnded,
     AgentSessionFinished,
@@ -40,10 +42,16 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
+from piloop.plugins.campaign_type.kit.evaluation.jobs import (
+    EVALUATION,
+    EvaluationJob,
+    EvaluationReport,
+    Sample,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
+from piloop.plugins.cas.kit.objects import Dir
 from piloop.plugins.executor.contract import (
     AgentFinished,
     AgentJob,
@@ -623,25 +631,107 @@ def test_a_workspace_merge_holds_no_write_lock(
         spec=START,
     )
     real = results_module.merge
-    writable: list[bool] = []
+    free: list[bool] = []
 
     def merge(root: Path, base: Manifest, files: Mapping[str, Staged | None], suffix: str) -> Merged:
-        other = sqlite3.connect(str(db.engine.url.database), timeout=0)
-        try:
-            other.execute('BEGIN IMMEDIATE')
-            other.rollback()
-            writable.append(True)
-        except sqlite3.OperationalError:
-            writable.append(False)
-        finally:
-            other.close()
+        free.append(writable(db))
         return real(root, base, files, suffix)
 
     monkeypatch.setattr(results_module, 'merge', merge)
     report = AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0), workspace={'notes.md': cas.put(b'notes')})
     results.finished(job, report)
-    assert writable == [True], 'another writer could write while the files moved'
+    assert free == [True], 'another writer could write while the files moved'
     assert (live / 'notes.md').read_bytes() == b'notes'
+
+
+def writable(db: Database) -> bool:
+    """Whether another connection takes the write lock of ``db`` now, without a wait."""
+    other = sqlite3.connect(str(db.engine.url.database), timeout=0)
+    try:
+        other.execute('BEGIN IMMEDIATE')
+        other.rollback()
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        other.close()
+
+
+def running_evaluation(db: Database, campaign: Campaign, place: str) -> EvaluationJob:
+    """The job of a new evaluation of the baseline that an executor runs, with its log files under ``place``."""
+    base = baseline(db, campaign.id)
+    with db.session() as s:
+        evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+        evaluation = Evaluation(candidate_id=base.id, evaluator_id=evaluator, started_at=utcnow())
+        s.add(evaluation)
+        s.commit()
+        evaluation_id = evaluation.id
+    return EvaluationJob(
+        evaluation=evaluation_id,
+        candidate=base.id,
+        runner='process',
+        artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=base.revision),
+        place=place,
+        command=['true'],
+        timeout=60,
+        score=Score(name='score', direction=Direction.HIGHER),
+        required=['score'],
+        known=['score'],
+        max_evidence_bytes=0,
+    )
+
+
+def test_a_report_writes_no_file_and_no_blob_while_it_holds_the_write_lock(
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a loaded disk one rename into the CAS took 21 s, and an agent's report wrote 2,934 files back for 264 s:
+    each held the write lock, and every other writer of the home gave up after its busy timeout."""
+    cas = disk(tmp_path)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
+    files = {'eval.stdout': cas.put(b'METRIC score=1\n')}
+    report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1)], files=files)
+    free: list[bool] = []
+
+    def probed[**P, R](real: Callable[P, R]) -> Callable[P, R]:
+        def probe(*args: P.args, **kwargs: P.kwargs) -> R:
+            free.append(writable(db))
+            return real(*args, **kwargs)
+
+        return probe
+
+    monkeypatch.setattr(Dir, 'put', probed(Dir.put))
+    monkeypatch.setattr(results_module, 'write_files', probed(results_module.write_files))
+
+    def refuse(s: Session) -> None:
+        raise Settled('a fence that refuses it')
+
+    refused = running_evaluation(db, campaign, 'runs/1/refused')
+    with pytest.raises(Settled):
+        results.finished(refused, report, guard=refuse)
+    assert not (tmp_path / refused.place).exists(), 'a refused report writes no file'
+    job = refused.model_copy(update={'place': 'runs/1/eval'})
+    results.finished(job, report)
+    assert free and all(free), 'another writer could write while the blobs and the files went'
+    assert (tmp_path / job.place / 'eval.stdout').read_bytes() == b'METRIC score=1\n'
+
+
+def test_files_that_do_not_go_into_their_place_leave_the_report_applied_and_say_so(
+    db: Database, campaign: Campaign, tmp_path: Path, spans: InMemorySpanExporter
+) -> None:
+    cas = disk(tmp_path)
+    results = CampaignResults(db, Tracer(None, spans), tmp_path, cas)
+    job = running_evaluation(db, campaign, 'runs/1/eval')
+    (tmp_path / 'runs' / '1').mkdir(parents=True)
+    (tmp_path / 'runs' / '1' / 'eval').write_text('a file where its place goes')
+    report = EvaluationReport(
+        samples=[Sample(metrics={'score': 1.0}, seconds=1)], files={'eval.stdout': cas.put(b'METRIC score=1\n')}
+    )
+    results.finished(job, report)
+    with db.session() as s:
+        assert s.get(Evaluation, job.evaluation) is None, 'measured'
+    assert [(s.attributes or {})['place'] for s in spans.get_finished_spans() if s.name == FILES_UNWRITTEN] == [
+        'runs/1/eval'
+    ]
 
 
 @pytest.mark.parametrize(

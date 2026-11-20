@@ -395,3 +395,27 @@ def test_a_build_whose_end_was_not_written_is_forgotten_once_its_row_moved_on(
         s.execute(delete(FirstTransfer))  # as the deletion of its campaign does
         s.commit()
     assert builds.run(Turn(utcnow())) is None and builds._unsettled == {}, 'nothing is left to write'
+
+
+def test_a_build_whose_start_failed_to_write_starts_on_the_next_run(
+    db: Database, campaign: Campaign, store: Cas, record: Counted, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon's loop runs a consumer again after a locked database: the repo it took must not stay taken."""
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    send = FirstTransfers(db, store, lambda repo: record, 60)
+    assert send.send(repo, [head], []) is None, 'asked'
+    real = transfers_module.write_transaction
+    calls: list[Session] = []
+
+    def locked_once(s: Session) -> None:
+        calls.append(s)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError('database is locked')
+        real(s)
+
+    monkeypatch.setattr(transfers_module, 'write_transaction', locked_once)
+    builds = FirstTransferBuilds(db, store, lambda repo: record, Tracer(None), 60, lambda: None)
+    with pytest.raises(sqlite3.OperationalError):
+        builds.run(Turn(utcnow()))
+    builds.run(Turn(utcnow()))
+    assert len(answered(partial(send.send, repo, [head], []))) == 1 and record.full == 1

@@ -1,3 +1,4 @@
+import errno
 import io
 import json
 import os
@@ -1708,6 +1709,53 @@ def test_serve_builds_a_daemon(mocker: MockerFixture) -> None:
     daemon = mocker.patch('piloop.cli.daemon.Daemon')
     run_cli(['serve'])
     assert daemon.call_args.args[0] is common.settings and daemon.return_value.serve.called
+
+
+@pytest.mark.parametrize(
+    ('error', 'debug', 'said'),
+    [
+        (
+            RuntimeError('database is locked'),
+            False,
+            'piloop: RuntimeError: database is locked\nrun with PILOOP_DEBUG=1',
+        ),
+        (SystemExit('the daemon gave its term up: lost'), False, 'the daemon gave its term up: lost\n'),
+        (RuntimeError('database is locked'), True, 'Traceback (most recent call last):'),
+    ],
+    ids=['error', 'exit', 'debug'],
+)
+def test_a_daemon_whose_serve_fails_ends_its_process_at_once_and_says_why(
+    error: BaseException,
+    debug: bool,
+    said: str,
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A loop or a stop that failed leaves the daemon's threads running: a normal exit waited for them for two hours,
+    with every new evaluation refused (``cannot schedule new futures after interpreter shutdown``)."""
+    monkeypatch.setattr(common, 'settings', Settings(debug=debug))
+    mocker.patch('piloop.cli.daemon.Daemon').return_value.serve.side_effect = error
+    ended = mocker.patch('piloop.cli.daemon.os._exit', side_effect=SystemExit)
+    with pytest.raises(SystemExit):
+        run_cli(['serve'])
+    ended.assert_called_once_with(1)
+    assert said in capsys.readouterr().err
+
+
+def test_a_daemon_whose_serve_fails_ends_its_process_even_when_it_cannot_say_why(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Full(io.StringIO):
+        def write(self, s: str) -> int:
+            raise OSError(errno.ENOSPC, 'No space left on device')
+
+    monkeypatch.setattr(sys, 'stderr', Full())
+    mocker.patch('piloop.cli.daemon.Daemon').return_value.serve.side_effect = RuntimeError('database is locked')
+    ended = mocker.patch('piloop.cli.daemon.os._exit', side_effect=SystemExit)
+    with pytest.raises(SystemExit):
+        run_cli(['serve'])
+    ended.assert_called_once_with(1)
 
 
 def test_serve_detach_status_stop(out, monkeypatch: pytest.MonkeyPatch) -> None:

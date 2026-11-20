@@ -156,8 +156,11 @@ class Walk:
         return taken, left
 
 
-def walk(root: Path, names: Iterable[str]) -> Walk:
-    """Find every file and symlink under ``root/<name>`` for each of ``names`` (files or directories)."""
+def walk(root: Path, names: Iterable[str], skip: Collection[str] = ()) -> Walk:
+    """Find every file and symlink under ``root/<name>`` for each of ``names`` (files or directories).
+
+    A directory named one of ``skip`` is left out, at any depth.
+    """
     found = Walk()
 
     def visit(rel: str) -> None:
@@ -169,6 +172,8 @@ def walk(root: Path, names: Iterable[str]) -> Walk:
             elif stat.S_ISREG(st.st_mode):
                 found.files.append((rel, st))
             elif stat.S_ISDIR(st.st_mode):
+                if path.name in skip:
+                    return
                 try:
                     children = sorted(os.listdir(path))
                 except PermissionError as e:
@@ -194,9 +199,10 @@ def put_tree(
     *,
     workers: int = WORKERS,
     seen: Seen | None = None,
+    skip: Collection[str] = (),
 ) -> Stored:
     """Store every file and symlink under ``root/<name>`` for each of ``names``: ``put_walk`` of ``walk``."""
-    return put_walk(cas, root, walk(root, names), stop, workers=workers, seen=seen)
+    return put_walk(cas, root, walk(root, names, skip), stop, workers=workers, seen=seen)
 
 
 def put_walk(

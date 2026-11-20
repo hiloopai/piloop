@@ -2,6 +2,7 @@
 
 import importlib
 import pkgutil
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -13,11 +14,12 @@ import pytest
 from inline_snapshot import snapshot
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 import piloop
 from piloop.actor import System
-from piloop.daemon.loop import Consumer, Loop, Phase, Turn, routes
+from piloop.daemon.loop import BUSY, Consumer, Loop, Phase, Turn, routes
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import Topic, emit
@@ -235,7 +237,7 @@ def test_a_turn_runs_each_consumer_that_an_event_routes_to_or_whose_due_came_onc
     ideas = Recorder('ideas', frozenset({IdeaCreated}))
     timer = Recorder('timer', frozenset(), due=60)
     everything = Recorder('everything', frozenset({EventModel}))
-    loop = Loop(db, [ideas.consumer(), timer.consumer(), everything.consumer()], clock)
+    loop = Loop(db, [ideas.consumer(), timer.consumer(), everything.consumer()], clock, tracer=Tracer(None))
     loop.start()
     assert [len(r.turns) for r in (ideas, timer, everything)] == [1, 1, 1], 'the start runs each one'
     add(db, IdeaCreated())
@@ -260,6 +262,44 @@ def test_a_turn_runs_each_consumer_that_an_event_routes_to_or_whose_due_came_onc
     assert len(ideas.turns) == 3, 'woken without an event: a thread of the process ended'
 
 
+def test_a_consumer_that_finds_the_database_locked_runs_again_and_the_loop_goes_on(
+    db: Database, clock: Clock, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    """A write lock that another writer held past the busy timeout ended the daemon's loop, and the daemon."""
+    holder = sqlite3.connect(str(db.engine.url.database), isolation_level=None)
+    holder.execute('BEGIN IMMEDIATE')
+    tries: list[datetime] = []
+
+    def note(turn: Turn) -> None:
+        tries.append(turn.now)
+        with db.session() as s:
+            s.connection().exec_driver_sql('PRAGMA busy_timeout=0')
+            emit(s, LimitSet(key='k', value=1), TargetRef(TargetKind.CAMPAIGN, 1), System.HUMAN)
+            s.commit()
+
+    after = Recorder('after', frozenset())
+    noter = Consumer('noter', frozenset(), note, Phase.UPKEEP)
+    loop = Loop(db, [noter, after.consumer()], clock, tracer=tracer, busy_retry=timedelta(seconds=2))
+    loop.start()
+    assert len(after.turns) == 1, 'the consumers after it ran'
+    assert loop.next_due() == clock.at + timedelta(seconds=2)
+    assert [(s.attributes or {})['consumer'] for s in spans.get_finished_spans() if s.name == BUSY] == ['noter']
+    holder.rollback()
+    holder.close()
+    clock.advance(2)
+    loop.turn()
+    assert len(tries) == 2 and loop.next_due() is None, 'it ran again, and wrote'
+
+
+def test_any_other_error_of_a_consumer_ends_the_loop(db: Database, clock: Clock) -> None:
+    def fail(_turn: Turn) -> None:
+        with db.session() as s:
+            s.execute(text('SELECT * FROM no_such_table'))
+
+    with pytest.raises(OperationalError, match='no such table'):
+        Loop(db, [Consumer('failing', frozenset(), fail, Phase.PLAN)], clock, tracer=Tracer(None)).start()
+
+
 def test_the_writes_of_a_consumer_name_it(db: Database, tracer: Tracer, spans: InMemorySpanExporter) -> None:
     assert tracer.measures is not None
     measured = Database(str(db.engine.url), actor=ACTOR, writes=WriteSpans(tracer.measures, timedelta(0)))
@@ -267,7 +307,7 @@ def test_the_writes_of_a_consumer_name_it(db: Database, tracer: Tracer, spans: I
     def note(_turn: Turn) -> None:
         add(measured, LimitSet(key='k', value=1))
 
-    Loop(measured, [Consumer('noter', frozenset(), note, Phase.PLAN)]).start()
+    Loop(measured, [Consumer('noter', frozenset(), note, Phase.PLAN)], tracer=tracer).start()
     measured.close()
     assert {(s.attributes or {})['writer'] for s in spans.get_finished_spans() if s.name == WRITE_SPAN} == {'noter'}
 
@@ -282,7 +322,9 @@ def test_a_turn_runs_the_phases_in_order_and_the_consumers_of_one_in_the_order_g
         Recorder('configure', frozenset(), phase=Phase.CONFIGURE),
         Recorder('upkeep too', frozenset(), phase=Phase.UPKEEP),
     ]
-    Loop(db, [replace(c, run=recorded(c, ran)) for c in (r.consumer() for r in given)], clock).start()
+    Loop(
+        db, [replace(c, run=recorded(c, ran)) for c in (r.consumer() for r in given)], clock, tracer=Tracer(None)
+    ).start()
     assert ran == ['configure', 'upkeep', 'upkeep too', 'plan']
 
 
@@ -309,7 +351,7 @@ def test_the_loop_sleeps_until_another_process_writes_an_event_or_a_due_comes(
 ) -> None:
     ideas = Recorder('ideas', frozenset({IdeaCreated}))
     timer = Recorder('timer', frozenset(), due=0.5)
-    served(Loop(db, [ideas.consumer(), timer.consumer()]))
+    served(Loop(db, [ideas.consumer(), timer.consumer()], tracer=Tracer(None)))
     deadline = time.monotonic() + 10
     while len(timer.turns) < 3 and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -327,7 +369,7 @@ def test_the_loop_sleeps_until_another_process_writes_an_event_or_a_due_comes(
 
 def test_a_turn_late_past_its_due_says_how_long_the_loop_was_away(db: Database, clock: Clock) -> None:
     timer = Recorder('timer', frozenset(), due=10)
-    loop = Loop(db, [timer.consumer()], clock)
+    loop = Loop(db, [timer.consumer()], clock, tracer=Tracer(None))
     loop.start()
     clock.advance(3600)
     loop.turn(absent=timedelta(seconds=3590))
@@ -386,7 +428,9 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
     register(every_db, campaign_path)
     routed, every = home(db, runtime, tmp_path / 'routed', clock), home(every_db, runtime, tmp_path / 'every', clock)
     ran: list[str] = []
-    loop = Loop(db, [replace(c, run=recorded(c, ran)) for c in routed.scheduler.consumers()], clock)
+    loop = Loop(
+        db, [replace(c, run=recorded(c, ran)) for c in routed.scheduler.consumers()], clock, tracer=Tracer(None)
+    )
     loop.start()
     run_all(every.scheduler)
     writers = [Database(str(h.db.engine.url), actor=System.HUMAN) for h in (routed, every)]
@@ -484,7 +528,7 @@ def test_a_served_loop_reads_a_long_feed_in_pages_and_runs_an_overdue_consumer_w
         return wait(done, on=on, give_up=give_up, timeout=timeout)
 
     monkeypatch.setattr(db, 'wait_until', waits)
-    served(loop := Loop(db, consumers, page=1))
+    served(loop := Loop(db, consumers, page=1, tracer=Tracer(None)))
     deadline = time.monotonic() + 10
     while len(ideas.turns) < 3 and time.monotonic() < deadline:
         time.sleep(0.01)

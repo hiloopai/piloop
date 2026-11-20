@@ -2144,6 +2144,7 @@ def test_per_unit_results_live_in_the_cas_named_by_a_column_that_agents_cannot_r
         [m] = c.measurements
         assert m.metrics.keys() == {'score', 'size'} and m.units is not None
     assert json.loads(ex.cas.get(m.units) or b'null') == {'score': {'a': 3, 'b': -1}}
+    assert not list((tmp_path / 'runs').rglob('units*.json')), 'per-unit results never lie where an agent reads'
     assert Measurement.units in SCHEMA.hidden, 'piloop sql cannot read it'
     assert not (tmp_path / 'units').exists()
 

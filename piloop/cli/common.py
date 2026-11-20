@@ -59,6 +59,11 @@ def print_json(document: Mapping[str, object]) -> None:
     console.out(json.dumps({'protocol': PROTOCOL, **document}, allow_nan=False), highlight=False)
 
 
+def unexpected(e: BaseException) -> str:
+    """What the CLI prints of an error that says nothing of what to do: its type and message, and where to look next."""
+    return f'piloop: {type(e).__name__}: {e}\nrun with PILOOP_DEBUG=1 for the traceback; `piloop doctor` checks the install'
+
+
 def json_error(code: str, message: str) -> SystemExit:
     """Print an error document on stdout, and return the exit that also says ``message`` on stderr."""
     print_json({'error': {'code': code, 'message': message}})

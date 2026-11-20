@@ -562,6 +562,7 @@ candidate, `--base`), and its versions are scored into the pool. A new role of t
 | `feed_page` | integer | `1000` | How many events a turn of the daemon's loop reads at most. A turn with more reads again at once. |
 | `prompt_retry` | duration | `"PT2S"` | How soon a comment that the executor did not take, because its database was locked, goes to its agent again. |
 | `kill_retry` | duration | `"PT10S"` | How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail. |
+| `busy_retry` | duration | `"PT2S"` | How soon a job of the daemon's loop that found the database locked runs again. The loop goes on with its other jobs meanwhile: a lock held past the busy timeout does not stop the daemon. |
 | `home_check` | duration | `"PT10S"` | How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find it there to stop it. |
 | `inbox_page` | integer | `500` | How many events one read of the inbox's news examines at most (`piloop inbox wait`). A read with more reads again at once. |
 | `token_trust` | duration | `"PT10S"` | How long a server (`piloop serve`, `piloop cas serve`) trusts a token that it verified before it reads the token again. A token revoked through the server's own API stops at once; one revoked in another process, or an agent's whose session ended, within this time. 0 reads the token on every call. |

@@ -18,14 +18,19 @@ from datetime import datetime, timedelta
 from enum import IntEnum
 from functools import partial
 
-from sqlalchemy import select
+from sqlalchemy import exc, select
 from sqlalchemy.orm import Session
 
 from piloop.db.events import Topic
 from piloop.db.feed import newest
 from piloop.db.models import Event, EventModel, UnknownEvent, utcnow
 from piloop.db.session import WRITER, Database
+from piloop.db.sql import busy
+from piloop.otel import Tracer
 from piloop.settings import settings
+
+BUSY = 'loop.busy'
+"""An event: a consumer found the database locked. It runs again after ``[daemon] busy_retry``."""
 
 type Kinds = frozenset[type[EventModel]]
 """Event models. A consumer that names one wakes on its kinds and on those of its subclasses, so ``EventModel`` is all."""
@@ -94,6 +99,8 @@ class Loop:
         consumers: Within a phase, in the order that a turn runs them (``in_turn_order``).
         now: The clock. A test passes its own.
         page: How many events one turn reads at most (``[daemon] feed_page``).
+        tracer: Where a consumer that found the database locked says so (``BUSY``).
+        busy_retry: How soon such a consumer runs again (``[daemon] busy_retry``).
     """
 
     def __init__(
@@ -102,8 +109,12 @@ class Loop:
         consumers: Sequence[Consumer],
         now: Callable[[], datetime] = utcnow,
         page: int = settings.daemon.feed_page,
+        *,
+        tracer: Tracer,
+        busy_retry: timedelta = settings.daemon.busy_retry,
     ) -> None:
         self._db, self._consumers, self._now, self._page = db, in_turn_order(consumers), now, page
+        self._tracer, self._busy_retry = tracer, busy_retry
         self._routes: dict[str, tuple[Consumer, ...]] = {}
         """The consumers of each event kind, found on its first event."""
         self._due: dict[str, datetime | None] = {}
@@ -191,10 +202,20 @@ class Loop:
         return found
 
     def _run(self, consumers: Sequence[Consumer], turn: Turn) -> None:
+        """Run each of ``consumers``. One that finds the database locked runs again after ``busy_retry``.
+
+        Its transaction rolled back, and running it again is safe: it reads the tables. Any other error ends the loop,
+        and the daemon.
+        """
         for consumer in consumers:
             named = WRITER.set(partial(str, consumer.name))
             try:
                 self._due[consumer.name] = consumer.run(turn)
+            except exc.OperationalError as e:
+                if not busy(e.orig):
+                    raise
+                self._tracer.event(BUSY, consumer=consumer.name, error=str(e))
+                self._due[consumer.name] = turn.now + self._busy_retry
             finally:
                 WRITER.reset(named)
 

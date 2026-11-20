@@ -494,6 +494,8 @@ def explained(process: AgentExit, output: str, found: Mapping[EnvName, SecretStr
 
 MERGE_LOCK = 'merge.lock'
 """The file under the home whose lock a workspace merge holds (``merging``)."""
+FILES_UNWRITTEN = 'job.files_unwritten'
+"""An event: the files of an applied report did not go into its job's place. The CAS holds them."""
 
 
 @contextmanager
@@ -585,9 +587,10 @@ class CampaignResults:
     def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
         """Apply the report once the CAS holds every blob that it names, else raise ``MissingBlobs``.
 
-        Its files go into the job's place in the transaction that applies it: what reads the row closed finds them. An
-        agent's workspace merges before that transaction, as the write lock would wait on every file of it
-        (``_workspace``).
+        Core writes no file and no blob in the transaction that applies it: on a loaded disk one rename into the CAS
+        took 21 s, and one report wrote back 2,934 files for 264 s, while every other writer waited for the write lock.
+        The ``JobFiles`` list goes into the CAS before it, an agent's workspace merges before it (``_workspace``), and
+        the report's files go into the job's place after its commit (``_place``). A refused report writes none.
         """
         if missing := self._cas.missing(report.blobs()):
             raise MissingBlobs(f'its report names blobs that the CAS lacks: {", ".join(map(str, missing))}')
@@ -596,6 +599,7 @@ class CampaignResults:
         # read from the CAS before the write lock: a workspace file can be large, and a remote CAS slow
         base = Manifest.get(self._cas, workspace.manifest) if workspace is not None and changed else None
         output = self._last_output(report)
+        listed = self._cas.put(JOB_FILES.dump_json(report.files)) if report.files else None
         with tempfile.TemporaryDirectory(dir=self._scratch()) as scratch:
             staged = stage(self._cas, changed, Path(scratch))
             conflict = (
@@ -612,11 +616,11 @@ class CampaignResults:
                         emit(s, conflict, TargetRef(TargetKind.AGENT_SESSION, job.agent_session), System.DAEMON)
                 else:
                     kind_of(job).apply(s, job, report, Applying(self._home, terms.stopping(s), self._cas))
-                write_files(self._cas, report.files, self._home / job.place)
-                if report.files:
-                    s.add(JobFiles(place=job.place, files=self._cas.put(JOB_FILES.dump_json(report.files))))
+                if listed is not None:
+                    s.add(JobFiles(place=job.place, files=listed))
 
             self._apply(guard, change)
+        self._place(job, report)
         if isinstance(job, AgentJob) and isinstance(report, AgentFinished):
             for comment in report.read:
                 self._tracer.event('comment.delivered', comment=comment, agent_session=job.agent_session)
@@ -624,6 +628,17 @@ class CampaignResults:
                 self._tracer.event(
                     'comment.undelivered', comment=comment, agent_session=job.agent_session, error=UNREAD
                 )
+
+    def _place(self, job: Job, report: Report) -> None:
+        """Write the files of an applied report into the job's place, where the readers of logs look.
+
+        A write that fails, on a full disk say, leaves them in the CAS, which the ``JobFiles`` row names: the report
+        stays applied, and ``FILES_UNWRITTEN`` says so.
+        """
+        try:
+            write_files(self._cas, report.files, self._home / job.place)
+        except OSError as e:
+            self._tracer.event(FILES_UNWRITTEN, place=job.place, error=str(e))
 
     def lost(self, key: Key, reason: str, *, guard: Guard | None = None) -> None:
         def change(s: Session) -> None:

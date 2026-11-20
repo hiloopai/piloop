@@ -210,29 +210,34 @@ class FirstTransferBuilds:
             late = {
                 r: why for r, why in self._unsettled.items() if r in asked and asked[r] + self._deadline <= turn.now
             }
-        for repo, why in late.items():
-            self._settle(
-                repo, FirstTransferSettled(kind='first_transfer.failed', error=f'its end was not written: {why}')
-            )
-            with self._lock:
-                del self._unsettled[repo]
         started: list[RepoId] = []
-        if new:
-            now = utcnow()
-            with self._db.session() as s:
-                write_transaction(s)
-                started = [
-                    RepoId(r)
-                    for r in s.scalars(
-                        update(FirstTransfer)
-                        .where(FirstTransfer.campaign_id.in_(new), FirstTransfer.state == FirstTransferState.REQUESTED)
-                        .values(started_at=now)
-                        .returning(FirstTransfer.campaign_id)
-                    )
-                ]
-                s.commit()
+        now = utcnow()
+        try:  # a write that fails, on a locked database say, starts none: the next run takes them again
+            for repo, why in late.items():
+                self._settle(
+                    repo, FirstTransferSettled(kind='first_transfer.failed', error=f'its end was not written: {why}')
+                )
+                with self._lock:
+                    del self._unsettled[repo]
+            if new:
+                with self._db.session() as s:
+                    write_transaction(s)
+                    started = [
+                        RepoId(r)
+                        for r in s.scalars(
+                            update(FirstTransfer)
+                            .where(
+                                FirstTransfer.campaign_id.in_(new), FirstTransfer.state == FirstTransferState.REQUESTED
+                            )
+                            .values(started_at=now)
+                            .returning(FirstTransfer.campaign_id)
+                        )
+                    ]
+                    s.commit()
+        finally:
             with self._lock:
                 self._building.difference_update(set(new) - set(started))
+        if new:
             asked |= dict.fromkeys(new, now)  # one that the row moved on from looks again once, and finds nothing
         for repo in started:
             threading.Thread(target=self._build, args=(repo,), name=f'first-transfer-{repo}', daemon=True).start()

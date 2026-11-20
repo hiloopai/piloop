@@ -1811,3 +1811,17 @@ def test_a_report_rejected_report_tries_times_gives_way_to_its_jobs_crash_and_fr
     finally:
         worker.stop()
         worker.join(5)
+
+
+def test_the_files_of_a_job_leave_out_every_checkout_under_its_place(db: Database, tmp_path: Path) -> None:
+    """An agent's run holds the evaluations of its submissions, each with a checkout while it runs: one agent's
+    report carried 2,934 files of two of them, and wrote them back after the evaluations had removed them."""
+    site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
+    place = tmp_path / 'runs' / '1'
+    evaluation = place / 'submission-2' / 'eval' / 'lease-3' / 'candidate-0'
+    for path in (place / 'worktree' / 'own.py', evaluation / 'worktree' / 'theirs.py', evaluation / 'eval.stdout'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('x\n')
+    (place / 'transcript.txt').write_text('done\n')
+    job = AgentJob.model_construct(place='runs/1')
+    assert sorted(site.files(job)) == ['submission-2/eval/lease-3/candidate-0/eval.stdout', 'transcript.txt']

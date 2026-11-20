@@ -328,7 +328,7 @@ class Site(Protocol):
         ...
 
     def files(self, job: Job) -> dict[str, Cid]:
-        """Put the files of the job's log directory, its checkout aside, into the CAS, and return them by path."""
+        """Put the files of the job's log directory, every checkout in it aside, into the CAS, and return them by path."""
         ...
 
 

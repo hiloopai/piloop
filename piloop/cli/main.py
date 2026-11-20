@@ -110,6 +110,4 @@ def main() -> None:
     except Exception as e:
         if common.settings.debug:
             raise
-        raise SystemExit(
-            f'piloop: {type(e).__name__}: {e}\nrun with PILOOP_DEBUG=1 for the traceback; `piloop doctor` checks the install'
-        ) from e
+        raise SystemExit(common.unexpected(e)) from e

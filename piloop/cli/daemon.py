@@ -1,6 +1,9 @@
 """The commands that run the daemon: ``serve``, ``stop``, ``restart`` and ``service-unit``."""
 
-from typing import Annotated
+import os
+import sys
+import traceback
+from typing import Annotated, NoReturn
 
 import cyclopts
 from pydantic import ValidationError
@@ -63,7 +66,31 @@ def serve(
         daemon = Daemon(common.settings, inherited, address)
     except (OlderDaemon, SchemaMismatch, BackupFailed) as e:
         raise SystemExit(str(e)) from e
-    daemon.serve()
+    try:
+        daemon.serve()
+    except BaseException as e:
+        ended(e)
+
+
+def ended(e: BaseException) -> NoReturn:
+    """End the process of a daemon whose serve failed, at once and with status 1, once it said why.
+
+    A loop or a stop that failed leaves the daemon's threads running. A normal exit would wait for them, with the
+    interpreter shut down under them: every evaluation then failed with ``cannot schedule new futures after interpreter
+    shutdown``, for two hours, while the API answered as if the daemon ran. Ended at once, the process frees its lock,
+    its service manager starts it again, and the next daemon reaps what it left, as after a crash.
+    """
+    try:  # a log that cannot be written, on a full disk say, must not keep the process either
+        if isinstance(e, SystemExit):
+            print(e, file=sys.stderr)
+        elif common.settings.debug:
+            traceback.print_exception(e)
+        else:
+            print(common.unexpected(e), file=sys.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(1)
 
 
 def detached(address: Address | None = None) -> None:

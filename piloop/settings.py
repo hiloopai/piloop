@@ -147,6 +147,9 @@ class DaemonSettings(BaseModel):
     """How soon a comment that the executor did not take, because its database was locked, goes to its agent again."""
     kill_retry: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail."""
+    busy_retry: timedelta = Field(default=timedelta(seconds=2), gt=timedelta(0))
+    """How soon a job of the daemon's loop that found the database locked runs again. The loop goes on with its other
+    jobs meanwhile: a lock held past the busy timeout does not stop the daemon."""
     home_check: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find
     it there to stop it."""
