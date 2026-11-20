@@ -43,7 +43,7 @@ from piloop.agents.results import (
 from piloop.agents.roles import PILOOP_HINT, compose_brief
 from piloop.campaign import campaigns, inbox, ops
 from piloop.campaign.campaigns import sync
-from piloop.campaign.stop import left, request_cancel, request_stop
+from piloop.campaign.stop import CancelRequested, left, request_cancel, request_stop
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Soonest, Turn
 from piloop.daemon.scheduler import Scheduler
@@ -2741,6 +2741,91 @@ def relaunched(db: Database, campaign: Campaign) -> tuple[RunId, AgentSessionId]
         s.add(relaunch)
         s.commit()
         return run.id, relaunch.id
+
+
+def left_queued(db: Database, campaign: Campaign) -> RunId:
+    """A run as #892 left it: queued, and its only implementer killed before its job, so no agent works on it."""
+    with db.session() as s:
+        run = Run(campaign_id=campaign.id, base_candidate_id=CandidateId(1), harness='script', model='test-model')
+        s.add(run)
+        s.flush()
+        s.add(
+            AgentSession(
+                kind=IMPLEMENTER,
+                campaign_id=campaign.id,
+                subject=TargetRef(RUN, run.id),
+                harness='script',
+                state=AgentSessionState.KILLED,
+                ended_at=utcnow(),
+                error="OSError: [Errno 36] File name too long: '## You are on'",
+            )
+        )
+        s.commit()
+        return run.id
+
+
+def test_a_start_ends_a_queued_run_that_no_agent_works_on(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """#892: such a run held a slot of its role for good, so the planner queued no new run, and a restart kept it."""
+    stuck = left_queued(db, campaign)
+    waiting = relaunched(db, campaign)[0]  # a queued run with a requested implementer waits for its launch
+    scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
+    scheduler.reap()
+    with db.session() as s:
+        assert (s.get_one(Run, stuck).status, s.get_one(Run, stuck).end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
+        assert s.get_one(Run, waiting).status is RunStatus.QUEUED
+    scheduler.stop(timeout=5)
+
+
+def test_a_cancel_ends_a_queued_run_that_no_agent_works_on_and_is_answered(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """#892: a cancel acted only on the run's agents, and every one had closed, so the run stayed queued."""
+    stuck = left_queued(db, campaign)
+    scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
+    with db.session() as s:
+        request_cancel(s, s.get_one(Run, stuck), System.HUMAN, ending=Ending.NOW)
+        s.commit()
+    run_all(scheduler)
+    with db.session() as s:
+        assert (s.get_one(Run, stuck).status, s.get_one(Run, stuck).end) == (RunStatus.FAILED, RunEnd.CANCELLED)
+        assert pending(s, CancelRequested) == [], 'carried out'
+    scheduler.stop(timeout=5)
+
+
+def test_a_cancel_of_an_agent_of_other_work_ends_no_run_whose_id_its_subject_shares(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """An agent's subject is a kind and an id: an idea's id is no run's."""
+    stuck = left_queued(db, campaign)
+    with db.session() as s:
+        other = AgentSession(kind=AUDITOR, campaign_id=campaign.id, subject=TargetRef(IDEA, stuck), harness='script')
+        s.add(other)
+        s.flush()
+        request_cancel(s, other, System.HUMAN, ending=Ending.NOW)
+        s.commit()
+    scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
+    run_all(scheduler)
+    with db.session() as s:
+        assert s.get_one(Run, stuck).status is RunStatus.QUEUED
+    scheduler.stop(timeout=5)
+
+
+def test_a_launch_whose_thread_died_ends_its_queued_run(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """#892: a launch failed and its thread died on ``database is locked``, after it closed its implementer only."""
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    mocker.patch.object(scheduler._controller, 'execute', side_effect=RuntimeError('database is locked'))
+    add_ideas(db, campaign, 'x')
+    run_all(scheduler)
+    scheduler.wait(SETTLE)
+    run_all(scheduler)  # the pass forgets the thread, and closes what it left
+    with db.session() as s:
+        run = s.get_one(Run, run_of(s.get_one(AgentSession, 1)))
+        assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
+    scheduler.stop(timeout=5)
 
 
 def test_a_relaunch_does_not_wait_for_the_startup_breaker_its_run_ends_and_frees_its_slot(

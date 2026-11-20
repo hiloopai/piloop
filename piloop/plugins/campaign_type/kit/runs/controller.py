@@ -36,6 +36,7 @@ from piloop.agents.results import (
     WorkUnsaved,
     end_agent,
     finish,
+    startup_failed,
 )
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, read_brief, render_sections, role
 from piloop.campaign.campaigns import (
@@ -406,8 +407,11 @@ class RunController:
                 span.error(e)
                 error = f'{type(e).__name__}: {e}'
                 with self._db.session() as s:
-                    closed = _close_unstarted(s, agent_session_id, error)
                     agent = s.get_one(AgentSession, agent_session_id)
+                    unsubmitted = agent.runtime is None and agent.state is AgentSessionState.STARTING
+                    closed = _close_unstarted(s, agent_session_id, error)
+                    if unsubmitted:  # its launch failed before its job, as every launch of the role will
+                        startup_failed(s, agent, error, self._tracer)
                     live = agent.state in LIVE
                     if live:
                         end_agent(s, agent, error, RunEnd.FAILED, self._tracer)

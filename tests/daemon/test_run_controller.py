@@ -1070,8 +1070,10 @@ def test_exception_in_run_is_recorded(
     assert run.status is RunStatus.FAILED and run.error is not None and run.error.startswith('NoResultFound')
     with db.session() as s:
         assert idea_of(s.get_one(Run, run_id)).status is IdeaStatus.OPEN, 'a fault before the launch: the claim ends'
+        assert [a.error for _, a in in_order(s, StartupAnomaly)] == [run.error], 'a launch that failed before its job'
     [span] = spans.get_finished_spans()
-    assert span.status.status_code is StatusCode.ERROR and [e.name for e in span.events] == ['exception']
+    assert span.status.status_code is StatusCode.ERROR
+    assert [e.name for e in span.events] == ['exception', 'anomaly.startup'], 'the breaker counts it'
 
 
 def test_a_new_evaluator_measures_the_baseline_and_the_old_best_then_what_someone_asked_for_then_new_references(
@@ -1225,6 +1227,29 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         execute(ex, db, retried)
     with db.session() as s:
         assert s.get_one(Idea, claimed_id(run_row(db, retried))).status is IdeaStatus.OPEN
+
+
+def test_a_launch_that_fails_before_its_job_is_a_startup_failure_that_the_breaker_counts(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """#892: an addendum that could not be read failed every launch of its role before its job, in a loop.
+
+    No launch emitted ``anomaly.startup``, so the startup breaker never paused the campaign's launches.
+    """
+    addendum = Path(campaign.path) / 'implementer.md'
+    addendum.write_text('read the loss table first\n')
+    set_config(db, campaign, plugins={'role': {'implementer': {'addendum': 'implementer.md'}}})
+    addendum.unlink()  # gone after piloop init checked it
+    run_id = make_run(db, campaign)
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    with db.session() as s:
+        [agent] = s.scalars(select(AgentSession).where(working_on(run_id))).all()
+        assert agent.state is AgentSessionState.KILLED
+        [(event, anomaly)] = in_order(s, StartupAnomaly)
+        assert event.target == TargetRef(TargetKind.AGENT_SESSION, agent.id)
+        assert (anomaly.role, anomaly.subject, anomaly.error) == (IMPLEMENTER, TargetRef(RUN, run_id), agent.error)
+        assert anomaly.error is not None and anomaly.error.startswith('FileNotFoundError: ')
+    assert (run_row(db, run_id).status, run_row(db, run_id).end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
 
 
 @pytest.mark.parametrize('held', ['lead', 'paused', 'stopped'])

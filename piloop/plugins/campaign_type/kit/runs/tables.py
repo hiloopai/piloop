@@ -14,12 +14,14 @@ from sqlalchemy import (
     Select,
     UniqueConstraint,
     and_,
+    exists,
+    func,
     select,
     text,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from piloop.db.models import NOW, AgentSession, Base, Campaign, CidText, Tracked, by_value, utcnow
+from piloop.db.models import NOW, OPEN, AgentSession, Base, Campaign, CidText, Tracked, by_value, utcnow
 from piloop.ids import (
     CampaignId,
     RoleName,
@@ -199,3 +201,23 @@ def run_of(agent_session: AgentSession) -> RunId | None:
 def working_on(run: RunId | ColumnElement[int] | ScalarSelect[int | None]) -> ColumnElement[bool]:
     """Whether an agent session works on ``run``: its subject is ``run#<run>``."""
     return and_(AgentSession.subject_kind == RUN, AgentSession.subject_id == run)
+
+
+def unattended(s: Session, runs: ColumnElement[bool] | None = None) -> list[AgentSession]:
+    """The last agent of each queued run that no agent works on or waits to: every agent of the run closed.
+
+    Nothing launches such a run, and nothing ends it: a launch whose thread died before it closed its run leaves one.
+    The caller ends it through its campaign type (``Planner.ended``). ``runs`` narrows the runs, by default every one.
+    """
+    open_agent = exists().where(
+        AgentSession.subject_kind == RUN, AgentSession.subject_id == Run.id, AgentSession.state.in_(OPEN)
+    )
+    left = select(Run.id).where(Run.status == RunStatus.QUEUED, ~open_agent)
+    if runs is not None:
+        left = left.where(runs)
+    last = (
+        select(func.max(AgentSession.id))
+        .where(AgentSession.subject_kind == RUN, AgentSession.subject_id.in_(left))
+        .group_by(AgentSession.subject_id)
+    )
+    return list(s.scalars(select(AgentSession).where(AgentSession.id.in_(last)).order_by(AgentSession.id)))

@@ -9,6 +9,7 @@
 
 import hashlib
 import json
+import os
 import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
@@ -491,6 +492,11 @@ def _has_table(plugins: object, capability: str, name: str) -> bool:
     return isinstance(plugins, dict) and isinstance(of := plugins.get(capability), dict) and name in of
 
 
+def _readable(path: Path) -> bool:
+    """Whether ``path`` is a file that this process can read. A value that is no path, text say, is not one."""
+    return path.is_file() and os.access(path, os.R_OK)
+
+
 def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     """Load ``<campaign>/piloop.toml``.
 
@@ -500,7 +506,7 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     Raises:
         ConfigMissing: The campaign has no ``piloop.toml``.
         ConfigError: The file is not valid TOML, not a valid config, names an instance that the home's ``config.toml``
-            lacks, or names a prompt file that does not exist.
+            lacks, or names a prompt or addendum that is no readable file.
     """
     toml = campaign / CONFIG_FILE
     if not toml.is_file():
@@ -543,10 +549,14 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         cfg.check_home(settings.providers)
     except ValueError as e:
         raise ConfigError(f'{toml} is not a valid piloop config for {settings.home / "config.toml"}: {e}') from e
+    named = [
+        *((f'plugins.role.{name}.{key}', rel) for name, role in cfg.roles.all().items() for key, rel in role.files()),
+        *((f'tracks.{name}.addendum', t.addendum) for name, t in cfg.tracks.items() if t.addendum is not None),
+    ]
     missing = [
-        f'  plugins.role.{name}.prompt = {role.prompt!r}: no such file. Fix: create it, or correct the path'
-        for name, role in cfg.roles.all().items()
-        if role.prompt is not None and not (campaign / role.prompt).is_file()
+        f'  {field} = {rel!r}: no readable file. Fix: create it, or correct the path'
+        for field, rel in named
+        if not _readable(campaign / rel)
     ]
     if missing:
         raise ConfigError('\n'.join([f'{toml} is not a valid piloop config ({len(missing)} problem(s)):', *missing]))

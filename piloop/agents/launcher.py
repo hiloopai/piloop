@@ -30,6 +30,7 @@ from piloop.agents.results import (
     ended_of,
     finish,
     learn,
+    startup_failed,
 )
 from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db import terms
@@ -179,6 +180,7 @@ class Launcher:
                 finish(s, w, AgentSessionState.KILLED, w.error)
             else:
                 finish(s, w, AgentSessionState.NEVER_WORKED, error)
+                startup_failed(s, w, error, self.tracer)
             s.commit()
 
     def _prepare(

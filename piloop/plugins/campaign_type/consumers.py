@@ -19,7 +19,7 @@ from functools import partial
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import exists, select
+from sqlalchemy import ColumnElement, exists, select
 from sqlalchemy.orm import Session, aliased
 
 from piloop.actor import System
@@ -87,10 +87,11 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
     RunFinished,
+    unstarted_end,
 )
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.stop import settled
-from piloop.plugins.campaign_type.kit.runs.tables import run_of
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, unattended
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.contract import AgentKey, LeftJob
@@ -235,7 +236,8 @@ class Campaigns:
         (``runs.scoring``) is scored now (``RunController.resume``), whatever its idea's status. An idea that stayed
         ``scheduled`` does not run again, and no dependent idea takes it before its scores are known. The worktrees of
         failed runs and of the agents without a run are removed. The evaluation queue starts empty: its jobs were the previous daemon's, and
-        what still needs a measurement asks again.
+        what still needs a measurement asks again. A queued run that no agent works on or waits to, which a launch
+        whose thread died left, ends (``_end_unattended``).
         """
         with self._tracer.span('piloop.reap'):
             # only reads: a job of an adopted agent stores its linked inputs, which can take a while, and a write
@@ -252,6 +254,9 @@ class Campaigns:
                 job.key.agent_session for job in left if isinstance(job.key, AgentKey) and job.key not in refused
             ]
             self._fail_open(RunEnd.STALE, reaped=True, sparing=adopted)
+            with self._db.session() as s:  # a queued run that a dead thread left: no thread of this process runs it
+                self._end_unattended(s)
+                s.commit()
             for agent_session_id in adopted:
                 run_id = runs[agent_session_id]
                 self._tracer.event('agent_session.reattached', agent_session=agent_session_id, run=run_id)
@@ -672,10 +677,25 @@ class Campaigns:
                     self._close_dead(agent_session_id, f'{type(exc).__name__}: {exc}')
 
     def _close_dead(self, agent_session_id: AgentSessionId, error: str) -> None:
+        """Close the row of an agent whose thread died, and its queued run, which nothing launches or ends now."""
         with self._db.session() as s:
+            agent_session = s.get_one(AgentSession, agent_session_id)
             with suppress(Refused):  # the thread died after the row closed: that end stands
-                close(s, s.get_one(AgentSession, agent_session_id), error, self._tracer)
+                close(s, agent_session, error, self._tracer)
+            self._end_unattended(s, Run.id == run_of(agent_session))  # none for an agent without a run
             s.commit()
+
+    def _end_unattended(self, s: Session, runs: ColumnElement[bool] | None = None) -> None:
+        """End each queued run that no agent works on or waits to (``unattended``), as its last agent left it.
+
+        It ends ``not_started``, or ``cancelled`` once a cancel named it (``unstarted_end``): no agent of it started to
+        work, so it is no attempt, and its idea goes back to the board. The caller commits.
+        """
+        for agent_session in unattended(s, runs):
+            run_id = run_of(agent_session)
+            assert run_id is not None  # the agent of a run
+            end, _ = unstarted_end(s, run_id, agent_session.id)
+            self._planner(s.get_one(Campaign, agent_session.campaign_id)).ended(s, agent_session, end)
 
 
 def pause_body(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, policy: LaunchPolicy) -> str:

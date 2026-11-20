@@ -60,7 +60,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.stop import stalls
-from piloop.plugins.campaign_type.kit.runs.tables import run_of
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, unattended
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.contract import AgentKey, Prompt
@@ -318,7 +318,8 @@ class Agents:
 
         A cancelled run or agent of any role (a pending ``CancelRequested``) is ended at once, or after the wrap-up prompt
         and the grace period when the cancel asked for it. Its run ends ``RunEnd.CANCELLED``. A cancelled request never
-        starts, and its queued run fails. The campaign type settles the run's idea. A starting agent, cancelled or of a
+        starts, and its queued run fails, also one that no agent works on any more (``_end_cancelled_runs``). The campaign
+        type settles the run's idea. A starting agent, cancelled or of a
         stopped campaign, is ended at once: it has no work to save, and its job may wait for a worker that never comes.
         Its run is not launched again (``RunController._relaunch``). An ``ending`` agent gets its kill again every
         ``[daemon] kill_retry`` until it ends: a kill can fail. Then the stops and cancels that are carried out are
@@ -437,6 +438,7 @@ class Agents:
                     self._wrap_up(s, agent_session, TIMEOUT, text)
                 else:  # when its lead comes, or None once it was told
                     soonest.add(left)
+            self._end_cancelled_runs(s)
             answer_done(s)
             s.commit()
         # after the commit: the run that a kill ends reads the row when it closes, and the executor writes in a session
@@ -444,6 +446,20 @@ class Agents:
         for agent_session_id in kills:
             self._controller.executor.cancel(AgentKey(agent_session_id))
         return soonest.at
+
+    def _end_cancelled_runs(self, s: Session) -> None:
+        """End ``cancelled`` each queued run that a pending cancel names and that no agent works on or waits to.
+
+        Every agent of such a run closed (``unattended``), so the cancel finds none to end, and nothing else ends it.
+        """
+        named = [  # the runs of the agents that each cancel acts on: an agent of other work names no run
+            select(AgentSession.subject_id).where(AgentSession.subject_kind == RUN, cancelled(ask, cancel))
+            for ask, cancel in pending(s, CancelRequested)
+        ]
+        if not named:
+            return
+        for agent_session in unattended(s, or_(*(Run.id.in_(runs) for runs in named))):
+            self._planner_by_id(s, agent_session.campaign_id).ended(s, agent_session, RunEnd.CANCELLED)
 
     def _liveness(
         self,

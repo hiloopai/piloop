@@ -152,6 +152,10 @@ class RoleConfig(Parameters):
     """What starts the brief of an agent that resumes the session of the role's last agent. ``{agent}`` is its
     signature."""
 
+    def files(self) -> list[tuple[str, str]]:
+        """The files that the table names, as (key, path): ``prompt`` and ``addendum``, where set."""
+        return [(key, rel) for key, rel in (('prompt', self.prompt), ('addendum', self.addendum)) if rel is not None]
+
     @field_validator('first_message')
     @classmethod
     def _names_the_brief(cls, message: str) -> str:

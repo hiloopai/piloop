@@ -132,6 +132,24 @@ def test_missing_file(tmp_path: Path) -> None:
         load_campaign_config(tmp_path)
 
 
+def test_an_addendum_that_is_its_text_and_not_a_file_is_refused_with_its_field(campaign_path: Path) -> None:
+    """The text of an addendum in place of its path passed ``piloop init``, and then every launch of the role failed."""
+    text = '## You are on the speed track\n' + 'Profile first. ' * 30
+    with pytest.raises(ConfigError, match=re.escape('plugins.role.implementer.addendum = ')) as raised:
+        load_campaign_config(campaign_path, plugins={'role': {'implementer': {'addendum': text}}})
+    assert 'no readable file' in str(raised.value)
+    with pytest.raises(ConfigError, match=re.escape("tracks.score.addendum = 'gone.md': no readable file")):
+        load_campaign_config(campaign_path, tracks={'score': {'addendum': 'gone.md'}})
+    unreadable = campaign_path / 'secret.md'
+    unreadable.write_text('x')
+    unreadable.chmod(0)
+    with pytest.raises(ConfigError, match=re.escape("plugins.role.implementer.addendum = 'secret.md'")):
+        load_campaign_config(campaign_path, plugins={'role': {'implementer': {'addendum': 'secret.md'}}})
+    (campaign_path / 'speed.md').write_text('profile first\n')
+    cfg = load_campaign_config(campaign_path, plugins={'role': {'implementer': {'addendum': 'speed.md'}}})
+    assert cfg.role(RoleName('implementer')).addendum == 'speed.md'
+
+
 def test_validators(campaign_path: Path) -> None:
     with pytest.raises(
         ValueError, match=re.escape("plugins.harness.use[0] = 'nope': no [plugins.harness.nope]; there")
@@ -149,7 +167,7 @@ def test_validators(campaign_path: Path) -> None:
         load_campaign_config(campaign_path, plugins={'role': {'implementer': {'addendum': '../elsewhere.md'}}})
     with pytest.raises(ValueError, match='at least one metric'):
         load_campaign_config(campaign_path, metrics=[{'name': 'a', 'direction': 'higher'}])
-    with pytest.raises(ConfigError, match=re.escape("plugins.role.implementer.prompt = 'gone.md': no such file")):
+    with pytest.raises(ConfigError, match=re.escape("plugins.role.implementer.prompt = 'gone.md': no readable file")):
         load_campaign_config(campaign_path, plugins={'role': {'implementer': {'prompt': 'gone.md'}}})
     with pytest.raises(ValueError, match='plugins.role.janitor.triggers'):
         load_campaign_config(campaign_path, plugins={'role': {'janitor': {'runs': True, 'triggers': []}}})
@@ -356,6 +374,9 @@ ADDENDA = {'accuracy': {'addendum': 'briefs/accuracy.md'}}
 
 
 def test_tracks_are_primaries_each_with_a_margin_and_a_table_only_for_an_addendum(campaign_path: Path) -> None:
+    (campaign_path / 'briefs').mkdir()
+    for track in ('accuracy', 'score'):
+        (campaign_path / 'briefs' / f'{track}.md').write_text(f'{track} first.\n')
     cfg = load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=ADDENDA)
     assert cfg.multitrack
     assert [(t.name, t.primary.name, t.addendum, [m.name for m in t.guardrails]) for t in cfg.all_tracks] == [

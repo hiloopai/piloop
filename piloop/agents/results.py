@@ -209,6 +209,17 @@ def end_agent(s: Session, w: AgentSession, reason: str, end: RunEnd, tracer: Tra
     tracer.event('agent_session.ended', agent_session=w.id, reason=reason)
 
 
+def startup_failed(s: Session, w: AgentSession, error: str, tracer: Tracer, seconds: float = 0.0) -> None:
+    """Emit ``StartupAnomaly`` for ``w``, which did not start to work: the startup breaker counts it. The caller commits.
+
+    Whether its job failed on the worker or before any job was submitted, a brief that cannot be composed say, it is the
+    same fault of the environment: each new agent of the campaign would fail the same way.
+    """
+    anomaly = StartupAnomaly(role=w.kind, harness=w.harness, subject=w.subject, seconds=round(seconds, 1), error=error)
+    emit(s, anomaly, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
+    tracer.event(anomaly.kind, agent_session=w.id, harness=w.harness, error=error)
+
+
 def finish(
     s: Session,
     w: AgentSession,
@@ -712,15 +723,7 @@ class CampaignResults:
                 assert_never(report)
         _close(s, w, ended, ending=ending)
         if isinstance(ended, NotStarted) and not ending and not _told_to_wrap_up(s, w.id):
-            anomaly = StartupAnomaly(
-                role=w.kind,
-                harness=w.harness,
-                subject=w.subject,
-                seconds=round(seconds, 1),
-                error=ended.reason,
-            )
-            emit(s, anomaly, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
-            self._tracer.event(anomaly.kind, agent_session=w.id, harness=w.harness, error=ended.reason)
+            startup_failed(s, w, ended.reason, self._tracer, seconds)
         _ended(s, w.id, ended)
 
     def _workspace(
