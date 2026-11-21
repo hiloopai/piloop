@@ -159,6 +159,7 @@ With `provider = "command"`:
 | `command` | list\[string\] | required | The program (argv). Keep it, and its data, outside the repo. Example: `["python3", "/srv/rules/paired.py"]`. |
 | `timeout` | number | `60` | The seconds that the program can take. |
 | `version` | string \| null | `null` | Any value. piloop asks the rule again for each case when the table changes: change it after you edit the program. |
+| `ask` | `better` \| `every` | `"better"` | Which ready candidates the program judges. `better`: each whose mean of the primary beats the best so far's. `every`: each one, so the program can keep one that ties or scores lower, such as a smaller version. With `every`, piloop confirms each candidate that completes the full panel and scores it on the sealed split: more evaluations with a noisy evaluator or a sealed split, and one call of the program for each. |
 
 ### `[plugins.escalation]`
 

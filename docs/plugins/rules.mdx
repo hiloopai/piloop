@@ -43,6 +43,7 @@ provider = "command"
 command = ["python3", "/srv/rules/paired.py", "/srv/rules/folds.json"]
 timeout = 60     # seconds
 # version = "2"  # change it after you edit the program: piloop asks again for each case
+# ask = "every"  # judge every ready candidate, not only those that beat the best
 ```
 
 piloop writes the case as JSON to the file that `$PILOOP_CASE_FILE` names. Each side of the case has every sample of
@@ -57,6 +58,13 @@ its evaluations, with the rung and the per-unit results. The program writes one 
 exits with a code other than 0, or writes anything but one valid line does not answer. Then the best stays, and piloop
 escalates once. piloop does not ask the same case again: fix the program, change `version`, and run
 `piloop campaign sync`.
+
+By default the program judges only a candidate whose mean beats the best so far. With `ask = "every"`, it judges
+every ready candidate, so it can keep one that ties or scores a little lower, such as a much smaller version. Then
+piloop confirms and seals every candidate that completes the full panel, not only one that beats the best: more
+evaluations with a noisy evaluator or a sealed split, and one call of the program for each candidate. A
+[ladder](/concepts/campaigns#the-evaluation-ladder) still stops a climb against the best's values at a rung: give its
+stops the regression that you accept.
 
 This program keeps a candidate when its per-unit gain over the best is significant, and when it holds in 4 of 5 folds
 of the units. `folds.json` maps each unit to its fold:
@@ -95,7 +103,7 @@ A best rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a s
 <ContractBestRule />
 
 The rule decides only whether a candidate may replace the best. piloop decides when a candidate is ready, and asks the
-rule only for a candidate whose mean beats the best's. `baseline` is the rule of a campaign without
+rule only for a candidate whose mean beats the best's, unless `asks` returns `Ask.EVERY`. `baseline` is the rule of a campaign without
 `[plugins.best_rule]`: [The best](/concepts/pool#the-best) describes it.
 
 ## Stop rules

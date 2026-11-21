@@ -3,9 +3,9 @@
 piloop scores every candidate into the campaign's pool. A candidate is **ready** once it is confirmed (it has
 ``[evaluator] noise_runs`` evaluations), and, with a sealed split, once the split answered it. piloop walks the ready
 candidates in the order in which they became ready, from the baseline. When one beats the best so far on the track's
-primary, piloop calls the rule's ``judge`` with a ``Case``: the candidate, the best that it would replace, the baseline,
-its parent, and the metrics. On ``Keep`` the candidate is the best. piloop stores each answer, so it asks once for each
-case.
+primary, or for each one when the rule ``asks`` ``Ask.EVERY``, piloop calls the rule's ``judge`` with a ``Case``: the
+candidate, the best that it would replace, the baseline, its parent, and the metrics. On ``Keep`` the candidate is the
+best. piloop stores each answer, so it asks once for each case.
 
 The rule reads nothing else: it is a pure provider. ``[plugins.best_rule] provider`` in ``piloop.toml`` selects the
 rule, and the other keys of that table are its fields. Without the table, the rule is ``baseline``.
@@ -17,6 +17,7 @@ imports this module, and nothing else of piloop.
 import warnings
 from abc import ABC
 from dataclasses import dataclass
+from enum import StrEnum
 
 from piloop import deprecated
 from piloop.plugins.host import Capability, One, Parameters, Scope, Tier
@@ -106,7 +107,7 @@ class Case:
     guardrails: tuple[Criterion, ...]
     """The campaign's guardrails, then the primary of every other track."""
     candidate: Scores
-    """The candidate: confirmed, and better than ``incumbent`` on the primary."""
+    """The candidate: confirmed, and better than ``incumbent`` on the primary unless the rule asks ``Ask.EVERY``."""
     baseline: Scores
     """The campaign's baseline."""
     sealed: Criterion | None
@@ -145,8 +146,22 @@ class Unanswered:
     """What failed: the escalation shows it."""
 
 
+class Ask(StrEnum):
+    """Which ready candidates piloop asks a best rule about."""
+
+    BETTER = 'better'
+    """Each whose mean of the primary beats the best so far's. On a tie the best stays."""
+    EVERY = 'every'
+    """Each one, also one that ties with the best so far or is worse: the rule alone decides. piloop then confirms each
+    candidate that completes the full panel, and scores it on the sealed split, not only one that beats the best."""
+
+
 class BestRule(Parameters, ABC):
     """A best rule: its fields are its parameters."""
+
+    def asks(self) -> Ask:
+        """Which ready candidates piloop asks the rule about: ``Ask.BETTER`` unless the rule overrides it."""
+        return Ask.BETTER
 
     def judge(self, case: Case) -> Keep | Refuse | Unanswered:
         """Return whether ``case.candidate`` may replace ``case.incumbent`` as the best of ``case.track``.

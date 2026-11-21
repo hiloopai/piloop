@@ -941,7 +941,7 @@ class RunController:
     def _score_one(
         self, run_id: RunId, candidate_id: CandidateId, eval_dir: Path
     ) -> Literal[Measuring.MEASURED] | Halted:
-        """Evaluate a run's candidate once, confirm it if its mean beats the best's, and record where it stands.
+        """Evaluate a run's candidate once, confirm it if the best rule is to judge it, and record where it stands.
 
         The first evaluation may stop at a rung of the ladder, against the best's values there (``EvaluationJob.gate``).
         A candidate that the current evaluator measured already is not evaluated again: the same tree again says
@@ -983,7 +983,7 @@ class RunController:
         return Measuring.MEASURED
 
     def _confirm(self, run_id: RunId | None, candidate_id: CandidateId, eval_dir: Path) -> Measuring:
-        """Evaluate a candidate until it is confirmed, when its mean beats the best's (``Pool.confirm_due``).
+        """Evaluate a candidate until it is confirmed, when the best rule is to judge it (``Pool.confirm_due``).
 
         The sealed split scores it meanwhile when it has not (``Pool.seal_due``), and the baseline too when the split has
         not scored it: the best rule reads both. Return how it ended: ``MEASURED`` also when nothing was due.

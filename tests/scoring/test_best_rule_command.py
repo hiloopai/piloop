@@ -15,7 +15,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from piloop.plugins.campaign_type.kit.pool.best_rule.command import CASE, CommandRule
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Case, CaseSample, Keep, Refuse, Unanswered
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Ask, Case, CaseSample, Keep, Refuse, Unanswered
 from tests.conftest import wait_until
 from tests.scoring.test_best_rule import SIZE, case
 
@@ -51,6 +51,12 @@ GOOD = case({'score': 12}, {'score': 10})
 )
 def test_the_program_answers_keep_or_refuse(tmp_path: Path, line: str, answer: Keep | Refuse) -> None:
     assert CommandRule(command=writes(tmp_path, line)).judge(GOOD) == answer
+
+
+def test_ask_chooses_which_candidates_reach_the_program() -> None:
+    better = CommandRule(command=['rule'])
+    every = CommandRule.model_validate({'command': ['rule'], 'ask': 'every'})
+    assert (better.asks(), every.asks()) == (Ask.BETTER, Ask.EVERY)
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,7 @@ from typing import Annotated, Literal, assert_never
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Case, Keep, Refuse, Unanswered
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Ask, Case, Keep, Refuse, Unanswered
 from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, ResultPipe, child_env, kill_group
 
 CASE_ENV = 'PILOOP_CASE_FILE'
@@ -62,6 +62,15 @@ class CommandRule(Baseline):
     version: str | None = None
     """Any value. piloop asks the rule again for each case when the table changes: change it after you edit the
     program."""
+    ask: Ask = Ask.BETTER
+    """Which ready candidates the program judges. ``better``: each whose mean of the primary beats the best so far's.
+    ``every``: each one, so the program can keep one that ties or scores lower, such as a smaller version. With
+    ``every``, piloop confirms each candidate that completes the full panel and scores it on the sealed split: more
+    evaluations with a noisy evaluator or a sealed split, and one call of the program for each."""
+
+    def asks(self) -> Ask:
+        """``ask``."""
+        return self.ask
 
     def judge(self, case: Case) -> Keep | Refuse | Unanswered:
         """``baseline``'s refusal, else the program's answer."""

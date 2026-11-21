@@ -25,9 +25,10 @@ example hears:
 
 1. The daemon evaluates a submission once. A [ladder](/concepts/campaigns#the-evaluation-ladder) can stop that
    evaluation at a rung.
-2. When the score beats the best's mean, the daemon evaluates the submission until it is confirmed. It also scores it
-   on the [sealed split](#the-sealed-split), if the campaign has one.
-3. When the submission beats the best, the daemon asks the [best rule](#the-best). Then it tells the implementer where
+2. When the score beats the best's mean, or the best rule [asks every candidate](/plugins/rules#best-rules), the
+   daemon evaluates the submission until it is confirmed. It also scores it on the [sealed split](#the-sealed-split),
+   if the campaign has one.
+3. When the submission beats the best, or the rule asks every candidate, the daemon asks the [best rule](#the-best). Then it tells the implementer where
    the submission stands.
 
 The daemon evaluates the baseline `noise_runs` times before runs start. When those evaluations agree, the evaluator is
@@ -38,7 +39,7 @@ deterministic, and one evaluation confirms. Otherwise the standard deviation of 
 
 piloop walks the ready candidates in the order in which they became ready, from the baseline. A candidate whose mean
 of the primary beats the best so far asks the **best rule**. When the rule keeps it, it is the best. On a tie, the best
-so far stays.
+so far stays. A rule that asks every candidate, such as `command` with `ask = "every"`, is asked about each one.
 
 piloop stores each answer of the rule, in the table `judgements`, and asks the rule once for each case. A remeasure,
 an exclusion or a change of `[plugins.best_rule]` makes new cases, and the daemon asks the rule again on its next pass.

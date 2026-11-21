@@ -2,11 +2,12 @@
 
 | Member | What it is |
 |---|---|
+| `BestRule.asks() -> Ask` | Which ready candidates piloop asks the rule about: `Ask.BETTER` unless the rule overrides it. |
 | `BestRule.judge(case: Case) -> Keep \| Refuse \| Unanswered` | Return whether `case.candidate` may replace `case.incumbent` as the best of `case.track`. |
 | `BestRule.refuse(case: Case) -> str \| None` | Deprecated: define `judge`. Return why `case.candidate` may not be best, or None when it may. |
 | `Case.primary: Criterion` | The primary metric of the track. |
 | `Case.guardrails: tuple[Criterion, ...]` | The campaign's guardrails, then the primary of every other track. |
-| `Case.candidate: Scores` | The candidate: confirmed, and better than `incumbent` on the primary. |
+| `Case.candidate: Scores` | The candidate: confirmed, and better than `incumbent` on the primary unless the rule asks `Ask.EVERY`. |
 | `Case.baseline: Scores` | The campaign's baseline. |
 | `Case.sealed: Criterion \| None` | The metric that the sealed split scores, the primary of the first track, or None without a sealed split. |
 | `Case.track: str` | The track whose best the candidate would become. |

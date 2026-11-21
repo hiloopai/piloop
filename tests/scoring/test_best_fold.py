@@ -15,6 +15,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import MeasurementId
 from piloop.plugins.campaign_type.kit.evaluation.measure import Status
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import (
+    Ask,
     BestRule,
     Case,
     CaseSample,
@@ -166,3 +167,40 @@ def test_with_a_sealed_split_a_candidate_is_ready_once_the_split_answered_it() -
     assert found.ready() == [C(3), C(2)], 'candidate#4 has no sealed answer: not ready'
     assert found.best() == C(3), 'a tie: candidate#3 became ready first'
     assert found.refusal(C(4)) == 'the sealed split has not scored it yet'
+
+
+class Smaller(BestRule):
+    """A rule that asks every candidate: keep one whose size is smaller than the best's and whose score is at most 1
+    lower."""
+
+    def asks(self) -> Ask:
+        return Ask.EVERY
+
+    def judge(self, case: Case) -> Keep | Refuse | Unanswered:
+        mine, theirs = case.candidate.means, case.incumbent.means
+        if mine['size'] < theirs['size'] and mine['score'] >= theirs['score'] - 1:
+            return Keep()
+        return Refuse(f'size {mine["size"]:g} vs {theirs["size"]:g}')
+
+
+def test_a_rule_that_asks_every_candidate_is_asked_on_a_tie_and_a_loss_and_can_keep_a_smaller_one() -> None:
+    """Baseline 10 at size 100; then 10 at size 90 (a tie), 9 at size 50 (lower), 12 at size 60 and 13 at size 80.
+
+    ``baseline`` would end at candidate#5. ``Smaller`` keeps the tie and the lower one, refuses both higher scores, and
+    piloop confirms and seals a candidate below the best, which it would not under ``Ask.BETTER``."""
+    values = {1: (10, 100), 2: (10, 90), 3: (9, 50), 4: (12, 60), 5: (13, 80)}
+    entries = [entry(c, c - 1 if c > 1 else None, {'score': [s], 'size': [z]}) for c, (s, z) in values.items()]
+    sizes = config(
+        Metric(name='score', direction=Direction.HIGHER, role=MetricRole.PRIMARY),
+        Metric(name='size', direction=Direction.LOWER),
+    )
+    found = judged(replace(pool(*entries, cfg=sizes), rule=Smaller()))
+    assert found.best() == C(3)
+    assert found.fold.refused == {C(4): 'size 60 vs 50', C(5): 'size 80 vs 50'}
+    assert found.standing(C(4)).refused == 'size 60 vs 50', 'its worker hears the reason'
+    assert found.ranked[0] == C(3)
+    unconfirmed = replace(pool(*entries, entry(6, 3, {'score': [8], 'size': [40]}), cfg=sizes, confirm=2), sealed=True)
+    assert not unconfirmed.contends(C(6)), 'under baseline: below the best, so neither confirmed nor sealed'
+    every = judged(replace(unconfirmed, rule=Smaller(), answers={}))
+    assert every.contends(C(6)) and every.confirm_due(C(6)) and every.seal_due(C(6))
+    assert not every.contends(C(1)), 'the baseline starts the fold: never asked'

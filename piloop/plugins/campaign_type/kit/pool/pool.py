@@ -4,8 +4,9 @@ A candidate enters the pool with its first evaluation. It is **confirmed** once 
 successful evaluations of the full panel (one with a deterministic evaluator). It is **ready** once it is confirmed,
 not excluded, and, with a sealed split, once the split answered it. The **best** of a track is a fold over the ready
 candidates, in the order in which they became ready, from the baseline: a candidate whose mean of the track's primary
-beats the best so far replaces it when the best rule keeps it (``Pool.fold``). It is a query of the measurements and of
-the rule's stored answers (``Judgement``): nothing stores the best.
+beats the best so far, or any candidate when the rule asks ``Ask.EVERY``, replaces it when the best rule keeps it
+(``Pool.fold``). It is a query of the measurements and of the rule's stored answers (``Judgement``): nothing stores the
+best.
 """
 
 import hashlib
@@ -44,7 +45,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluator, Measurement, read
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Criterion
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, Ask, BestRule, Criterion
 from piloop.plugins.campaign_type.kit.pool.tables import Answer, Judgement
 from piloop.plugins.metric import MetricRole, number
 
@@ -169,7 +170,7 @@ class Standing:
     status: Status
     confirmed: bool
     refused: str | None
-    """Why the best rule refuses it, when it is confirmed and better than the best, or None."""
+    """Why the best rule refuses it, when it is confirmed and the rule decides on it (``Pool.contends``), or None."""
     excluded: str | None
     best: CandidateId | None
     """The best of the track, or None before the campaign has a baseline."""
@@ -413,16 +414,16 @@ class Pool:
 
     @cached_property
     def fold(self) -> Fold:
-        """Walk the ready candidates in order from the baseline: each that beats the best so far asks the best rule.
+        """Walk the ready candidates in order from the baseline: each that the rule decides on asks it (``_asked``).
 
-        Strictly beats: on a tie the best stays. A ``keep`` makes the candidate the best, and a ``refuse`` passes over
-        it. The fold stops at a step that the rule has not answered: the candidates after it wait. For a rule that does
-        not read the incumbent, such as ``baseline``, the best is the best mean among those that it keeps.
+        A ``keep`` makes the candidate the best, and a ``refuse`` passes over it. The fold stops at a step that the rule
+        has not answered: the candidates after it wait. For a rule that does not read the incumbent, such as
+        ``baseline``, the best is the best mean among those that it keeps.
         """
         best: CandidateId | None = self.baseline
         refused: dict[CandidateId, str] = {}
         for c in self.ready():
-            if not self._beats(c, best):
+            if not self._asked(c, best):
                 continue
             assert best is not None  # a ready candidate's campaign has a baseline
             step = Step(c, best, self.key(c, best))
@@ -440,10 +441,21 @@ class Pool:
                     assert_never(never)
         return Fold(best, refused)
 
-    def _beats(self, c: CandidateId, best: CandidateId | None) -> bool:
-        mine, theirs = self.mean(c), self.mean(best)
-        assert mine is not None  # ready
-        return theirs is None or self.primary.direction.better(mine, theirs)
+    def _asked(self, c: CandidateId, best: CandidateId | None) -> bool:
+        """Whether the rule decides if ``c``, which has a mean, may replace ``best``.
+
+        Always when the rule asks ``Ask.EVERY``, else when the mean of ``c`` strictly beats the best's: on a tie the
+        best stays.
+        """
+        match self.rule.asks():
+            case Ask.EVERY:
+                return True
+            case Ask.BETTER:
+                mine, theirs = self.mean(c), self.mean(best)
+                assert mine is not None  # the caller checked
+                return theirs is None or self.primary.direction.better(mine, theirs)
+            case never:
+                assert_never(never)
 
     @cached_property
     def ranked(self) -> list[CandidateId]:
@@ -481,29 +493,31 @@ class Pool:
         return next((r for r in self.ranked if r in mine), None)
 
     def confirm_due(self, c: CandidateId) -> bool:
-        """Whether ``c`` is to be confirmed: it beats the best (``beats_best``), and it needs more evaluations.
+        """Whether ``c`` is to be confirmed: the rule is to decide on it (``contends``), and it needs more evaluations.
 
         It needs none once it is confirmed, once its crashes reach the count, or once someone cancelled its evaluation
         (``Status.needs``). Until then piloop evaluates it.
         """
-        return self.beats_best(c) and self.entries[c].status.needs(self.confirm) > 0
+        return self.contends(c) and self.entries[c].status.needs(self.confirm) > 0
 
     def seal_due(self, c: CandidateId) -> bool:
-        """Whether the sealed split is to score ``c``: there is one, it has not, and ``c`` is the baseline or beats the best.
+        """Whether the sealed split is to score ``c``: there is one, it has not, and ``c`` is the baseline or contends.
 
         The baseline is due from the start: the best rule compares every candidate with it there. A crash of the sealed
         command is the split's answer too, and a cancel stands (``Status.settled``): only a new sealed command, or an
         ask, runs it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
         """
-        return self.sealed and not self.entries[c].seal.settled and (c == self.baseline or self.beats_best(c))
+        return self.sealed and not self.entries[c].seal.settled and (c == self.baseline or self.contends(c))
 
-    def beats_best(self, c: CandidateId) -> bool:
-        """Whether the mean of ``c``, not excluded and not the best, beats the best's."""
-        mine, best = self.mean(c), self.best()
-        if mine is None or self.entries[c].excluded is not None or best == c:
+    def contends(self, c: CandidateId) -> bool:
+        """Whether the rule is to decide if ``c`` may replace the best (``_asked``).
+
+        ``c`` has a mean, and is not excluded, the baseline or the best.
+        """
+        best = self.best()
+        if self.mean(c) is None or self.entries[c].excluded is not None or c in (self.baseline, best):
             return False
-        theirs = self.mean(best)
-        return theirs is None or self.primary.direction.better(mine, theirs)
+        return self._asked(c, best)
 
     def sigma(self) -> float | None:
         """The standard deviation of the best's evaluations of the primary: 0 for an evaluator whose runs agree."""
@@ -559,11 +573,8 @@ class Pool:
         )
 
     def _would_be_best(self, c: CandidateId) -> bool:
-        """Whether ``c`` is confirmed, not excluded, and better than the best: only the best rule keeps it from it."""
-        mine, theirs = self.mean(c), self.mean(self.best())
-        if mine is None or not self.confirmed(c) or self.entries[c].excluded is not None or c == self.baseline:
-            return False
-        return theirs is None or self.primary.direction.better(mine, theirs)
+        """Whether ``c`` contends and is confirmed: only the best rule keeps it from the best."""
+        return self.contends(c) and self.confirmed(c)
 
     def _n(self, c: CandidateId) -> int:
         return self.entries[c].status.scored if c in self.entries else 0

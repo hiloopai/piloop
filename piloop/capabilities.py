@@ -97,7 +97,7 @@ from piloop.plugins.role.contract import RoleConfig
 from piloop.plugins.metric import Direction, MetricRole
 from piloop.plugins.metric import number
 
-from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, Ask, BestRule, Case, Criterion, Scores
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import CaseSample, Keep, Refuse, Unanswered
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.command import CommandRule
