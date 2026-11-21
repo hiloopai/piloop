@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select, update
 
-from piloop.campaign.campaigns import sync
+from piloop.actor import System
+from piloop.campaign.campaigns import fork, sync
 from piloop.campaign.ops import resume
 from piloop.campaign.stop import check, gather
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
@@ -27,6 +28,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.fact_source import command as command_module
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.contract import FactReadError
@@ -94,9 +96,10 @@ def test_zero_usable_eval_images_pauses_a_tagged_swarm_before_it_launches_work(
         resume(s, campaign.id)
         s.commit()
     assert run_all(scheduler) == [], 'the image is still unavailable'
-    source = Command(command=['true'], metrics=['available_eval_images'])
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
+        [_, _, source] = proj.config.fact_sources()
+        assert isinstance(source, Readings)
         source.record(s, proj, {'available_eval_images': 1})
         assert proj.paused is Pause.ALL
         resume(s, campaign.id)
@@ -307,6 +310,91 @@ def test_a_source_that_a_sync_adds_is_read_on_the_next_turn_without_a_restart(
         events = in_order(s, FactRead, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
         assert [r.values for _, r in events] == [{'spend': 412.3}]
     scheduler.wait(SETTLE)
+
+
+def test_a_source_whose_command_changed_reads_at_once_and_its_old_readings_no_longer_count(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A reading is of the source as it read: what the old command read never holds the campaign under the new one."""
+    old, new = tmp_path / 'old', tmp_path / 'new'
+    old.write_text('{"metrics": {"spend": 419.6}}\n')
+    new.write_text('{"metrics": {"spend": 0}}\n')
+    set_config(db, campaign, plugins=limited(300, command=billing(old)))
+    add_ideas(db, campaign, 'idea')
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    assert run_all(scheduler) == [], 'the old command reads past the hold'
+    assert [(kind, priority) for kind, priority, _ in daemon_comments(db)] == [('escalation', 0)]
+
+    set_config(db, campaign, plugins=limited(300, command=billing(new), interval=3600))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        [_, _, source] = p.config.fact_sources()
+        assert gather(s, p, p.config, [reading('spend')], utcnow()) == Facts({'spend': None}), (
+            'the reading of the old command is not one of the new'
+        )
+        due = source.due(s, p)
+        assert due is not None and due <= utcnow(), 'the new command never read: due now, whatever its interval'
+    assert run_all(scheduler) == [1], 'the new command reads before the stop rule asks, and launches go on'
+    assert len(daemon_comments(db)) == 1, 'no escalation of the old reading'
+    scheduler.wait(SETTLE)
+
+    set_config(db, campaign, plugins=limited(300, command=billing(new), interval=60, notices={'spend': [1]}))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert gather(s, p, p.config, [reading('spend')], utcnow()) == Facts({'spend': 0.0}), (
+            'a new interval or new notices read the same values: the readings stay'
+        )
+
+    set_config(db, campaign, plugins=limited(300, command=billing(old), interval=3600))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert gather(s, p, p.config, [reading('spend')], utcnow()) == Facts({'spend': None}), (
+            'the old command back: its reading from before the new one is stale, and it reads again'
+        )
+
+
+def test_a_reading_of_0_8_counts_for_the_source_as_it_is_until_another_config_reads(
+    db: Database, campaign: Campaign
+) -> None:
+    set_config(db, campaign, plugins={'fact_source': spending()})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        s.add(
+            Event(target=TargetRef(TargetKind.CAMPAIGN, p.id), actor='daemon', payload=FactRead(values={'spend': 12.0}))
+        )
+        s.commit()
+        assert gather(s, p, p.config, [reading('spend')], utcnow()) == Facts({'spend': 12.0})
+    set_config(db, campaign, plugins={'fact_source': spending(command=['false'])})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        [_, _, source] = p.config.fact_sources()
+        assert isinstance(source, Readings)
+        source.record(s, p, {'spend': 13.0})
+        s.commit()
+    set_config(db, campaign, plugins={'fact_source': spending()})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert gather(s, p, p.config, [reading('spend')], utcnow()) == Facts({'spend': None}), (
+            'another config read since: the reading of 0.8 is stale'
+        )
+
+
+def test_a_fork_starts_with_no_reading_of_its_own_and_reads_at_once(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    home = tmp_path / 'home'
+    store = DiskCas(home / 'store')
+    set_config(db, campaign, plugins=limited(300, command=report('{"metrics": {"spend": 419.6}}')))
+    with db.session() as s:
+        parent = s.get_one(Campaign, campaign.id)
+        [_, _, source] = parent.config.fact_sources()
+        source.record(s, parent, {'spend': 419.6})
+        forked, _ = fork(s, home, store, parent, System.HUMAN, at='HEAD', name=None)
+        s.commit()
+        assert gather(s, forked, forked.config, [reading('spend')], utcnow()) == Facts({'spend': None})
+        due = source.due(s, forked)
+        assert due is not None and due <= utcnow()
+        assert isinstance(check(s, forked, forked.config), Hold), 'unknown: held, and no escalation'
 
 
 def test_a_failing_source_holds_launches_and_escalates_once_for_each_series_of_failures(

@@ -3,8 +3,15 @@
 Each reading is a ``fact.read`` event on the campaign, the one record of its values. The source supplies each name
 that it reads (``reading``), and how much its value grew since a candidate last became the best (``since_best``), from those events. It
 posts a note at each of its ``notices``, and an escalation when its readings start to fail.
+
+A reading counts only for the source as it read: the event names a digest of its parameters (``Readings.digest``), and
+a source's readings are its series, those since another config of it last read its names. A source whose command
+changed in ``piloop init`` has no reading yet: its values are unknown, and it reads at once. A command that changes
+back starts a new series too.
 """
 
+import hashlib
+import json
 import math
 from abc import abstractmethod
 from datetime import UTC, datetime, timedelta
@@ -15,6 +22,7 @@ from pydantic import Field, model_validator
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
+from piloop import deprecated
 from piloop.actor import System
 from piloop.campaign import escalations
 from piloop.db.events import has, latest, payload_of
@@ -37,6 +45,9 @@ class FactRead(EventModel):
     kind: Literal['fact.read'] = 'fact.read'
     values: dict[str, float | None]
     error: str | None = None
+    source: str | None = None
+    """The digest of the source that read it (``Readings.digest``). None: a reading of 0.8, which counts for the
+    source as it is now."""
 
 
 class Readings(FactSource):
@@ -65,6 +76,15 @@ class Readings(FactSource):
     def names(self) -> tuple[str, ...]:
         """The names of the values that it reads."""
 
+    def digest(self) -> str:
+        """What its readings are of: its provider and its parameters, without ``interval`` and ``notices``.
+
+        Those two say when it reads and what it posts, not what it reads.
+        """
+        params = self.model_dump(mode='json', exclude=set(Readings.model_fields))
+        provider = f'{type(self).__module__}.{type(self).__qualname__}'
+        return hashlib.sha256(json.dumps([provider, params], sort_keys=True).encode()).hexdigest()
+
     @abstractmethod
     def read(self, repo: Path) -> dict[str, float]:
         """Read every value of ``names``. The daemon calls it outside any transaction, at the campaign's repo root.
@@ -83,22 +103,22 @@ class Readings(FactSource):
         """Each value of the latest reading that has it, None after a failed one, and its growth since the latest new best."""
         found: dict[Fact[FactValue], FactValue] = {}
         for name in self.names():
-            value = _latest(s, campaign, name)
+            value = self._latest(s, campaign, name)
             if reading(name) in wanted:
                 found[reading(name)] = value
             if since_best(name) in wanted:
-                found[since_best(name)] = None if value is None else value - _at_best(s, campaign, name, value)
+                found[since_best(name)] = None if value is None else value - self._at_best(s, campaign, name, value)
         return found
 
     def as_of(self, s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime | None:
         """The time of the latest reading of the name that ``fact`` is of: None before the first."""
         name = next(n for n in self.names() if fact in (reading(n), since_best(n)))
-        last = latest(s, FactRead, _on(campaign), _of(name))
+        last = latest(s, FactRead, self._series(campaign, name))
         return None if last is None else last[0].at
 
     def due(self, s: Session, campaign: Campaign) -> datetime | None:
         """When the source reads next: ``interval`` after its latest reading, or now before the first."""
-        last = latest(s, FactRead, _on(campaign), _of(self.names()[0]))
+        last = latest(s, FactRead, self._series(campaign, self.names()[0]))
         return NEVER_READ if last is None else last[0].at + timedelta(seconds=self.interval)
 
     def record(self, s: Session, campaign: Campaign, values: dict[str, float] | FactReadError) -> None:
@@ -110,12 +130,12 @@ class Readings(FactSource):
         on = TargetRef(TargetKind.CAMPAIGN, campaign.id)
         if isinstance(values, FactReadError):
             failing = self.names()[0]
-            last = latest(s, FactRead, _on(campaign), _of(failing))
+            last = latest(s, FactRead, self._series(campaign, failing))
             s.add(
                 Event(
                     target=on,
                     actor=DAEMON_ACTOR,
-                    payload=FactRead(values=dict.fromkeys(self.names()), error=str(values)),
+                    payload=FactRead(values=dict.fromkeys(self.names()), error=str(values), source=self.digest()),
                 )
             )
             if last is None or last[1].values.get(failing) is not None:
@@ -133,8 +153,8 @@ class Readings(FactSource):
                 )
                 escalations.escalate(s, on, asked, author=System.DAEMON, priority=0)
             return
-        before = {name: _last_known(s, campaign, name) for name in self.notices}
-        s.add(Event(target=on, actor=DAEMON_ACTOR, payload=FactRead(values=dict(values))))
+        before = {name: self._last_known(s, campaign, name) for name in self.notices}
+        s.add(Event(target=on, actor=DAEMON_ACTOR, payload=FactRead(values=dict(values), source=self.digest())))
         for name, notices in self.notices.items():
             was = -math.inf if (known := before[name]) is None else known
             for notice in notices:
@@ -146,9 +166,39 @@ class Readings(FactSource):
                         )
                     )
 
+    def _series(self, campaign: Campaign, name: str) -> ColumnElement[bool]:
+        """Select this source's readings of ``name`` on ``campaign``: those since another config of it last read it."""
+        on = (Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id)) & _of(name)
+        deprecated.until('0.10.0', 'a fact.read of 0.8 has no source and counts for the current one: drop the coalesce')
+        digest = func.coalesce(func.json_extract(Event.payload, '$.source'), self.digest())
+        other = select(func.max(Event.id)).where(has(FactRead), on, digest != self.digest()).scalar_subquery()
+        return on & (digest == self.digest()) & (Event.id > func.coalesce(other, 0))
 
-def _on(campaign: Campaign) -> ColumnElement[bool]:
-    return Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id)
+    def _latest(self, s: Session, campaign: Campaign, name: str) -> float | None:
+        """The value of ``name`` of the latest reading that has it: None before the first, and after a failed one."""
+        last = latest(s, FactRead, self._series(campaign, name))
+        return None if last is None else last[1].values.get(name)
+
+    def _last_known(self, s: Session, campaign: Campaign, name: str) -> float | None:
+        """The value of ``name`` of the latest reading that read one, failed readings since or not."""
+        last = latest(s, FactRead, self._series(campaign, name), _known(name))
+        return None if last is None else last[1].values.get(name)
+
+    def _at_best(self, s: Session, campaign: Campaign, name: str, now: float) -> float:
+        """``name`` when a candidate last became the best: the latest reading by then, else the first after.
+
+        Before the first new best it is 0, so all of the value counts.
+        """
+        at = last_best_at(s, campaign)
+        if at is None:
+            return 0.0
+        readings = select(Event).where(has(FactRead), self._series(campaign, name), _known(name))
+        found = (
+            s.scalars(readings.where(Event.at <= at).order_by(Event.id.desc()).limit(1)).first()
+            or s.scalars(readings.where(Event.at > at).order_by(Event.id).limit(1)).first()
+        )
+        then = payload_of(found, FactRead).values.get(name) if found is not None else None
+        return now if then is None else then
 
 
 def _of(name: str) -> ColumnElement[bool]:
@@ -159,32 +209,3 @@ def _of(name: str) -> ColumnElement[bool]:
 def _known(name: str) -> ColumnElement[bool]:
     """Select the readings that read a value for ``name``: not the failed ones."""
     return func.json_type(Event.payload, f'$.values."{name}"').in_(('real', 'integer'))
-
-
-def _latest(s: Session, campaign: Campaign, name: str) -> float | None:
-    """The value of ``name`` of the latest reading that has it: None before the first, and after a failed reading."""
-    last = latest(s, FactRead, _on(campaign), _of(name))
-    return None if last is None else last[1].values.get(name)
-
-
-def _last_known(s: Session, campaign: Campaign, name: str) -> float | None:
-    """The value of ``name`` of the latest reading that read one, failed readings since or not."""
-    last = latest(s, FactRead, _on(campaign), _known(name))
-    return None if last is None else last[1].values.get(name)
-
-
-def _at_best(s: Session, campaign: Campaign, name: str, now: float) -> float:
-    """``name`` when a candidate last became the best: the latest reading by then, else the first after.
-
-    Before the first new best it is 0, so all of the value counts.
-    """
-    at = last_best_at(s, campaign)
-    if at is None:
-        return 0.0
-    readings = select(Event).where(has(FactRead), _on(campaign), _known(name))
-    found = (
-        s.scalars(readings.where(Event.at <= at).order_by(Event.id.desc()).limit(1)).first()
-        or s.scalars(readings.where(Event.at > at).order_by(Event.id).limit(1)).first()
-    )
-    then = payload_of(found, FactRead).values.get(name) if found is not None else None
-    return now if then is None else then

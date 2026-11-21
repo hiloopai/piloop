@@ -108,7 +108,8 @@ facts = ["models_usd", "gpu_usd"]
 ```
 
 The daemon runs the command every `interval` seconds (300 by default), at the repo's root, with the daemon's
-environment. Give it its keys as [secrets](/guides/secrets). `GET /v1/campaigns/enwik8/spend` returns each part and
+environment. Give it its keys as [secrets](/guides/secrets). When `piloop init` changes the command, the readings of
+the old command no longer count: the daemon runs the new one at once. `GET /v1/campaigns/enwik8/spend` returns each part and
 the sum.
 
 A plugin can add a fact source or another stop rule: see [Rules and facts](/plugins/rules).

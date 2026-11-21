@@ -229,7 +229,8 @@ that adds a source names those too. Two sources never supply the same fact.
 
 The daemon reads a `Readings` source every `interval` seconds. It implements `names` and `read`, and piloop does the
 rest: each reading is a `fact.read` event on the campaign, a note goes to the inbox at each of its `notices`, and one
-escalation when its readings start to fail.
+escalation when its readings start to fail. A reading counts only for the same provider with the same parameters,
+`interval` and `notices` aside, until a source with other parameters reads the same names.
 
 ### The contract
 

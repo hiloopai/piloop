@@ -15,6 +15,7 @@
 | `Readings.interval: float` | The number of seconds between two readings. |
 | `Readings.notices: dict[str, list[float]]` | Values by the name that it reads. When a value passes one, the daemon posts one note to the inbox, at priority 1. |
 | `Readings.names() -> tuple[str, ...]` | The names of the values that it reads. |
+| `Readings.digest() -> str` | What its readings are of: its provider and its parameters, without `interval` and `notices`. |
 | `Readings.read(repo: Path) -> dict[str, float]` | Read every value of `names`. The daemon calls it outside any transaction, at the campaign's repo root. |
 | `Readings.supplies() -> tuple[Fact[FactValue], ...]` | `reading(name)` and `since_best(name)` for each name of `names`. |
 | `Readings.gather(s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime) -> dict[Fact[FactValue], FactValue]` | Each value of the latest reading that has it, None after a failed one, and its growth since the latest new best. |
