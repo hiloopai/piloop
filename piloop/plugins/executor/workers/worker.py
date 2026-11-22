@@ -65,6 +65,7 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.kit.tables import NoLease
+from piloop.plugins.harness.contract import Usage
 from piloop.plugins.runtime.contract import Handle, Runtime, RuntimeFactory, make_runtime
 from piloop.proc import Started, alive, kill_group, started
 
@@ -815,6 +816,13 @@ class _Control:
             running = w._jobs[self._lease]
             running.session = running.session.model_copy(update={'file': session_file})
         w._wake()  # the next heartbeat carries it to the agent's row
+
+    def used(self, usage: Usage) -> None:
+        w = self._worker
+        with w._lock:
+            running = w._jobs[self._lease]
+            running.session = running.session.model_copy(update={'usage': usage})
+        w._wake()  # the next heartbeat carries it to the agent's row: a limit on spend sees it
 
     def asked(self) -> bool:
         with self._worker._lock:

@@ -3,6 +3,6 @@
 | Answer | What piloop does |
 |---|---|
 | `Go(left)` | The campaign goes on: piloop starts what it needs, within `left`. |
-| `Hold(reason)` | piloop starts no agent and no evaluation for the campaign until a check answers `Go` again. |
+| `Hold(reason)` | piloop starts no agent for the campaign until a check answers `Go` again. It still scores what was submitted. |
 | `Stop(reason)` | piloop stops the campaign. |
 | `Escalate(reason, then)` | piloop posts one escalation at priority 0 for each distinct `reason`, and then acts on `then`. |

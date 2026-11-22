@@ -582,12 +582,14 @@ def cancel(s: Session, cas: Cas, lease: Lease, reason: str) -> None:
 
 
 def _news(row: AgentSession, session: HarnessSession) -> bool:
-    """Whether ``session`` tells ``row`` something that it lacks: a session id, or a session file.
+    """Whether ``session`` tells ``row`` something that it lacks: a session id, a session file, or a new usage.
 
     Each heartbeat sends them, and one that brings nothing new takes no write lock (``CampaignResults.session``).
     """
-    return (session.id is not None and session.id != row.session_id) or (
-        session.file is not None and session.file != row.session_file
+    return (
+        (session.id is not None and session.id != row.session_id)
+        or (session.file is not None and session.file != row.session_file)
+        or (session.usage is not None and session.usage != row.usage)
     )
 
 

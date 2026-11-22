@@ -456,6 +456,17 @@ class SessionNotResumed(EventModel):
     """What the reason was about: the session, the harness, or the worker's error."""
 
 
+class UsageCounted(EventModel):
+    """A running agent's tokens, read from its session file, are on its row (``agent_sessions.usage``).
+
+    It wakes the pass over the campaigns, whose stop rule may read the spend.
+    """
+
+    kind: Literal['agent_session.usage_counted'] = 'agent_session.usage_counted'
+    total: int
+    """The tokens that the agent spent so far."""
+
+
 class SessionSaved(EventModel):
     """A snapshot of an agent's harness session file is in the CAS (``saved``): while the agent runs, and when it ends.
 
@@ -581,6 +592,11 @@ class CampaignResults:
             w = _open(s, key)
             learn(s, w, session.id)
             saved(s, w, session.file)
+            if session.usage is not None and session.usage != w.usage:
+                w.usage = session.usage
+                emit(
+                    s, UsageCounted(total=session.usage.total), TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON
+                )
 
         self._apply(guard, change)
 
@@ -709,7 +725,8 @@ class CampaignResults:
                     _record(s, w.id, PromptOutcome(kind='comment.delivered', comment=comment))
                 for comment in report.unread:
                     _record(s, w.id, PromptOutcome(kind='comment.undelivered', comment=comment, error=UNREAD))
-                w.usage = report.usage
+                if report.usage is not None:  # else the usage that it last read while the agent ran stays
+                    w.usage = report.usage
                 if (unsaved := report.unsaved) is not None:
                     event = WorkUnsaved(blob=unsaved.blob, error=unsaved.error)
                     emit(s, event, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)

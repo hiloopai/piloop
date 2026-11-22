@@ -1,8 +1,8 @@
 """``models``: the built-in fact source of what the campaign's agents spent on models, from the tokens piloop counts.
 
-The price is the API-equivalent cost: the tokens of each agent that ended (``agent_sessions.usage``) at the list price
-of its model, from ``prices`` else the campaign's price list (``[plugins.price_list]``). An agent on a subscription is
-billed otherwise, so this is not an invoice.
+The price is the API-equivalent cost: the tokens of each agent (``agent_sessions.usage``, of a running agent as its
+worker last read them) at the list price of its model, from ``prices`` else the campaign's price list
+(``[plugins.price_list]``). An agent on a subscription is billed otherwise, so this is not an invoice.
 """
 
 from datetime import datetime
@@ -44,7 +44,7 @@ class Price(BaseModel):
 
 
 class ModelFacts(FactSource):
-    """``models``: ``models_usd``, the tokens of the campaign's agents that ended, at their models' prices."""
+    """``models``: ``models_usd``, the tokens of the campaign's agents, at their models' prices."""
 
     prices: dict[str, Price] = {}
     """The price of a model, by its name in ``agent_sessions.model``, over the campaign's price list. Example: ``{
@@ -57,17 +57,17 @@ class ModelFacts(FactSource):
     def gather(
         self, s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime
     ) -> dict[Fact[FactValue], FactValue]:
-        """``MODELS_USD``: None when an agent that ended ran a model without a price."""
+        """``MODELS_USD``: None when an agent with tokens ran a model without a price."""
         return {MODELS_USD: self.models_usd(s, campaign)}
 
     def models_usd(self, s: Session, campaign: Campaign) -> float | None:
-        """The tokens of the campaign's agents that ended, each at its model's price. None: a model has no price."""
+        """The tokens of the campaign's agents, each at its model's price. None: a model has no price."""
         cfg = campaign.config
-        ended = select(AgentSession.harness, AgentSession.model, AgentSession.usage).where(
+        spent = select(AgentSession.harness, AgentSession.model, AgentSession.usage).where(
             AgentSession.campaign_id == campaign.id, AgentSession.usage.is_not(None)
         )
         usd = 0.0
-        for harness, model, usage in s.execute(ended):
+        for harness, model, usage in s.execute(spent):
             if (cost := self.usd(cfg, harness, model, usage)) is None:
                 return None
             usd += cost

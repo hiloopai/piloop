@@ -29,6 +29,7 @@ from piloop.agents.results import (
     AgentSessionRunning,
     AgentSessionStarted,
     StartupAnomaly,
+    UsageCounted,
 )
 from piloop.campaign import escalations, inbox
 from piloop.campaign.campaigns import CampaignAdded
@@ -140,6 +141,7 @@ CAMPAIGN_STATE: Kinds = frozenset(
         AgentSessionStarted,
         AgentSessionRunning,
         AgentSessionFinished,
+        UsageCounted,
         StartupAnomaly,
         RunFinished,
         IdeaCreated,
@@ -311,8 +313,8 @@ class Campaigns:
         stop rule leaves or of a startup pause, or the next reading of a fact source.
 
         A stopped campaign requests nothing and is measured again only on request (``ledger.due``). The pass asks the
-        stop rule (``piloop.campaign.stop.check``) of each active campaign. A campaign that it holds gets only the first
-        step. A paused campaign (``piloop pause``) asks no role for requests, does not stop at a limit of its stop rule
+        stop rule (``piloop.campaign.stop.check``) of each active campaign. A campaign that it holds is still measured, but
+        requests and launches nothing. A paused campaign (``piloop pause``) asks no role for requests, does not stop at a limit of its stop rule
         (``due``), and launches nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused
         campaign too. A stopped campaign launches what a human requests, whatever the pause (``launches``).
         """
@@ -336,7 +338,7 @@ class Campaigns:
                 answer = escalated(s, campaign, cfg, check_stop(s, campaign, cfg)) if active else GO
                 self._soonest.add(hours_due(campaign, answer, turn.now))
                 held = answer.reason if isinstance(answer, Hold) else None
-                if held is None and campaign.paused is not Pause.ALL:
+                if campaign.paused is not Pause.ALL:  # a hold too: spend is booked late, and paid-for work is scored
                     self._planner(campaign).remeasure(s, campaign)
                 if (stop := due(s, campaign, answer)) is not None:
                     self._go_or_stop(s, campaign, cfg, stop, turn.now)

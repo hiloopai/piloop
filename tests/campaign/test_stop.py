@@ -859,11 +859,11 @@ def test_the_built_in_stop_rule_imports_only_the_standard_library_pydantic_its_c
     assert imports_outside_the_standard_library(limits_module) == contracts
 
 
-def test_limits_holds_while_a_fact_is_unknown_or_at_its_hold_at_and_a_hold_comes_before_a_stop() -> None:
+def test_limits_holds_while_a_fact_is_unknown_or_at_its_hold_at_and_a_stop_comes_before_a_hold() -> None:
     """``hold_at`` holds, on any fact that a source reads. A hold releases itself: the next check that sees the value
     below it goes on.
 
-    A held campaign does not stop: nothing may launch while the value is unknown or at its limit.
+    A held campaign still stops at a limit: a hold that lasts would otherwise keep a campaign past its ``max_hours``.
     """
     spend = reading('spend')
     rule = Limits(max_runs=3, hold_at={'spend': 300})
@@ -881,7 +881,8 @@ def test_limits_holds_while_a_fact_is_unknown_or_at_its_hold_at_and_a_hold_comes
         then=Hold('spend at its limit'),
     )
     assert check(300.0) == at_limit, 'it tells a human itself, once for each limit'
-    assert check(300.0, runs=3) == at_limit, 'held, so max_runs waits'
+    assert check(300.0, runs=3) == Stop('max_runs: 3 runs'), 'held, and stopped at its limit all the same'
+    assert check(None, runs=3) == Stop('max_runs: 3 runs'), 'an unknown spend does not keep it either'
     assert check(12.0, runs=3) == Stop('max_runs: 3 runs')
     gpu = Limits(hold_at={'gpu_hours': 8})
     assert gpu.check(StopCase('score', Direction.HIGHER, facts(gpu_hours=9))) == Escalate(
@@ -1020,7 +1021,7 @@ def test_an_agent_may_run_its_role_timeout_cut_at_the_time_that_the_campaign_sto
         assert seconds(stop) == 0, 'and one that runs has no time left'
         hold = {'max_hours': 3, 'hold_at': {'spend': 300}}
         held = load_campaign_config(Path(campaign.path), plugins={'stop_rule': hold, 'fact_source': with_spend()})
-        assert agent_timeout(s, row, held, 1800, utcnow()) == 1800, 'a hold leaves no budget: nothing launches then'
+        assert agent_timeout(s, row, held, 1800, utcnow()) == stop, 'a hold does not keep the campaign past its hours'
 
 
 def test_a_stop_is_due_by_one_rule_so_a_paused_campaign_past_its_limit_cuts_no_agent_short(

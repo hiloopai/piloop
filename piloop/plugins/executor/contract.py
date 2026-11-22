@@ -280,6 +280,10 @@ class Control(Protocol):
         """A new snapshot of the agent's session file is in the CAS (``SessionFile``)."""
         ...
 
+    def used(self, usage: Usage) -> None:
+        """The running agent spent ``usage`` so far, as its session file says (``SessionFile.usage``)."""
+        ...
+
     def asked(self) -> bool:
         """Whether the executor asked the job to stop: an evaluator that it killed is not run again."""
         ...
@@ -352,6 +356,9 @@ class HarnessSession(BaseModel):
     """The harness's session id, once the runtime reported it."""
     file: BlobAddress | None = None
     """The latest snapshot of its session file in the CAS."""
+    usage: Usage | None = None
+    """The tokens that the agent spent so far, read from its session file while it runs. Of a resumed session, only
+    those after the resume."""
 
 
 class AgentFinished(Report):
@@ -598,9 +605,9 @@ class Results(Protocol):
         ...
 
     def session(self, key: AgentKey, session: HarnessSession, *, guard: Guard | None = None) -> None:
-        """The agent's harness session as the executor knows it now: its id and its file's latest snapshot.
+        """The agent's harness session as the executor knows it now: its id, its file's latest snapshot, its usage.
 
-        The usage needs the id. Raises ``Settled``.
+        The usage at the end needs the id. Raises ``Settled``.
         """
         ...
 

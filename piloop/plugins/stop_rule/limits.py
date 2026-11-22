@@ -54,8 +54,8 @@ class Limits(StopRule):
     A run that a daemon stop, a daemon crash or a campaign stop ended counts toward neither. ``hold_at``,
     ``max_tokens`` and ``max_hours`` stay hard limits on what all runs cost.
 
-    The hold comes first: a limit does not stop a held campaign. A stop that someone requests still stops it
-    (``piloop.campaign.stop.requested``). The stops come in the order of ``STOPS``. ``max_runs`` also waits until no
+    A stop comes before a hold: a limit that is reached stops a held campaign too. The stops come in the order of
+    ``STOPS``. ``max_runs`` also waits until no
     attempt is unsettled, because one that ends without a scored candidate does not count.
     """
 
@@ -72,7 +72,8 @@ class Limits(StopRule):
     its role's ``wrap_up_lead`` of the stop, and a run that the stop cuts short ends ``campaign_stopped``, no attempt."""
     max_tokens: int | None = Field(default=None, ge=1)
     """Stop when all the agents of the campaign together spent this many tokens (the ``total`` of
-    ``agent_sessions.usage``), summed over the agents that ended."""
+    ``agent_sessions.usage``), summed over its agents. A running agent counts as its worker last read its session
+    file, about once a minute."""
     plateau: int | None = Field(default=None, ge=1)
     """Stop after this many finished runs without a new best, whether they reached the evaluator or not. A run that a
     stop ended, or whose agent never started, does not count. The count starts again each time a run's candidate
@@ -81,7 +82,8 @@ class Limits(StopRule):
     ``max_hours`` and ``max_tokens``. A new evaluator alone does not reset it."""
     hold_at: dict[str, Annotated[float, Field(gt=0)]] = {}
     """Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is
-    unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored.
+    unknown: the daemon launches no agent. What the agents submit is still scored, and work that already runs
+    finishes.
     Example: ``{ spend = 1000 }``, with a source in ``[plugins.fact_source] use`` that reads ``spend``. To resume, raise it and run
     ``piloop init``."""
 
@@ -110,12 +112,12 @@ class Limits(StopRule):
 
     def check(self, case: StopCase) -> Go | Hold | Stop | Escalate:
         limits = self.limits()
-        holds = (_hold(case.facts, name, limit) for name, limit in self.hold_at.items())
-        if (held := next((h for h in holds if h is not None), None)) is not None:
-            return held
         reasons = (reached(case, limits[fact]) for fact, reached in STOPS if fact in limits)
-        stop = next((Stop(reason) for reason in reasons if reason is not None), None)
-        return Go(self.left(case)) if stop is None else stop
+        if (stop := next((Stop(reason) for reason in reasons if reason is not None), None)) is not None:
+            return stop
+        holds = (_hold(case.facts, name, limit) for name, limit in self.hold_at.items())
+        held = next((h for h in holds if h is not None), None)
+        return Go(self.left(case)) if held is None else held
 
     def left(self, case: StopCase) -> Facts:
         """What is left of each fact that a limit stops the campaign at: the limit less the value.

@@ -70,8 +70,8 @@ HOURS = Fact[float](
 )
 TOKENS = Fact[int](
     'tokens',
-    'The tokens that the agents of the campaign spent, summed over the agents that ended. A reopened campaign counts'
-    ' the agents since the latest reopen.',
+    'The tokens that the agents of the campaign spent, summed over its agents: a running one as of its latest read.'
+    ' A reopened campaign counts the agents since the latest reopen.',
 )
 WITHOUT_BEST = Fact[int](
     'without_best',
@@ -111,8 +111,8 @@ COMPUTE_USD = Fact[float](
 )
 MODELS_USD = Fact[float](
     'models_usd',
-    'USD, API-equivalent: the tokens of the agents that ended, priced per model. Not an invoice: a subscription bills'
-    ' otherwise.',
+    'USD, API-equivalent: the tokens of the agents, a running one as of its latest read, priced per model. Not an'
+    ' invoice: a subscription bills otherwise.',
 )
 SPEND = Fact[float]('spend', 'USD: the sum of the facts that the spend source names. None while one is unknown.')
 

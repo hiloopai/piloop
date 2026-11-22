@@ -13,6 +13,7 @@ the executor removes it (``remove``) once the report is out, so a worker that re
 there.
 """
 
+import functools
 import os
 import shlex
 import threading
@@ -76,6 +77,8 @@ INPUTS_REBUILT = 'inputs.rebuilt'
 """An event: a shared copy of a linked input no longer held its blob (a job changed it), and was made again."""
 SESSION_UNSAVED = 'agent_session.session_unsaved'
 """An event: a snapshot of an agent's session file did not go into the CAS. The next one tries again."""
+USAGE_UNREAD = 'agent_session.usage_unread'
+"""An event: the tokens of a running agent could not be read from its session file. The next read tries again."""
 SESSION_UNRESTORED = 'agent_session.session_unrestored'
 """An event: the session file of a job's ``resume`` could not be written back, and the agent starts a new session."""
 SHOWN = 10
@@ -354,7 +357,7 @@ def _watch(
             file.session_id = session_id
             snapshots = threading.Thread(
                 target=_snapshots,
-                args=(job, runtime, handle, control, file, span, stop),
+                args=(job, runtime, handle, control, file, site, span, stop),
                 name=f'snapshots-{job.agent_session}',
                 daemon=True,
             )
@@ -395,13 +398,16 @@ def _snapshots(
     handle: Handle,
     control: Control,
     file: SessionFile,
+    site: Machine,
     span: Span,
     stop: threading.Event,
 ) -> None:
-    """Look at the agent's session file every ``POLL_SECONDS`` until ``stop``, and record each new snapshot.
+    """Look at the agent's session file every ``POLL_SECONDS`` until ``stop``: record each new snapshot, and its usage.
 
-    A snapshot is due as ``SessionFile.due`` says. One that fails is tried again at the next look.
+    A snapshot is due as ``SessionFile.due`` says, and the usage as ``SessionFile.usage`` says. One that fails is tried
+    again at the next look.
     """
+    resumed = functools.cache(lambda session_id: inherited(job, session_id, file.reader, site))
     while not stop.wait(POLL_SECONDS):
         try:
             if file.session_id is None:
@@ -411,6 +417,11 @@ def _snapshots(
                 control.saved(latest)
         except Exception as e:  # a file gone, a CAS that does not answer
             span.event(SESSION_UNSAVED, agent_session=job.agent_session, error=f'{type(e).__name__}: {e}')
+        try:
+            if (usage := file.usage(time.monotonic())) is not None:
+                control.used(usage.since(resumed(file.session_id)))
+        except Exception as e:  # a file gone, a resumed file that the CAS lacks: the report reads it at the end
+            span.event(USAGE_UNREAD, agent_session=job.agent_session, error=f'{type(e).__name__}: {e}')
 
 
 def _session(runtime: Runtime, handle: Handle, control: Control, span: Span) -> str | None:

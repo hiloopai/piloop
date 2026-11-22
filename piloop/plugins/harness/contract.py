@@ -269,7 +269,7 @@ class Harness(Parameters):
         return None
 
     def usage(self) -> UsageReader | None:
-        """How to read the tokens of an agent that ended: its ``sessions``, when the session id can be known.
+        """How to read the tokens of an agent, while it runs and when it ends: when the session id can be known.
 
         That is ``{session_id}`` in ``headless``, or a ``session_id_pattern``. Otherwise no tokens are recorded.
         """

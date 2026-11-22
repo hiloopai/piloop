@@ -65,7 +65,7 @@ Each **fact source** reads a fact that a limit or a section can use:
 
 | Source | Fact |
 |---|---|
-| `models` | `models_usd`: the tokens of each agent that ended, at the list price of its model. |
+| `models` | `models_usd`: the tokens of each agent, at the list price of its model. |
 | `leases` | `compute_usd`: each second that a worker held a job of the campaign, at its pool's `usd_per_hour`. |
 | `command` | Any fact that your own command reports, such as a GPU bill. |
 | `spend` | `spend`: the sum of the facts in its `facts`, by default `compute_usd` and `models_usd`. |
@@ -82,8 +82,9 @@ use = ["campaign", "optimization", "models"]
 prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
 ```
 
-piloop reads each agent's tokens from its harness's session file when it ends, into `agent_sessions.usage`.
-`max_tokens` limits their `total` over the campaign.
+piloop reads each agent's tokens from its harness's session file into `agent_sessions.usage`: about once a minute while
+the agent runs, and when it ends. `max_tokens` limits their `total` over the campaign, and `hold_at` sees a running agent's
+spend too.
 
 ## Spend outside piloop
 

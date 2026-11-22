@@ -12,7 +12,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from piloop.actor import System
 from piloop.campaign.campaigns import fork, sync
@@ -26,6 +26,7 @@ from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
@@ -46,6 +47,7 @@ from tests.conftest import (
     install_plugins,
     run_all,
     settle,
+    wait_until,
     write_toml,
 )
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_auditor, set_config
@@ -285,6 +287,52 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
         s.commit()
     assert len(run_all(scheduler)) == 2, 'the limit raised: the auditor and the next run launch'
     settle(scheduler, db)
+
+
+@pytest.mark.usefixtures('daemon_api')
+def test_a_held_campaign_scores_what_its_agents_submit_and_still_stops_at_a_limit(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A spend hold stops launches, not scoring: spend is booked late, and work that was paid for is scored. A limit
+    that stops the campaign stops a held one too."""
+    file, hold = tmp_path / 'bill', tmp_path / 'hold'
+    hold.touch()
+    write_toml(
+        Path(campaign.path),
+        '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\n"$PILOOP_BIN" submit > /dev/null\n'
+        f'while [ -f {hold} ]; do sleep 0.05; done\n' + END_RUN,
+    )
+    file.write_text('{"metrics": {"spend": 10}}\n')
+    set_config(db, campaign, plugins=limited(300, command=billing(file)))
+    add_ideas(db, campaign, 'idea')
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    assert run_all(scheduler) == [1]
+
+    def measured() -> int:
+        with db.session() as s:
+            return s.scalar(select(func.count()).select_from(Measurement)) or 0
+
+    baseline = measured()
+    bill(db, campaign, file, '1012')
+
+    def pass_scores() -> bool:
+        assert run_all(scheduler) == [], 'held: nothing launches'
+        return measured() > baseline
+
+    wait_until(pass_scores, 'the pass scores the submission of the running agent while the campaign is held')
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        stops = {'hold_at': {'spend': 300}, 'max_runs': 1}
+        p.config = load_campaign_config(
+            Path(campaign.path), plugins={'fact_source': spending(command=billing(file)), 'stop_rule': stops}
+        )
+        s.commit()
+    hold.unlink()
+    settle(scheduler, db)
+    run_all(scheduler)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert (p.status, p.stopped_reason) == (CampaignStatus.STOPPED, 'max_runs: 1 runs'), 'a hold does not keep it'
 
 
 def test_a_source_that_a_sync_adds_is_read_on_the_next_turn_without_a_restart(

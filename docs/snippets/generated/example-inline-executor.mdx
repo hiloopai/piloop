@@ -39,6 +39,7 @@ from piloop.capabilities import (
     Report,
     Runtime,
     Settled,
+    Usage,
     job_kinds,
     job_secrets,
     key_of,
@@ -219,6 +220,11 @@ class _Job:
         assert isinstance(self.key, AgentKey)
         with suppress(Settled):
             self._executor.host.results.session(self.key, HarnessSession(file=session_file))
+
+    def used(self, usage: Usage) -> None:
+        assert isinstance(self.key, AgentKey)
+        with suppress(Settled):
+            self._executor.host.results.session(self.key, HarnessSession(usage=usage))
 
     def asked(self) -> bool:
         return self._asked

@@ -94,13 +94,13 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
 
 ### Spend
 
-- `agent_sessions.usage` holds the tokens an agent spent. It is written when the agent ends:
+- `agent_sessions.usage` holds the tokens an agent spent. It is written about once a minute while the agent runs, and when it ends:
   `{"input", "output", "cache_read", "cache_write", "total", "turns", "source"}`.
   - `total` is the harness's own count of the session's tokens.
   - `input` is the uncached input for every harness; `cache_read` and `cache_write` are the cached input.
   - `turns` is the number of model responses.
   - `source` is the session file that was read.
-- It is NULL while the agent runs, or when no file was found.
+- It is NULL before the agent's first response, or when no file was found.
 - `json_extract(usage, '$.total')` sums the spend per idea (agent_sessions → runs → ideas) or per campaign. The queries below do
   both.
 

@@ -36,6 +36,7 @@ from piloop.agents.results import (
     Ran,
     SessionSaved,
     StartupAnomaly,
+    UsageCounted,
     WrapUp,
     end_agent,
     never_worked,
@@ -88,6 +89,7 @@ from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git
 from piloop.settings import AgentSettings, DaemonSettings, Settings
 from piloop.store.chunks import read
+from piloop.usage.totals import campaign_tokens
 from tests.conftest import (
     AUDITOR,
     HARNESS_FAILS,
@@ -982,6 +984,48 @@ def test_a_running_agents_session_file_is_snapshotted_onto_its_row_and_the_last_
     )
 
 
+def test_a_running_agents_tokens_are_on_its_row_as_it_spends_them_and_its_end_reads_them_all(
+    campaign: Campaign,
+    db: Database,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    tracer: Tracer,
+    spans: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A limit on spend (``max_tokens``, ``models_usd``) sees an agent that runs for hours, not only one that ended."""
+    home, hold = tmp_path / 'home', tmp_path / 'hold'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(jobs, 'POLL_SECONDS', 0.05)
+    monkeypatch.setattr(sessions, 'USAGE_SECONDS', 0.1)
+    folder = home / '.pi' / 'agent' / 'sessions' / dash_separators_wrapped(Path(campaign.path))
+    whole = (SESSIONS / 'pi.jsonl').read_bytes()
+    answered = b''.join(whole.splitlines(keepends=True)[:5])
+    (tmp_path / 'answered.jsonl').write_bytes(answered)
+    hold.touch()
+    session = f'"{folder}/2026-09-09T05-48-14-300Z_$2.jsonl"'
+    spends_then_waits = (
+        f'#!/bin/sh\nmkdir -p {folder}\ncp {tmp_path / "answered.jsonl"} {session}\n'
+        f'while [ -f {hold} ]; do sleep 0.05; done\ncp {SESSIONS / "pi.jsonl"} {session}\n'
+    )
+    use_harness(db, campaign, spends_then_waits, headless=['--session-id', '{session_id}', '{prompt}'], **READS_PI)
+    agent = request(db, campaign)
+    launching = threading.Thread(target=launch, args=(db, runtime, tmp_path, agent, tracer))
+    launching.start()
+    first = each_provider()['pi'].usage()
+    assert first is not None
+    wait_until(lambda: agent_session(db, agent).usage == first.usage(answered), 'its first response, while it runs')
+    with db.session() as s:
+        assert campaign_tokens(s, campaign.id) == 6887, 'the limits count it'
+        counted = s.scalars(select(Event.payload).where(Event.kind == 'agent_session.usage_counted')).all()
+        assert counted == [UsageCounted(total=6887)], 'it wakes the pass over the campaigns, whose stop rule reads it'
+    hold.unlink()
+    launching.join(30)
+    w = agent_session(db, agent)
+    assert w.usage is not None and (w.usage.total, w.usage.turns) == (16478, 2), 'its end reads the whole file'
+    assert events(spans, 'agent_session.usage_unread') == []
+
+
 def test_a_snapshot_that_fails_is_tried_again_and_a_late_session_id_is_asked_for_before_each(
     campaign: Campaign,
     db: Database,
@@ -1006,6 +1050,7 @@ def test_a_snapshot_that_fails_is_tried_again_and_a_late_session_id_is_asked_for
         raise OSError('the file went')
 
     mocker.patch.object(SessionFile, 'snapshot', side_effect=fails)
+    mocker.patch.object(SessionFile, 'usage', side_effect=OSError('the file went'))
     late = request(db, campaign)
     launch(db, runtime, tmp_path, late, tracer)
     w = agent_session(db, late)
@@ -1016,6 +1061,7 @@ def test_a_snapshot_that_fails_is_tried_again_and_a_late_session_id_is_asked_for
     assert len(unsaved) >= 2 and unsaved[-1] == {'agent_session': late, 'error': 'OSError: the file went'}, (
         'each timed one and the last one: the report goes without it'
     )
+    assert events(spans, 'agent_session.usage_unread')[0] == {'agent_session': late, 'error': 'OSError: the file went'}
 
 
 def test_a_killed_agents_usage_is_read_too(

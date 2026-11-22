@@ -4,6 +4,8 @@ The job code looks at the file every ``POLL_SECONDS`` while the agent runs, on w
 due once the file grew and then was quiet for ``QUIET_SECONDS``, and at least every ``FLUSH_SECONDS`` while it keeps
 growing; one more comes when the agent ends. A snapshot is a chunked file (``piloop.store.chunks``): it stores only the
 chunks that are new since the one before, so all the snapshots of a session take about the size of its last one.
+
+The tokens in the file are read every ``USAGE_SECONDS`` while it grows, so that a limit on spend sees a running agent.
 """
 
 from dataclasses import dataclass, field
@@ -12,8 +14,9 @@ from pathlib import Path
 from covalence import Cid
 
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.harness.contract import UsageReader
+from piloop.plugins.harness.contract import Usage, UsageReader
 from piloop.store.chunks import GROUP, Chunked, cuts
+from piloop.usage import UsageError
 
 POLL_SECONDS = 1.0
 """How often the job code looks at a running agent's session file."""
@@ -21,6 +24,9 @@ QUIET_SECONDS = 2.0
 """How long a file that grew stays unchanged before its snapshot: a turn writes several records at once."""
 FLUSH_SECONDS = 30.0
 """The longest a file that keeps growing waits for its snapshot: what a lost worker loses, at most."""
+USAGE_SECONDS = 60.0
+"""How often the tokens of a file that grew are read again: how late a limit on spend sees them. A read parses the
+whole file, about 1.6 s for a session of 170 MB."""
 
 
 @dataclass
@@ -54,6 +60,9 @@ class SessionFile:
     _grew_at: float = 0.0
     _saved_at: float | None = None
     """When the latest snapshot was taken, or the first look before one."""
+    _counted: int = -1
+    """The size of the file when its tokens were last read, and when that was."""
+    _counted_at: float | None = None
 
     def due(self, now: float) -> bool:
         """Look at the file: whether it grew since the latest snapshot and was quiet since, or the flush is due."""
@@ -104,6 +113,26 @@ class SessionFile:
         parts = (*self._groups, *self._closed, *tail)
         self.latest, self._whole = Chunked(chunks=parts).put(self.cas), self._offset + len(whole) - start
         return self.latest
+
+    def usage(self, now: float) -> Usage | None:
+        """The tokens in the whole file, when it grew since they were last read, ``USAGE_SECONDS`` ago or more.
+
+        None when they are not due, or when there is no file or no response in it yet.
+
+        Raises:
+            OSError: the file went between the look and the read.
+        """
+        path = self._find()
+        if path is None or (self._counted_at is not None and now - self._counted_at < USAGE_SECONDS):
+            return None
+        if path.stat().st_size == self._counted:  # a quiet file is not read again, however long it stays quiet
+            return None
+        data = path.read_bytes()
+        self._counted, self._counted_at = len(data), now
+        try:
+            return self.reader.usage(data)
+        except UsageError:  # no response yet: nothing is spent
+            return None
 
     def _find(self) -> Path | None:
         if self._path is None and self.session_id is not None:

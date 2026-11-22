@@ -6,13 +6,15 @@ import pytest
 from covalence import Value
 from pytest_mock import MockerFixture
 
-from piloop.plugins.executor.kit.sessions import FLUSH_SECONDS, QUIET_SECONDS, SessionFile
+from piloop.plugins.executor.kit.sessions import FLUSH_SECONDS, QUIET_SECONDS, USAGE_SECONDS, SessionFile
 from piloop.plugins.harness import pi
 from piloop.plugins.harness.kit.jsonl import JsonlSessions, no_cwd
 from piloop.store import chunks
 from piloop.store.chunks import read
 from tests.conftest import disk
 from tests.store.test_chunks import lines
+
+FIXTURES = Path(__file__).parent / 'fixtures' / 'sessions'
 
 SESSIONS = JsonlSessions('~/sessions/{session_id}.jsonl', no_cwd, pi.tally, pi.said)
 
@@ -75,3 +77,23 @@ def test_a_long_file_keeps_its_closed_chunks_in_groups(home: Path, monkeypatch: 
     assert latest is not None and read(cas, latest) == data
     manifest = chunks.Chunked.model_validate(Value.decode(cas.get(latest) or b'').to_native())
     assert len(manifest.chunks) < len(list(chunks.cuts(data))) / 3, 'a group stands for its chunks'
+
+
+def test_the_tokens_are_read_again_once_the_file_grew_and_at_most_every_usage_seconds(
+    home: Path, mocker: MockerFixture
+) -> None:
+    whole = (FIXTURES / 'pi.jsonl').read_bytes().splitlines(keepends=True)
+    file = SessionFile(SESSIONS, disk(home / 'home'), home / 'worktree', 's1')
+    assert file.usage(0) is None, 'no file yet'
+    path = home / 'sessions' / 's1.jsonl'
+    path.write_bytes(b''.join(whole[:4]))
+    assert file.usage(0) is None, 'no response yet: nothing spent'
+    path.write_bytes(b''.join(whole[:5]))
+    assert file.usage(1) is None, 'read less than USAGE_SECONDS ago'
+    first = file.usage(USAGE_SECONDS)
+    assert first is not None and (first.total, first.turns) == (6887, 1)
+    read = mocker.spy(Path, 'read_bytes')
+    assert file.usage(10 * USAGE_SECONDS) is None and read.call_count == 0, 'a quiet file is not read again'
+    path.write_bytes(b''.join(whole))
+    last = file.usage(10 * USAGE_SECONDS)
+    assert last is not None and (last.total, last.turns) == (16478, 2)

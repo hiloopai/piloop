@@ -25,7 +25,7 @@ def remeasure(s: Writing, me: Acting, candidate: AddressedCandidate, body: Remea
     request_remeasure(s, candidate, me, body.repeats)
     s.commit()
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    held = evaluation_ops.measuring_held(s, campaign, campaign.config).strip() or None
+    held = evaluation_ops.measuring_held(campaign).strip() or None
     with db_feed.snapshot(s) as cursor:
         return Remeasured(cursor=cursor, candidate=candidate_view(candidate), held=held)
 

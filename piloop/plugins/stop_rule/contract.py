@@ -5,8 +5,8 @@ stops. It asks in two steps. First it calls ``reads``: the rule names the facts 
 facts. Then it calls ``check`` with a ``StopCase``: those facts. The rule returns one answer:
 
 - ``Go``: piloop starts what the campaign needs, within what ``left`` says is left of each fact.
-- ``Hold``: piloop starts no agent and no evaluation for the campaign. Work that runs finishes. The hold is not a
-  pause: on each pass piloop asks again, and the hold ends when the rule answers ``Go``.
+- ``Hold``: piloop starts no agent for the campaign. Work that runs finishes, and what the agents submit is scored.
+  The hold is not a pause: on each pass piloop asks again, and the hold ends when the rule answers ``Go``.
 - ``Stop``: piloop stops the campaign.
 - ``Escalate``: piloop tells a human why, one priority-0 escalation for each distinct reason, and then acts on its
   ``then``: by default, the campaign goes on. A rule escalates itself: piloop posts no escalation of its own for a
@@ -69,7 +69,7 @@ GO = Go()
 
 @dataclass(frozen=True)
 class Hold:
-    """piloop starts no agent and no evaluation for the campaign until a check answers ``Go`` again."""
+    """piloop starts no agent for the campaign until a check answers ``Go`` again. It still scores what was submitted."""
 
     reason: str
     """Why, for ``piloop status`` (``launches held: <reason>``)."""

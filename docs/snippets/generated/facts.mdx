@@ -3,9 +3,9 @@
 | Fact | Source | Type | What it is |
 |---|---|---|---|
 | `HOURS` (`hours`) | `campaign` | `float` | The hours since the first run started, without the time that the campaign was paused. A reopened campaign counts from its first run since the latest reopen. |
-| `TOKENS` (`tokens`) | `campaign` | `int` | The tokens that the agents of the campaign spent, summed over the agents that ended. A reopened campaign counts the agents since the latest reopen. |
+| `TOKENS` (`tokens`) | `campaign` | `int` | The tokens that the agents of the campaign spent, summed over its agents: a running one as of its latest read. A reopened campaign counts the agents since the latest reopen. |
 | `COMPUTE_USD` (`compute_usd`) | `leases` | `float` | USD: the seconds that the campaign's jobs held a worker, each worker's time split among the jobs that it held, times the pool's `usd_per_hour`. |
-| `MODELS_USD` (`models_usd`) | `models` | `float` | USD, API-equivalent: the tokens of the agents that ended, priced per model. Not an invoice: a subscription bills otherwise. |
+| `MODELS_USD` (`models_usd`) | `models` | `float` | USD, API-equivalent: the tokens of the agents, a running one as of its latest read, priced per model. Not an invoice: a subscription bills otherwise. |
 | `BEST` (`best`) | `optimization` | `float` | The primary metric of the first track at its best, under the current evaluator. |
 | `RUNS` (`runs`) | `optimization` | `int` | The runs that hold a place under a limit on runs: those that count, and the attempts that may still count. A reopened campaign counts those since the latest reopen. |
 | `UNSETTLED` (`unsettled`) | `optimization` | `int` | The attempts whose outcome can still change: queued, running, or being scored. |

@@ -374,21 +374,15 @@ def test_measuring_held_says_when_the_daemon_measures_a_campaign_again(me: Datab
     with me.session() as s:
         p = s.get_one(Campaign, 1)
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 3 runs'
-        assert evaluation_ops.measuring_held(s, p, p.config) == '', 'a stopped campaign is still measured on request'
+        assert evaluation_ops.measuring_held(p) == '', 'a stopped campaign is still measured on request'
         p.status, p.stopped_reason = CampaignStatus.ACTIVE, None
         ops.pause(s, CampaignId(1), System.HUMAN, evals=True, reason='why')
-        assert evaluation_ops.measuring_held(s, p, p.config) == (
-            ' once campaign demo is resumed (its evaluations are paused)'
-        )
+        assert evaluation_ops.measuring_held(p) == ' once campaign demo is resumed (its evaluations are paused)'
         ops.resume(s, CampaignId(1))
         source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
         sources = {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
         p.config = reconfigured(p.config, plugins={'stop_rule': {'hold_at': {'spend': 10.0}}, 'fact_source': sources})
-        assert evaluation_ops.measuring_held(s, p, p.config) == (
-            ' once the stop rule no longer holds it (spend not known)'
-        )
-        p.status, p.stopped_reason = CampaignStatus.STOPPED, 'by the test'
-        assert evaluation_ops.measuring_held(s, p, p.config) == '', 'the stop rule holds an active campaign only'
+        assert evaluation_ops.measuring_held(p) == '', 'a hold (spend not known) holds launches only'
 
 
 def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, Agent]:

@@ -10,8 +10,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.campaign import escalations
 from piloop.campaign.ops import Refused, existing, hold
-from piloop.campaign.stop import gather, held
-from piloop.config import CampaignConfig
+from piloop.campaign.stop import gather
 from piloop.db.models import Campaign, Pause, utcnow
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
@@ -247,13 +246,12 @@ def add_measurement(s: Session, candidate_id: CandidateId, report: Report, *, ac
     return Added(measurement, standing.told())
 
 
-def measuring_held(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str:
+def measuring_held(campaign: Campaign) -> str:
     """Return `` once …``: when the daemon measures the campaign, as the scheduler's pass decides, or '' for now.
 
-    A stopped campaign is measured too, but only what someone asked for (``ledger.due``).
+    A stopped campaign is measured too, but only what someone asked for (``ledger.due``). So is one that its stop rule
+    holds: a hold stops launches only.
     """
     if campaign.paused is Pause.ALL:
         return f' once campaign {campaign.name} is resumed (its evaluations are paused)'
-    if (why := held(s, campaign, cfg)) is not None:
-        return f' once the stop rule no longer holds it ({why})'
     return ''

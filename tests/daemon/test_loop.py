@@ -133,6 +133,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'agent_session.session_saved': [],
             'agent_session.started': ['wind_down', 'campaigns'],
             'agent_session.stop_ended': [],
+            'agent_session.usage_counted': ['campaigns'],
             'agent_session.workspace_conflict': [],
             'agent_session.work_unsaved': [],
             'agent_session.wrap_up': [],
