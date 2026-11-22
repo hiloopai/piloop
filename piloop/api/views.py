@@ -241,6 +241,21 @@ class Inbox(View):
     """The items that the caller did not write, most urgent first, then oldest first."""
 
 
+class Heard(View):
+    """A part of the daemon that reports in, and when it last did: ``piloop status`` warns when that is too long ago."""
+
+    name: str
+    """What it is, as ``piloop status`` names it: ``loop``, ``worker serve``."""
+    at: datetime
+    """When it was last heard."""
+    silent_after: float = Field(gt=0)
+    """The seconds after ``at`` from which it is silent: something stopped it."""
+
+    def silent(self, now: datetime) -> bool:
+        """Whether it is silent at ``now``."""
+        return (now - self.at).total_seconds() > self.silent_after
+
+
 class DaemonState(View):
     """The daemon that answers: its process, its term, and where it listens."""
 
@@ -251,6 +266,10 @@ class DaemonState(View):
     """When it started, ISO 8601 in UTC."""
     listen: str | None
     """The URL that it serves other machines on. Null when it serves only this machine."""
+    loop: Heard | None = None
+    """Its main loop's last turn (``[daemon] tick``). Null before the first, and where the request does not read it."""
+    heard: list[Heard] = []
+    """The parts of its executor that report in, such as its workers (``ExecutorConfig.heard``)."""
 
 
 class Role(StrEnum):

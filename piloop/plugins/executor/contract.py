@@ -21,6 +21,7 @@ import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal, NewType, Protocol, Self
@@ -42,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent
 from piloop.api.contract import Revealed
+from piloop.api.views import Heard
 from piloop.db.models import AgentSession, EventModel
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, CommentId, EnvName, Ref, Revision, TargetRef
@@ -756,6 +758,13 @@ class ExecutorConfig(Parameters, ABC):
     @abstractmethod
     def open(self, host: Host) -> Executor[Self]:
         """Make the executor. The daemon calls it once, when it starts."""
+
+    def heard(self, s: Session, now: datetime) -> list[Heard]:
+        """The parts of the executor that report in, such as its workers, read from the database at ``now``.
+
+        Any process that serves the API calls it, not only the daemon. None, by default.
+        """
+        return []
 
 
 EXECUTORS = Capability('executor', ExecutorConfig, table=One(Scope.HOME, default='workers'))

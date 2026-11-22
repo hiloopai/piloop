@@ -37,6 +37,16 @@ campaign enwik8 paused (launches): the GPU trains a model; running work goes on;
 campaign enwik8 resumed
 ```
 
+`piloop status` shows when the daemon's loop last turned, and warns about a loop or a worker that went silent:
+
+```text
+daemon: pid 586609, up 3:12:05, loop 2s ago
+warning: worker serve last heard 6m ago
+```
+
+The loop turns at least once a `[daemon] tick` (60 s), and is silent after three. A worker is silent after its
+`grace_seconds` and `slack_seconds` ([workers](/guides/workers)). Read the log, then `piloop restart`.
+
 ## Under a service manager
 
 `piloop service-unit` prints a unit file. It installs nothing.
@@ -108,7 +118,7 @@ piloop status
 ```
 
 ```text
-daemon: pid 396206, up 0:00:20, listening on http://0.0.0.0:8443
+daemon: pid 396206, up 0:00:20, loop 1s ago, listening on http://0.0.0.0:8443
 ```
 
 Each command that calls the API now asks the server. Commands that open the database, such as `piloop sql`,

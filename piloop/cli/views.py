@@ -74,7 +74,10 @@ def status(
             return
         ids = [str(c.id) for c in found.campaigns]
         shown = client.overview(Selection(campaign=ids[0] if len(ids) == 1 else None, status=status))
-    common.console.print(daemon_line(shown.daemon), markup=False)
+    now = datetime.now(UTC)
+    common.console.print(daemon_line(shown.daemon, now), markup=False)
+    for warning in silent_lines(shown.daemon, now):
+        common.console.print(warning, markup=False)
     for key in shown.limits:
         common.console.print(f'limit: {limit_line(key)}', markup=False)
     for campaign in shown.campaigns:
@@ -92,11 +95,18 @@ def status(
             common.console.print(text + '\n', markup=False, highlight=False, soft_wrap=True)
 
 
-def daemon_line(state: DaemonState) -> str:
-    """One line on the daemon: its pid, its uptime, and the URL that other machines reach it on."""
-    up = timedelta(seconds=int(time.time() - datetime.fromisoformat(state.started).timestamp()))
+def daemon_line(state: DaemonState, now: datetime) -> str:
+    """One line on the daemon: its pid, its uptime, its loop's last turn, and the URL that other machines reach it on."""
+    up = timedelta(seconds=int(now.timestamp() - datetime.fromisoformat(state.started).timestamp()))
+    loop = '' if state.loop is None else f', loop {age(state.loop.at, now)} ago'
     listening = '' if state.listen is None else f', listening on {state.listen}'
-    return f'daemon: pid {state.pid}, up {up}{listening}'
+    return f'daemon: pid {state.pid}, up {up}{loop}{listening}'
+
+
+def silent_lines(state: DaemonState, now: datetime) -> list[str]:
+    """A warning for each part of the daemon that is silent at ``now``: its loop, a worker of its executor."""
+    parts = [*([] if state.loop is None else [state.loop]), *state.heard]
+    return [f'warning: {p.name} last heard {age(p.at, now)} ago' for p in parts if p.silent(now)]
 
 
 def limit_line(key: LiveKey) -> str:

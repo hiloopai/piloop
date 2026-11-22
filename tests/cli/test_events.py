@@ -5,9 +5,11 @@ while this process writes: snapshot with a cursor, follow, disconnect, resume, a
 """
 
 import os
+import re
 import subprocess
 import sys
 import threading
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, TypedDict
@@ -23,13 +25,17 @@ from piloop.api.client import Client
 from piloop.api.views import Batch
 from piloop.campaign import campaigns as campaign_module, ops
 from piloop.cli import common, main as cli, views as cli_views
-from piloop.db.models import Campaign, Comment, Event
+from piloop.daemon.loop import TICK, touch
+from piloop.db.models import Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, TargetKind, TargetRef
 from piloop.net.server import Server
+from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.escalation.contract import ESCALATION
+from piloop.plugins.executor.kit.leases import SERVE
+from piloop.plugins.executor.kit.tables import LeaseWorker
 from piloop.settings import Settings
 
 EVENT = "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('acme', 'campaign', 1, '{}')"
@@ -105,6 +111,38 @@ def add_idea(db: Database, campaign_id: CampaignId, title: str) -> IdeaId:
 def event_ids(db: Database, after: int) -> list[int]:
     with db.session() as s:
         return list(s.scalars(select(Event.id).where(Event.id > after).order_by(Event.id)))
+
+
+def test_status_shows_the_loops_last_turn_and_warns_of_a_silent_loop_or_worker(
+    db: Database, campaign: Campaign, api: Server, out
+) -> None:
+    """A daemon whose loop or worker stopped looks alive by its pid alone: status says when each was last heard."""
+    run_cli(['status', '--json'])
+    daemon = document(StatusDocument, out()).daemon
+    assert (daemon.loop, daemon.heard) == (None, []), 'no turn yet, and no worker'
+
+    touch(common.settings.home, Tracer(None))
+    now = utcnow()
+    with db.session() as s:
+        for name, ago in (('serve', timedelta(seconds=5)), ('gpu-1', timedelta(minutes=6)), ('old', timedelta(days=1))):
+            s.add(LeaseWorker(id=name, pool=SERVE, version='0', seen_at=now - ago))
+        s.get_one(LeaseWorker, 'old').drained_at = now
+        s.commit()
+    run_cli(['status', '--json'])
+    daemon = document(StatusDocument, out()).daemon
+    assert daemon.loop is not None and daemon.loop.name == 'loop' and daemon.loop.silent_after == 180
+    assert [(h.name, h.silent(utcnow())) for h in daemon.heard] == [('worker gpu-1', True), ('worker serve', False)], (
+        'a drained worker is not shown; one is silent after the grace and the slack of its heartbeats'
+    )
+    run_cli(['status', 'demo'])
+    lines = out().splitlines()
+    assert re.fullmatch(r'daemon: pid \d+, up [0-9:]+, loop \d+s ago', lines[0])
+    assert lines[1:2] == ['warning: worker gpu-1 last heard 6m ago']
+
+    old = (now - timedelta(minutes=10)).timestamp()
+    os.utime(common.settings.home / TICK, (old, old))
+    run_cli(['status', 'demo'])
+    assert out().splitlines()[1:3] == ['warning: loop last heard 10m ago', 'warning: worker gpu-1 last heard 6m ago']
 
 
 def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read_at(

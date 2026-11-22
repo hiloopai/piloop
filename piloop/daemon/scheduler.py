@@ -12,10 +12,11 @@ import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from queue import SimpleQueue
 
-from piloop.daemon.loop import Consumer, Loop, Phase, Turn, in_turn_order
+from piloop.daemon.loop import Consumer, Loop, Phase, Turn, in_turn_order, touch
 from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.otel import Tracer
@@ -95,7 +96,16 @@ class Scheduler:
         self.contributions = collect([('the daemon', own), *contributions_of(opened), *machinery(host)], [])
         """What the daemon, the providers and the capabilities add: the daemon's home check, the executor and the
         archiver that the daemon opened, then the machinery of each capability."""
-        self.loop = Loop(db, self.consumers(), now, daemon.feed_page, tracer=tracer, busy_retry=daemon.busy_retry)
+        self.loop = Loop(
+            db,
+            self.consumers(),
+            now,
+            daemon.feed_page,
+            tracer=tracer,
+            busy_retry=daemon.busy_retry,
+            tick=daemon.tick,
+            turned=partial(touch, home, tracer),
+        )
 
     def consumers(self) -> tuple[Consumer, ...]:
         """The daemon's jobs, in the order that a turn of its loop runs them, with the events that wake each one."""

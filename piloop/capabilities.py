@@ -153,6 +153,7 @@ from piloop.ids import TargetKind, TargetRef
 from piloop.store.tree import Materialised, Copy
 from piloop.plugins.archive.local import LocalArchive
 from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
+from piloop.api.views import Heard
 from piloop.plugins.executor.contract import Results, Settled
 from piloop.plugins.executor.contract import Job, AgentJob, LeftJob, Resume
 from piloop.plugins.executor.contract import Report, AgentReport

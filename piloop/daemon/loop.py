@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import IntEnum
 from functools import partial
+from pathlib import Path
 
 from sqlalchemy import exc, select
 from sqlalchemy.orm import Session
@@ -31,6 +32,10 @@ from piloop.settings import settings
 
 BUSY = 'loop.busy'
 """An event: a consumer found the database locked. It runs again after ``[daemon] busy_retry``."""
+TICK = 'serve.tick'
+"""The file in the home that the daemon's loop touches after each turn: its mtime is the last turn."""
+UNMARKED = 'loop.unmarked'
+"""An event: the loop could not touch its ``TICK`` file. ``piloop status`` then sees an older turn."""
 
 type Kinds = frozenset[type[EventModel]]
 """Event models. A consumer that names one wakes on its kinds and on those of its subclasses, so ``EventModel`` is all."""
@@ -101,6 +106,8 @@ class Loop:
         page: How many events one turn reads at most (``[daemon] feed_page``).
         tracer: Where a consumer that found the database locked says so (``BUSY``).
         busy_retry: How soon such a consumer runs again (``[daemon] busy_retry``).
+        tick: The longest that ``serve`` waits between two turns (``[daemon] tick``).
+        turned: What ``serve`` calls after each turn: the daemon touches its ``TICK`` file.
     """
 
     def __init__(
@@ -112,9 +119,11 @@ class Loop:
         *,
         tracer: Tracer,
         busy_retry: timedelta = settings.daemon.busy_retry,
+        tick: timedelta = settings.daemon.tick,
+        turned: Callable[[], None] = lambda: None,
     ) -> None:
         self._db, self._consumers, self._now, self._page = db, in_turn_order(consumers), now, page
-        self._tracer, self._busy_retry = tracer, busy_retry
+        self._tracer, self._busy_retry, self._tick, self._turned = tracer, busy_retry, tick, turned
         self._routes: dict[str, tuple[Consumer, ...]] = {}
         """The consumers of each event kind, found on its first event."""
         self._due: dict[str, datetime | None] = {}
@@ -175,7 +184,9 @@ class Loop:
         self.start()
         absent = timedelta(0)
         while not stopped():
-            if self.turn(absent):
+            more = self.turn(absent)
+            self._turned()
+            if more:
                 continue
             planned = self.next_due()
             left = (planned - self._now()).total_seconds() if planned is not None else None
@@ -184,7 +195,7 @@ class Loop:
                 partial(_moved, self._cursor),
                 on=[Topic()],
                 give_up=lambda: stopped() or self._has_woken(),
-                timeout=_timeout(left),
+                timeout=min(_timeout(left), self._tick.total_seconds()),
             )
             late = self._now() - planned if planned is not None else timedelta(0)
             absent = max(late, timedelta(0))
@@ -235,3 +246,15 @@ def _moved(cursor: int, s: Session) -> bool:
 
 def _timeout(left: float | None) -> float:
     return float('inf') if left is None else left
+
+
+def touch(home: Path, tracer: Tracer) -> None:
+    """Mark a turn of the daemon's loop: touch its ``TICK`` file. One that fails emits ``UNMARKED``, and the loop goes on.
+
+    A mark is only what ``piloop status`` reads: a home that is gone, or a file that the daemon cannot write, must not
+    stop the loop. The daemon's home check stops it for a home that is gone.
+    """
+    try:
+        (home / TICK).touch()
+    except OSError as e:
+        tracer.event(UNMARKED, error=f'{type(e).__name__}: {e}')

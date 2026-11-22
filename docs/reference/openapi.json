@@ -5765,6 +5765,26 @@
             ],
             "title": "Listen",
             "description": "The URL that it serves other machines on. Null when it serves only this machine."
+          },
+          "loop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Heard"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its main loop's last turn (``[daemon] tick``). Null before the first, and where the request does not read it."
+          },
+          "heard": {
+            "items": {
+              "$ref": "#/components/schemas/Heard"
+            },
+            "type": "array",
+            "title": "Heard",
+            "description": "The parts of its executor that report in, such as its workers (``ExecutorConfig.heard``).",
+            "default": []
           }
         },
         "type": "object",
@@ -6299,6 +6319,35 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "Heard": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "What it is, as ``piloop status`` names it: ``loop``, ``worker serve``."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At",
+            "description": "When it was last heard."
+          },
+          "silent_after": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Silent After",
+            "description": "The seconds after ``at`` from which it is silent: something stopped it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "at",
+          "silent_after"
+        ],
+        "title": "Heard",
+        "description": "A part of the daemon that reports in, and when it last did: ``piloop status`` warns when that is too long ago."
       },
       "IdeaAnswer": {
         "properties": {

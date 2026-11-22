@@ -9,6 +9,7 @@ import time
 from collections.abc import Generator, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path as FilePath
 from typing import Annotated, assert_never
@@ -118,6 +119,7 @@ from piloop.campaign.campaigns import (
 )
 from piloop.campaign.stop import CANCELLABLE, request_cancel
 from piloop.config import ConfigError
+from piloop.daemon.loop import TICK
 from piloop.db import feed as db_feed
 from piloop.db.events import Topic, has, latest
 from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, Term, utcnow
@@ -141,6 +143,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.escalation.contract import ESCALATION
+from piloop.plugins.executor.contract import EXECUTORS, Heard
 from piloop.plugins.leader.contract import LEADERS
 from piloop.plugins.limits import live_keys
 from piloop.plugins.secrets import contract as secrets
@@ -333,7 +336,7 @@ async def ready(api: Api) -> Readiness:
 def status(api: Api, s: Reading, me: Acting, campaigns: Selected) -> Status:
     """The main facts of each campaign, at a cursor."""
     with db_feed.snapshot(s) as cursor:
-        return Status(cursor=cursor, daemon=api.daemon, campaigns=feed.status_view(s, campaigns, me))
+        return Status(cursor=cursor, daemon=_heard(api, s), campaigns=feed.status_view(s, campaigns, me))
 
 
 @router.get('/overview', operation_id='overview')
@@ -352,7 +355,9 @@ def overview(api: Api, s: Reading, campaigns: Selected) -> Overview:
                     CampaignOverview(id=c.id, name=c.name, path=c.path, parent=feed.parent_of(s, c), sections=sections)
                 )
     return Overview(
-        daemon=api.daemon, limits=live_keys(s, api.cfg.providers, (KeyOrigin.CONFIG, KeyOrigin.LIMIT)), campaigns=shown
+        daemon=_heard(api, s),
+        limits=live_keys(s, api.cfg.providers, (KeyOrigin.CONFIG, KeyOrigin.LIMIT)),
+        campaigns=shown,
     )
 
 
@@ -510,6 +515,8 @@ def _credential(api: Handlers, s: Session, credential: Credential | None) -> Sec
             assert_never(credential)
 
 
+STALE_TICKS = 3
+"""How many ``[daemon] tick`` without a turn make the loop silent in ``piloop status``."""
 STOP_RULE_CHANGED = 'its stop rule changed in piloop.toml'
 """The reason of the reopen that a sync makes."""
 
@@ -953,6 +960,22 @@ def _still_stopping(_request: Request, e: Exception) -> Response:
 def daemon_state(term: Term) -> DaemonState:
     """The daemon of ``term``, as the one that answers: whichever process serves the request."""
     return DaemonState(pid=term.pid, epoch=term.epoch, started=iso(term.started_at), listen=term.listen)
+
+
+def _heard(api: Handlers, s: Session) -> DaemonState:
+    """The daemon with its loop's last turn and its executor's parts, as they are now.
+
+    The loop's ``TICK`` file is on the daemon's machine, where each process that serves the API runs.
+    """
+    tick = api.cfg.daemon.tick
+    try:
+        at = datetime.fromtimestamp((api.cfg.home / TICK).stat().st_mtime, UTC)
+    except FileNotFoundError:  # no turn yet
+        loop = None
+    else:
+        loop = Heard(name='loop', at=at, silent_after=(STALE_TICKS * tick).total_seconds())
+    heard = EXECUTORS.selected(api.cfg.providers).heard(s, utcnow())
+    return api.daemon.model_copy(update={'loop': loop, 'heard': heard})
 
 
 def _cwd(query: Located) -> FilePath | None:

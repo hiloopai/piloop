@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 import piloop
 from piloop.actor import System
-from piloop.daemon.loop import BUSY, Consumer, Loop, Phase, Turn, routes
+from piloop.daemon.loop import BUSY, TICK, UNMARKED, Consumer, Loop, Phase, Turn, routes, touch
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import Topic, emit
@@ -34,7 +34,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.workers import Workers
-from tests.conftest import ScriptRuntime, at_head, disk, factory, register, run_all, trace
+from tests.conftest import ScriptRuntime, at_head, disk, factory, register, run_all, trace, wait_until
 
 
 @dataclass
@@ -366,6 +366,25 @@ def test_the_loop_sleeps_until_another_process_writes_an_event_or_a_due_comes(
     while len(ideas.turns) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert len(ideas.turns) == 2, "another process's event rang the doorbell"
+
+
+def test_an_idle_loop_still_turns_each_tick_and_marks_each_turn(
+    db: Database, served: Callable[[Loop], None], tmp_path: Path, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    """No event and no due: the loop turns at least once a ``[daemon] tick``, so ``piloop status`` sees it alive."""
+    idle = Recorder('ideas', frozenset({IdeaCreated}))
+    turns: list[float] = []
+    served(
+        Loop(db, [idle.consumer()], tracer=Tracer(None), tick=timedelta(seconds=0.05), turned=lambda: turns.append(1))
+    )
+    wait_until(lambda: len(turns) >= 3, 'each tick is a turn, though nothing woke a consumer')
+    assert len(idle.turns) == 1, 'only the start ran it: a tick runs no consumer'
+    touch(tmp_path, tracer)
+    assert (tmp_path / TICK).is_file()
+    touch(tmp_path / 'gone', tracer)
+    assert [(s.attributes or {})['error'] for s in spans.get_finished_spans() if s.name == UNMARKED] == [
+        f"FileNotFoundError: [Errno 2] No such file or directory: '{tmp_path / 'gone' / TICK}'"
+    ], 'a mark that fails says so, and stops nothing'
 
 
 def test_a_turn_late_past_its_due_says_how_long_the_loop_was_away(db: Database, clock: Clock) -> None:

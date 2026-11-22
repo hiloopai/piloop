@@ -12,7 +12,7 @@ from piloop.api.contract import Access
 from piloop.daemon.api import daemon_state
 from piloop.daemon.served import Served
 from piloop.db import terms
-from piloop.db.models import Campaign
+from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
 from piloop.net.server import Server, listening
 from piloop.net.tokens import Tokens
@@ -65,6 +65,8 @@ def test_a_process_serves_the_api_and_the_workers_routes_from_the_rows_alone(
         'epoch': status['daemon']['epoch'],
         'started': status['daemon']['started'],
         'listen': 'https://elsewhere:7000',
+        'loop': None,
+        'heard': [],
     }
     assert [c['name'] for c in status['campaigns']] == [campaign.name]
     with dial(served.url, secret(db, 'w1')) as http:
@@ -96,6 +98,8 @@ def test_an_executor_without_workers_elsewhere_serves_no_routes(
     assert served.url_path_for('status') == '/v1/status'
     with pytest.raises(NoMatchFound):
         served.url_path_for('executor register')
+    with db.session() as s:
+        assert NoWorkers().heard(s, utcnow()) == [], 'by default, no part of an executor reports in'
 
 
 def test_each_process_that_serves_runs_its_share_of_the_relayed_calls(

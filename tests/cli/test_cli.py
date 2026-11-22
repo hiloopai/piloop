@@ -1775,7 +1775,8 @@ def test_serve_detach_status_stop(out, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit, match=f'already running \\(pid {pid}'):
         Daemon(common.settings).serve()
     run_cli(['status'])  # at once: `serve --detach` returns once the daemon answers
-    assert re.match(rf'daemon: pid {pid}, up 0:\d\d:\d\d\n', out())  # a loaded host can take 10 s to get here
+    # a loaded host can take 10 s to get here; the loop's first turn can still run
+    assert re.match(rf'daemon: pid {pid}, up 0:\d\d:\d\d(, loop \d+s ago)?\n', out())
 
     reaper = threading.Thread(target=os.waitpid, args=(pid, 0))
     reaper.start()  # this process is the daemon's parent: reap it, or its zombie keeps looking alive to `stop`
@@ -1800,7 +1801,8 @@ def test_status_shows_where_the_daemon_listens_and_a_restart_keeps_a_free_port(
     run_cli(['status'])
     assert out().splitlines()[0].endswith(f', listening on {url}')
     run_cli(['status', '--json'])
-    assert json.loads(out())['daemon'] | {'started': None} == {'pid': pid, 'epoch': 1, 'started': None, 'listen': url}
+    daemon = json.loads(out())['daemon'] | {'started': None, 'loop': None, 'heard': None}  # tests/cli/test_events.py
+    assert daemon == {'pid': pid, 'epoch': 1, 'started': None, 'listen': url, 'loop': None, 'heard': None}
     run_cli(['restart', '--timeout', '300'])  # the suite loads the host: a restart takes longer than 30 s there
     out()
     wait_until(lambda: listening() is not None)

@@ -32,6 +32,7 @@ from piloop.plugins.executor.contract import (
     AgentKey,
     Capacity,
     ExecutorConfig,
+    Heard,
     Host,
     Job,
     Key,
@@ -121,6 +122,14 @@ class Workers(ExecutorConfig):
 
     def open(self, host: Host) -> WorkersExecutor:
         return WorkersExecutor(host, self)
+
+    def heard(self, s: Session, now: datetime) -> list[Heard]:
+        """Each worker that the server did not drain: its last call, silent as the leases judge it (``Timing.silence``)."""
+        silence = self.timing().silence.total_seconds()
+        workers = s.execute(
+            select(LeaseWorker.id, LeaseWorker.seen_at).where(LeaseWorker.drained_at.is_(None)).order_by(LeaseWorker.id)
+        )
+        return [Heard(name=f'worker {name}', at=seen_at, silent_after=silence) for name, seen_at in workers]
 
     def routes(self, host: RouteHost) -> Routes:
         """Its workers' lease routes (``remote.lease_routes``, ``Serves``), on leases of their own over the database.

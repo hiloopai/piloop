@@ -147,6 +147,9 @@ class DaemonSettings(BaseModel):
     """How soon a comment that the executor did not take, because its database was locked, goes to its agent again."""
     kill_retry: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail."""
+    tick: timedelta = Field(default=timedelta(seconds=60), gt=timedelta(0))
+    """The longest the daemon's loop waits between two turns, so that an idle daemon still turns. ``piloop status``
+    warns when the last turn is older than three of these."""
     busy_retry: timedelta = Field(default=timedelta(seconds=2), gt=timedelta(0))
     """How soon a job of the daemon's loop that found the database locked runs again. The loop goes on with its other
     jobs meanwhile: a lock held past the busy timeout does not stop the daemon."""
