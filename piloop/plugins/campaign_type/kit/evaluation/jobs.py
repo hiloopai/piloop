@@ -9,9 +9,11 @@ import subprocess
 from collections.abc import Sequence
 from typing import ClassVar, Literal, Self, assert_never
 
+from covalence import Cid
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from piloop import deprecated
 from piloop.actor import System
 from piloop.db.events import emit
 from piloop.db.models import Campaign, EventModel, ReadBy
@@ -43,7 +45,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runner
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_infra_errors, sealed_refused
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
-from piloop.plugins.cas.contract import Cas
+from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
 from piloop.plugins.vcs.contract import UnknownRevision
@@ -124,7 +126,10 @@ class Sample(BaseModel):
     metrics: dict[str, float]
     seconds: float
     error: str | None = None
-    units: dict[str, dict[str, float]] = Field(default_factory=dict)
+    units: dict[str, dict[str, float]] | BlobAddress | None = None
+    """Its per-unit results in the CAS, which the machine that ran it put there (``sample``). None: it reported
+    none. A dict: the results inline, in a report that a worker of 0.8 spooled. The dict comes first in the union, so
+    that JSON writes it as an object, not as the text of a CID."""
     rung: RungName | None = None
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None
@@ -145,6 +150,10 @@ class EvaluationReport(Report):
     infra_error: InfraError | None = None
     """Set when its last run failed for a cause that is not the candidate's (``Failed.infra``): then no sample of it
     counts, and it records no measurement."""
+
+    def blobs(self) -> list[Cid]:
+        """Its files, and the per-unit results of its samples."""
+        return [*super().blobs(), *(s.units for s in self.samples if isinstance(s.units, Cid))]
 
     def crashed(self, error: str) -> Self:
         """The control plane, not the candidate, failed on it: an infra error, which records no measurement."""
@@ -271,7 +280,7 @@ def record(
 ) -> MeasurementId:
     """Store one sample as the daemon's measurement (``ledger.record``), and return its id.
 
-    Its per-unit results go into ``cas``, named by the row. The caller commits.
+    Its per-unit results are in the CAS already: the row names them. The caller commits.
     """
     candidate = s.get_one(Candidate, candidate_id)
     measurement = ledger.record(
@@ -287,7 +296,12 @@ def record(
         stopped=sample.stopped,
         feedback=sample.feedback,
     )
-    measurement.units = stored_units(cas, sample.units)
+    match sample.units:
+        case dict() as inline:
+            deprecated.until('0.10.0', 'a report that a worker of 0.8 spooled has inline units: delete this case')
+            measurement.units = stored_units(cas, inline)
+        case units:
+            measurement.units = units
     return measurement.id
 
 
@@ -307,7 +321,7 @@ def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span)
         first = i == 0
         own = tuple(r for r in job.ladder if r.evaluate is not None) if first else ()
         results = _evaluate(one, control, site, span, own=own, gate=job.gate if first else None)
-        climb = [sample(r) for r in results]
+        climb = [sample(r, site.cas) for r in results]
         last = climb[-1]
         span.set(error=last.error, stopped=last.stopped)
         samples.extend(climb)
@@ -338,13 +352,18 @@ def _evaluate(
     return climb
 
 
-def sample(result: EvalResult) -> Sample:
-    """What the report says of one line of the evaluate command: what it measured, where it stopped, or why it failed."""
+def sample(result: EvalResult, cas: Cas) -> Sample:
+    """What the report says of one line of the evaluate command: what it measured, where it stopped, or why it failed.
+
+    Its per-unit results go into ``cas`` here, on the machine that ran it: the daemon then names them in the
+    measurement, and writes no blob under the write lock.
+    """
     match result:
         case Measured(metrics=metrics, seconds=seconds, units=units, rung=rung, feedback=feedback):
-            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, feedback=feedback)
+            stored = stored_units(cas, units)
+            return Sample(metrics=metrics, seconds=seconds, units=stored, rung=rung, feedback=feedback)
         case StoppedAt(rung=rung, reason=reason, metrics=metrics, seconds=seconds, units=units):
-            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, stopped=reason)
+            return Sample(metrics=metrics, seconds=seconds, units=stored_units(cas, units), rung=rung, stopped=reason)
         case Failed(seconds=seconds, rung=rung) as failed:
             feedback = failed.why.feedback if isinstance(failed.why, Said) else None
             return Sample(metrics=failed.printed, seconds=seconds, error=failed.error, rung=rung, feedback=feedback)

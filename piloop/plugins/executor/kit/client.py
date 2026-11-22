@@ -31,7 +31,7 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.tables import NoLease
 
-PROTOCOL = 18
+PROTOCOL = 19
 """The version of the ``LeaseClient`` calls on the wire."""
 
 

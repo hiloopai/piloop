@@ -315,6 +315,9 @@ class Site(Protocol):
     The executor's kit makes one for the machine of the daemon and for each worker (``local_site``, ``remote_site``).
     """
 
+    cas: Cas
+    """The CAS that the daemon reads too: a job puts what its report names here, so that ``apply`` puts nothing."""
+
     def log_dir(self, job: Job) -> Path:
         """The job's place on this machine: its log files, and its worktree."""
         ...

@@ -1,5 +1,6 @@
 """The core operations behind every executor (``CampaignResults``): a result for a settled row is refused."""
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -48,11 +49,13 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     EvaluationReport,
     Sample,
 )
+from piloop.plugins.campaign_type.kit.evaluation.measure import stored_units
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run, RunClaim
 from piloop.plugins.cas.kit.objects import Dir
 from piloop.plugins.executor.contract import (
+    REPORT,
     AgentFinished,
     AgentJob,
     AgentKey,
@@ -689,7 +692,8 @@ def test_a_report_writes_no_file_and_no_blob_while_it_holds_the_write_lock(
     cas = disk(tmp_path)
     results = CampaignResults(db, Tracer(None), tmp_path, cas)
     files = {'eval.stdout': cas.put(b'METRIC score=1\n')}
-    report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1)], files=files)
+    units = stored_units(cas, {'score': {'a': 1.0}})
+    report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1, units=units)], files=files)
     free: list[bool] = []
 
     def probed[**P, R](real: Callable[P, R]) -> Callable[P, R]:
@@ -713,6 +717,37 @@ def test_a_report_writes_no_file_and_no_blob_while_it_holds_the_write_lock(
     results.finished(job, report)
     assert free and all(free), 'another writer could write while the blobs and the files went'
     assert (tmp_path / job.place / 'eval.stdout').read_bytes() == b'METRIC score=1\n'
+    with db.session() as s:
+        assert s.scalars(select(Measurement.units).where(Measurement.units.is_not(None))).all() == [units], (
+            'the worker put the per-unit results: the row names them'
+        )
+
+
+def test_a_report_spooled_by_a_worker_of_0_8_with_its_per_unit_results_inline_still_records_them(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    cas = disk(tmp_path)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas)
+    spooled = (
+        '{"kind": "evaluation", "samples": [{"metrics": {"score": 1.0}, "seconds": 1, "units": {"score": {"a": 1.0}}}]}'
+    )
+    report = REPORT.validate_json(spooled)
+    assert REPORT.validate_json(REPORT.dump_json(report)) == report, 'the worker sends it as it read it from its spool'
+    results.finished(running_evaluation(db, campaign, 'runs/1/eval'), report)
+    with db.session() as s:
+        [units] = s.scalars(select(Measurement.units).where(Measurement.units.is_not(None))).all()
+    assert units is not None and json.loads(cas.get(units) or b'') == {'score': {'a': 1.0}}
+
+
+def test_a_report_whose_per_unit_results_the_cas_lacks_is_refused(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    lost = disk(tmp_path / 'elsewhere').put(b'{"score": {"a": 1.0}}')
+    report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1, units=lost)])
+    with pytest.raises(MissingBlobs, match=str(lost)):
+        CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path)).finished(
+            running_evaluation(db, campaign, 'runs/1/eval'), report
+        )
 
 
 def test_files_that_do_not_go_into_their_place_leave_the_report_applied_and_say_so(
